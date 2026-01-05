@@ -1,0 +1,52 @@
+[project]
+name = "trading-engine-backend"
+version = "1.0.0"
+description = "Real-time trading alert engine using Alpaca Markets API"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.13.3",
+    "aiosqlite>=0.22.1",
+    "alembic>=1.17.2",
+    "alpaca-py>=0.43.2",
+    "asyncpg>=0.31.0",
+    "fastapi>=0.128.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "python-dotenv>=1.2.1",
+    "pyyaml>=6.0.3",
+    "sqlalchemy>=2.0.45",
+    "uvicorn[standard]>=0.40.0",
+    "websockets>=15.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.10",
+]
+
+[project.scripts]
+start = "uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --cov=app --cov-report=term-missing"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["tests/*"]

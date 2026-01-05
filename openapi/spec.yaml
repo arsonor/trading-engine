@@ -1,0 +1,1095 @@
+openapi: 3.0.3
+info:
+  title: Trading Alert Engine API
+  description: |
+    Real-time trading alert system using Alpaca Markets data.
+
+    This API provides:
+    - Alert management (view, filter, mark as read)
+    - Trading rule configuration via YAML
+    - Watchlist management
+    - Real-time market data
+    - WebSocket streaming for live updates
+  version: 1.0.0
+  contact:
+    name: Trading Engine Support
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Development server
+  - url: https://api.trading-engine.local/api/v1
+    description: Production server
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Alerts
+    description: Trading alert management
+  - name: Rules
+    description: Trading rule configuration
+  - name: Watchlist
+    description: Symbol watchlist management
+  - name: Market Data
+    description: Real-time and historical market data
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Returns the health status of the API
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /alerts:
+    get:
+      tags:
+        - Alerts
+      summary: List alerts
+      description: Retrieve a paginated list of trading alerts with optional filtering
+      operationId: listAlerts
+      parameters:
+        - name: symbol
+          in: query
+          description: Filter by ticker symbol
+          schema:
+            type: string
+            example: AAPL
+        - name: setup_type
+          in: query
+          description: Filter by setup type
+          schema:
+            type: string
+            enum:
+              - breakout
+              - volume_spike
+              - gap_up
+              - gap_down
+              - momentum
+        - name: start_date
+          in: query
+          description: Filter alerts after this date
+          schema:
+            type: string
+            format: date-time
+        - name: end_date
+          in: query
+          description: Filter alerts before this date
+          schema:
+            type: string
+            format: date-time
+        - name: is_read
+          in: query
+          description: Filter by read status
+          schema:
+            type: boolean
+        - name: page
+          in: query
+          description: Page number (1-indexed)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: Number of items per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Paginated list of alerts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertListResponse'
+
+  /alerts/stats:
+    get:
+      tags:
+        - Alerts
+      summary: Get alert statistics
+      description: Retrieve aggregated statistics about alerts
+      operationId: getAlertStats
+      responses:
+        '200':
+          description: Alert statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertStats'
+
+  /alerts/{alert_id}:
+    get:
+      tags:
+        - Alerts
+      summary: Get alert by ID
+      description: Retrieve a single alert by its ID
+      operationId: getAlert
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          description: The alert ID
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Alert details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+        '404':
+          description: Alert not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    patch:
+      tags:
+        - Alerts
+      summary: Update alert
+      description: Update alert properties (e.g., mark as read)
+      operationId: updateAlert
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          description: The alert ID
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertUpdate'
+      responses:
+        '200':
+          description: Updated alert
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+        '404':
+          description: Alert not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /rules:
+    get:
+      tags:
+        - Rules
+      summary: List all rules
+      description: Retrieve all trading rules
+      operationId: listRules
+      responses:
+        '200':
+          description: List of rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Rule'
+
+    post:
+      tags:
+        - Rules
+      summary: Create a new rule
+      description: Create a new trading rule with YAML configuration
+      operationId: createRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuleCreate'
+      responses:
+        '201':
+          description: Created rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '400':
+          description: Invalid rule configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Rule with this name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /rules/{rule_id}:
+    get:
+      tags:
+        - Rules
+      summary: Get rule by ID
+      description: Retrieve a single rule by its ID
+      operationId: getRule
+      parameters:
+        - name: rule_id
+          in: path
+          required: true
+          description: The rule ID
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Rule details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '404':
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags:
+        - Rules
+      summary: Update rule
+      description: Update an existing trading rule
+      operationId: updateRule
+      parameters:
+        - name: rule_id
+          in: path
+          required: true
+          description: The rule ID
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuleUpdate'
+      responses:
+        '200':
+          description: Updated rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '400':
+          description: Invalid rule configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Rules
+      summary: Delete rule
+      description: Delete a trading rule
+      operationId: deleteRule
+      parameters:
+        - name: rule_id
+          in: path
+          required: true
+          description: The rule ID
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: Rule deleted successfully
+        '404':
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /rules/{rule_id}/toggle:
+    post:
+      tags:
+        - Rules
+      summary: Toggle rule active status
+      description: Enable or disable a trading rule
+      operationId: toggleRule
+      parameters:
+        - name: rule_id
+          in: path
+          required: true
+          description: The rule ID
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Updated rule with toggled status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+        '404':
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /watchlist:
+    get:
+      tags:
+        - Watchlist
+      summary: Get watchlist
+      description: Retrieve all symbols in the watchlist
+      operationId: getWatchlist
+      responses:
+        '200':
+          description: Watchlist items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WatchlistItem'
+
+    post:
+      tags:
+        - Watchlist
+      summary: Add to watchlist
+      description: Add a symbol to the watchlist
+      operationId: addToWatchlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WatchlistCreate'
+      responses:
+        '201':
+          description: Added to watchlist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WatchlistItem'
+        '400':
+          description: Invalid symbol
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Symbol already in watchlist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /watchlist/{symbol}:
+    delete:
+      tags:
+        - Watchlist
+      summary: Remove from watchlist
+      description: Remove a symbol from the watchlist
+      operationId: removeFromWatchlist
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          description: The ticker symbol
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Removed from watchlist
+        '404':
+          description: Symbol not in watchlist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /market-data/{symbol}:
+    get:
+      tags:
+        - Market Data
+      summary: Get current market data
+      description: Retrieve current market data for a symbol
+      operationId: getMarketData
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          description: The ticker symbol
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current market data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketData'
+        '404':
+          description: Symbol not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /market-data/{symbol}/history:
+    get:
+      tags:
+        - Market Data
+      summary: Get historical bars
+      description: Retrieve historical OHLCV bars for a symbol
+      operationId: getHistoricalBars
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          description: The ticker symbol
+          schema:
+            type: string
+        - name: timeframe
+          in: query
+          description: Bar timeframe
+          schema:
+            type: string
+            enum:
+              - 1Min
+              - 5Min
+              - 15Min
+              - 1Hour
+              - 1Day
+            default: 1Min
+        - name: start
+          in: query
+          description: Start datetime (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          description: End datetime (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          description: Maximum number of bars to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 100
+      responses:
+        '200':
+          description: Historical bars
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Bar'
+        '404':
+          description: Symbol not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum:
+            - healthy
+            - degraded
+            - unhealthy
+          example: healthy
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+          example: "1.0.0"
+        alpaca_connected:
+          type: boolean
+          example: true
+        database_connected:
+          type: boolean
+          example: true
+
+    Alert:
+      type: object
+      required:
+        - id
+        - symbol
+        - timestamp
+        - setup_type
+        - entry_price
+        - is_read
+        - created_at
+      properties:
+        id:
+          type: integer
+          example: 123
+        rule_id:
+          type: integer
+          nullable: true
+          example: 5
+        rule_name:
+          type: string
+          nullable: true
+          example: breakout_setup
+        symbol:
+          type: string
+          example: AAPL
+        timestamp:
+          type: string
+          format: date-time
+          description: When the alert condition was triggered
+        setup_type:
+          type: string
+          enum:
+            - breakout
+            - volume_spike
+            - gap_up
+            - gap_down
+            - momentum
+          example: breakout
+        entry_price:
+          type: number
+          format: float
+          example: 185.50
+        stop_loss:
+          type: number
+          format: float
+          nullable: true
+          example: 182.00
+        target_price:
+          type: number
+          format: float
+          nullable: true
+          example: 195.00
+        confidence_score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          nullable: true
+          example: 0.85
+        market_data:
+          $ref: '#/components/schemas/AlertMarketData'
+        is_read:
+          type: boolean
+          example: false
+        created_at:
+          type: string
+          format: date-time
+
+    AlertMarketData:
+      type: object
+      description: Snapshot of market data when alert was triggered
+      properties:
+        price:
+          type: number
+          format: float
+        volume:
+          type: integer
+        volume_ratio:
+          type: number
+          format: float
+          description: Current volume / average volume
+        day_high:
+          type: number
+          format: float
+        day_low:
+          type: number
+          format: float
+        pre_market_high:
+          type: number
+          format: float
+          nullable: true
+        float_shares:
+          type: integer
+          nullable: true
+          description: Number of shares available for trading
+        short_interest:
+          type: number
+          format: float
+          nullable: true
+          description: Short interest ratio
+
+    AlertListResponse:
+      type: object
+      required:
+        - items
+        - total
+        - page
+        - page_size
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alert'
+        total:
+          type: integer
+          description: Total number of alerts matching the filter
+          example: 150
+        page:
+          type: integer
+          example: 1
+        page_size:
+          type: integer
+          example: 50
+        has_next:
+          type: boolean
+          example: true
+        has_prev:
+          type: boolean
+          example: false
+
+    AlertUpdate:
+      type: object
+      properties:
+        is_read:
+          type: boolean
+
+    AlertStats:
+      type: object
+      required:
+        - total_alerts
+        - alerts_today
+        - unread_count
+      properties:
+        total_alerts:
+          type: integer
+          example: 1250
+        alerts_today:
+          type: integer
+          example: 15
+        unread_count:
+          type: integer
+          example: 8
+        by_setup_type:
+          type: object
+          additionalProperties:
+            type: integer
+          example:
+            breakout: 450
+            volume_spike: 380
+            gap_up: 220
+            momentum: 200
+        by_symbol:
+          type: object
+          additionalProperties:
+            type: integer
+          example:
+            AAPL: 120
+            TSLA: 95
+            NVDA: 88
+        avg_confidence:
+          type: number
+          format: float
+          example: 0.72
+
+    Rule:
+      type: object
+      required:
+        - id
+        - name
+        - rule_type
+        - config_yaml
+        - is_active
+        - priority
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: breakout_setup
+        description:
+          type: string
+          nullable: true
+          example: Price breakout above resistance with volume confirmation
+        rule_type:
+          type: string
+          enum:
+            - price
+            - volume
+            - gap
+            - technical
+          example: price
+        config_yaml:
+          type: string
+          description: YAML configuration for the rule
+          example: |
+            conditions:
+              - field: price
+                operator: ">"
+                value: resistance_level
+        is_active:
+          type: boolean
+          example: true
+        priority:
+          type: integer
+          description: Higher priority rules are evaluated first
+          example: 10
+        alerts_triggered:
+          type: integer
+          description: Number of alerts this rule has triggered
+          example: 45
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RuleCreate:
+      type: object
+      required:
+        - name
+        - rule_type
+        - config_yaml
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: my_custom_rule
+        description:
+          type: string
+          maxLength: 500
+        rule_type:
+          type: string
+          enum:
+            - price
+            - volume
+            - gap
+            - technical
+        config_yaml:
+          type: string
+          description: YAML configuration for the rule
+        is_active:
+          type: boolean
+          default: true
+        priority:
+          type: integer
+          default: 0
+
+    RuleUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        config_yaml:
+          type: string
+        is_active:
+          type: boolean
+        priority:
+          type: integer
+
+    WatchlistItem:
+      type: object
+      required:
+        - id
+        - symbol
+        - added_at
+        - is_active
+      properties:
+        id:
+          type: integer
+          example: 1
+        symbol:
+          type: string
+          example: AAPL
+        added_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+          example: true
+        notes:
+          type: string
+          nullable: true
+          example: Watch for earnings breakout
+
+    WatchlistCreate:
+      type: object
+      required:
+        - symbol
+      properties:
+        symbol:
+          type: string
+          minLength: 1
+          maxLength: 10
+          example: AAPL
+        notes:
+          type: string
+          maxLength: 500
+
+    MarketData:
+      type: object
+      required:
+        - symbol
+        - price
+        - timestamp
+      properties:
+        symbol:
+          type: string
+          example: AAPL
+        price:
+          type: number
+          format: float
+          example: 185.50
+        bid:
+          type: number
+          format: float
+          example: 185.48
+        ask:
+          type: number
+          format: float
+          example: 185.52
+        bid_size:
+          type: integer
+          example: 100
+        ask_size:
+          type: integer
+          example: 200
+        volume:
+          type: integer
+          example: 45678900
+        timestamp:
+          type: string
+          format: date-time
+        change:
+          type: number
+          format: float
+          description: Price change from previous close
+          example: 2.50
+        change_percent:
+          type: number
+          format: float
+          description: Percentage change from previous close
+          example: 1.37
+        day_high:
+          type: number
+          format: float
+          example: 186.20
+        day_low:
+          type: number
+          format: float
+          example: 183.50
+        day_open:
+          type: number
+          format: float
+          example: 184.00
+        prev_close:
+          type: number
+          format: float
+          example: 183.00
+        pre_market_price:
+          type: number
+          format: float
+          nullable: true
+          example: 185.00
+        after_hours_price:
+          type: number
+          format: float
+          nullable: true
+          example: 185.75
+        vwap:
+          type: number
+          format: float
+          description: Volume-weighted average price
+          example: 184.85
+
+    Bar:
+      type: object
+      required:
+        - timestamp
+        - open
+        - high
+        - low
+        - close
+        - volume
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        open:
+          type: number
+          format: float
+          example: 184.00
+        high:
+          type: number
+          format: float
+          example: 186.20
+        low:
+          type: number
+          format: float
+          example: 183.50
+        close:
+          type: number
+          format: float
+          example: 185.50
+        volume:
+          type: integer
+          example: 1234567
+        vwap:
+          type: number
+          format: float
+          example: 184.85
+        trade_count:
+          type: integer
+          example: 45678
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          example: NOT_FOUND
+        message:
+          type: string
+          example: Alert with ID 123 not found
+        details:
+          type: object
+          additionalProperties: true
+
+    # WebSocket Message Schemas (for documentation purposes)
+    WebSocketClientMessage:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+          enum:
+            - subscribe
+            - unsubscribe
+        channel:
+          type: string
+          enum:
+            - alerts
+            - market_data
+        symbols:
+          type: array
+          items:
+            type: string
+          description: Required when channel is market_data
+
+    WebSocketServerMessage:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum:
+            - alert
+            - market_data
+            - status
+            - error
+        data:
+          type: object
+
+    WebSocketAlertMessage:
+      allOf:
+        - $ref: '#/components/schemas/WebSocketServerMessage'
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - alert
+            data:
+              $ref: '#/components/schemas/Alert'
+
+    WebSocketMarketDataMessage:
+      allOf:
+        - $ref: '#/components/schemas/WebSocketServerMessage'
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - market_data
+            data:
+              $ref: '#/components/schemas/MarketData'
+
+    WebSocketStatusMessage:
+      allOf:
+        - $ref: '#/components/schemas/WebSocketServerMessage'
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - status
+            data:
+              type: object
+              properties:
+                connected:
+                  type: boolean
+                subscriptions:
+                  type: array
+                  items:
+                    type: string
+
+    WebSocketErrorMessage:
+      allOf:
+        - $ref: '#/components/schemas/WebSocketServerMessage'
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - error
+            data:
+              type: object
+              properties:
+                code:
+                  type: string
+                message:
+                  type: string
