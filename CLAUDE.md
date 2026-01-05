@@ -49,28 +49,23 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 - [x] `frontend/src/pages/RulesPage.jsx` - Rules management
 - [x] `frontend/src/pages/SettingsPage.jsx` - Settings & watchlist
 
+#### Phase 5: Infrastructure (Completed)
+- [x] `.env.example` - Environment configuration template
+- [x] `frontend/src/types/api.d.ts` - Generated TypeScript types
+- [x] Alembic migrations configured (`backend/alembic/`)
+- [x] Docker configuration (Dockerfiles + docker-compose.yml)
+- [x] `backend/app/services/alpaca_client.py` - Alpaca API client wrapper
+- [x] `backend/app/services/stream_manager.py` - Real-time data streaming
+
 ### Remaining Tasks
 
-#### Phase 1 (Remaining)
-- [ ] Generate TypeScript types from OpenAPI spec (`npm run generate-types`)
-- [ ] Set up Docker configuration
-- [ ] Configure Alembic migrations
-- [ ] Create `.env.example` file
-- [ ] Create `.gitignore` file
-
-#### Phase 2 (Remaining)
-- [ ] Implement Alpaca client wrapper (`alpaca_client.py`)
-- [ ] Implement stream manager for real-time data (`stream_manager.py`)
-- [ ] Implement alert generator service
-
-#### Phase 3: Testing
+#### Phase 6: Testing
 - [ ] Backend unit tests (pytest)
 - [ ] Backend integration tests
 - [ ] Frontend component tests (vitest)
 
-#### Phase 4: Documentation & Deployment
+#### Phase 7: Documentation & Deployment
 - [ ] Complete README.md with setup instructions
-- [ ] Docker Compose configuration
 - [ ] Production deployment config
 
 ## How to Run (Development)
@@ -99,13 +94,13 @@ trading-engine/
 │   │   ├── main.py              # FastAPI entry
 │   │   ├── config.py            # Settings
 │   │   ├── api/
-│   │   │   ├── v1/
-│   │   │   │   ├── router.py
-│   │   │   │   ├── alerts.py
-│   │   │   │   ├── rules.py
-│   │   │   │   ├── watchlist.py
-│   │   │   │   ├── market_data.py
-│   │   │   │   └── websocket.py
+│   │   │   └── v1/
+│   │   │       ├── router.py
+│   │   │       ├── alerts.py
+│   │   │       ├── rules.py
+│   │   │       ├── watchlist.py
+│   │   │       ├── market_data.py
+│   │   │       └── websocket.py
 │   │   ├── core/
 │   │   │   └── database.py
 │   │   ├── models/
@@ -118,20 +113,24 @@ trading-engine/
 │   │   │   ├── watchlist.py
 │   │   │   ├── market_data.py
 │   │   │   └── common.py
+│   │   ├── services/
+│   │   │   ├── alpaca_client.py  # Alpaca API wrapper
+│   │   │   └── stream_manager.py # Real-time streaming
 │   │   └── engine/
 │   │       └── rule_engine.py
+│   ├── alembic/                  # Database migrations
+│   │   ├── env.py
+│   │   └── versions/
 │   ├── rules/
 │   │   └── default_rules.yaml
 │   ├── tests/
-│   │   ├── unit/
-│   │   └── integration/
+│   ├── Dockerfile
+│   ├── alembic.ini
 │   └── pyproject.toml
 ├── frontend/
 │   ├── src/
 │   │   ├── main.jsx
 │   │   ├── App.jsx
-│   │   ├── App.css
-│   │   ├── index.css
 │   │   ├── components/
 │   │   │   └── common/
 │   │   │       └── Layout.jsx
@@ -141,19 +140,25 @@ trading-engine/
 │   │   │   └── api.js
 │   │   ├── store/
 │   │   │   └── index.js
+│   │   ├── types/
+│   │   │   └── api.d.ts          # Generated from OpenAPI
 │   │   └── pages/
 │   │       ├── DashboardPage.jsx
 │   │       ├── AlertsPage.jsx
 │   │       ├── RulesPage.jsx
 │   │       └── SettingsPage.jsx
+│   ├── Dockerfile
+│   ├── nginx.conf
 │   ├── package.json
 │   ├── vite.config.js
-│   ├── tailwind.config.js
-│   └── postcss.config.js
+│   └── tailwind.config.js
 ├── openapi/
-│   └── spec.yaml                # Master API contract
-├── PLAN.md                      # Implementation plan
-├── CLAUDE.md                    # This file
+│   └── spec.yaml                 # Master API contract
+├── docker-compose.yml            # Production setup
+├── docker-compose.dev.yml        # Development (DB only)
+├── .env.example
+├── PLAN.md
+├── CLAUDE.md
 └── README.md
 ```
 
@@ -196,28 +201,46 @@ VITE_WS_URL=ws://localhost:8000
 
 ## Next Steps
 
-When continuing development, start with:
+When continuing development, the remaining tasks are:
 
-1. **Generate TypeScript types**:
-   ```bash
-   cd frontend
-   npm run generate-types
-   ```
-
-2. **Set up Docker configuration** (docker-compose.yml)
-
-3. **Configure Alembic migrations**:
+1. **Write backend unit tests**:
    ```bash
    cd backend
-   uv run alembic init alembic
-   # Configure alembic.ini and env.py
-   uv run alembic revision --autogenerate -m "Initial migration"
-   uv run alembic upgrade head
+   uv run pytest tests/unit -v
    ```
 
-4. **Create environment files** (.env.example, .gitignore)
+2. **Write backend integration tests**:
+   ```bash
+   cd backend
+   uv run pytest tests/integration -v
+   ```
 
-5. **Implement Alpaca integration** (alpaca_client.py, stream_manager.py)
+3. **Write frontend component tests**:
+   ```bash
+   cd frontend
+   npm test
+   ```
+
+4. **Complete README.md** with full setup instructions
+
+## Docker Usage
+
+### Development (database only)
+```bash
+docker-compose -f docker-compose.dev.yml up -d
+```
+
+### Production (full stack)
+```bash
+# Copy .env.example to .env and fill in values
+cp .env.example .env
+docker-compose up -d
+```
+
+### Run migrations in container
+```bash
+docker-compose exec backend uv run alembic upgrade head
+```
 
 ## Design Decisions
 

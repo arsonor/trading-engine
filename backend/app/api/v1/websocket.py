@@ -2,12 +2,16 @@
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.services.stream_manager import get_stream_manager
+
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -42,17 +46,27 @@ class ConnectionManager:
         for symbol_subs in self.symbol_subscriptions.values():
             symbol_subs.discard(connection_id)
 
-    def subscribe(self, connection_id: str, channel: str, symbols: list[str] = None) -> None:
+    async def subscribe(self, connection_id: str, channel: str, symbols: list[str] = None) -> None:
         """Subscribe to a channel."""
         if channel in self.subscriptions:
             self.subscriptions[channel].add(connection_id)
 
         if channel == "market_data" and symbols:
+            new_symbols = []
             for symbol in symbols:
                 symbol = symbol.upper()
                 if symbol not in self.symbol_subscriptions:
                     self.symbol_subscriptions[symbol] = set()
+                    new_symbols.append(symbol)
                 self.symbol_subscriptions[symbol].add(connection_id)
+
+            # Subscribe to Alpaca stream for new symbols
+            if new_symbols:
+                try:
+                    stream_manager = get_stream_manager()
+                    await stream_manager.subscribe(new_symbols)
+                except Exception as e:
+                    logger.error(f"Failed to subscribe to Alpaca stream: {e}")
 
     def unsubscribe(self, connection_id: str, channel: str) -> None:
         """Unsubscribe from a channel."""
@@ -173,7 +187,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
 
                 symbols = message.get("symbols", [])
-                manager.subscribe(connection_id, channel, symbols)
+                await manager.subscribe(connection_id, channel, symbols)
 
                 await manager.send_personal(
                     connection_id,

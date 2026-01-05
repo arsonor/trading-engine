@@ -1,17 +1,20 @@
 """Market Data API endpoints."""
 
+import random
 from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.config import get_settings
 from app.schemas import Bar, MarketData, Timeframe
+from app.services.alpaca_client import get_alpaca_client
 
 router = APIRouter()
 
+settings = get_settings()
 
-# Placeholder data for demo purposes
-# In production, this will use the Alpaca client
+# Placeholder data for demo purposes when Alpaca is not configured
 DEMO_SYMBOLS = {
     "AAPL": {"price": 185.50, "prev_close": 183.00},
     "TSLA": {"price": 250.00, "prev_close": 248.50},
@@ -21,12 +24,8 @@ DEMO_SYMBOLS = {
 }
 
 
-@router.get("/{symbol}", response_model=MarketData)
-async def get_market_data(symbol: str) -> MarketData:
-    """Get current market data for a symbol."""
-    symbol = symbol.upper()
-
-    # Check if symbol exists (demo)
+def _generate_demo_market_data(symbol: str) -> MarketData:
+    """Generate demo market data for a symbol."""
     if symbol not in DEMO_SYMBOLS:
         raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
 
@@ -57,40 +56,21 @@ async def get_market_data(symbol: str) -> MarketData:
     )
 
 
-@router.get("/{symbol}/history", response_model=List[Bar])
-async def get_historical_bars(
-    symbol: str,
-    timeframe: Timeframe = Query(Timeframe.MIN_1, description="Bar timeframe"),
-    start: Optional[datetime] = Query(None, description="Start datetime"),
-    end: Optional[datetime] = Query(None, description="End datetime"),
-    limit: int = Query(100, ge=1, le=10000, description="Maximum bars to return"),
+def _generate_demo_bars(
+    symbol: str, timeframe: Timeframe, start: datetime, end: datetime, limit: int
 ) -> List[Bar]:
-    """Get historical OHLCV bars for a symbol."""
-    symbol = symbol.upper()
-
-    # Check if symbol exists (demo)
+    """Generate demo bar data for a symbol."""
     if symbol not in DEMO_SYMBOLS:
         raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
 
-    # Generate demo bars
     demo = DEMO_SYMBOLS[symbol]
     base_price = demo["price"]
 
-    # Default time range
-    if end is None:
-        end = datetime.utcnow()
-    if start is None:
-        start = end - timedelta(hours=6)
-
-    # Generate bars based on timeframe
     bars = []
     current_time = start
-    price = base_price - 2.0  # Start slightly lower
+    price = base_price - 2.0
 
     while current_time < end and len(bars) < limit:
-        # Simple price simulation
-        import random
-
         change = random.uniform(-0.5, 0.5)
         open_price = price
         close_price = price + change
@@ -126,3 +106,63 @@ async def get_historical_bars(
             current_time += timedelta(days=1)
 
     return bars
+
+
+@router.get("/{symbol}", response_model=MarketData)
+async def get_market_data(symbol: str) -> MarketData:
+    """Get current market data for a symbol."""
+    symbol = symbol.upper()
+
+    # Use Alpaca if configured, otherwise use demo data
+    if settings.alpaca_api_key and settings.alpaca_secret_key:
+        client = get_alpaca_client()
+        market_data = await client.get_snapshot(symbol)
+
+        if market_data is None:
+            # Fall back to latest quote
+            market_data = await client.get_latest_quote(symbol)
+
+        if market_data is None:
+            raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
+
+        return market_data
+
+    # Demo mode
+    return _generate_demo_market_data(symbol)
+
+
+@router.get("/{symbol}/history", response_model=List[Bar])
+async def get_historical_bars(
+    symbol: str,
+    timeframe: Timeframe = Query(Timeframe.MIN_1, description="Bar timeframe"),
+    start: Optional[datetime] = Query(None, description="Start datetime"),
+    end: Optional[datetime] = Query(None, description="End datetime"),
+    limit: int = Query(100, ge=1, le=10000, description="Maximum bars to return"),
+) -> List[Bar]:
+    """Get historical OHLCV bars for a symbol."""
+    symbol = symbol.upper()
+
+    # Default time range
+    if end is None:
+        end = datetime.utcnow()
+    if start is None:
+        start = end - timedelta(hours=6)
+
+    # Use Alpaca if configured, otherwise use demo data
+    if settings.alpaca_api_key and settings.alpaca_secret_key:
+        client = get_alpaca_client()
+        bars = await client.get_bars(
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            limit=limit,
+        )
+
+        if not bars:
+            raise HTTPException(status_code=404, detail=f"No data found for symbol '{symbol}'")
+
+        return bars
+
+    # Demo mode
+    return _generate_demo_bars(symbol, timeframe, start, end, limit)
