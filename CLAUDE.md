@@ -81,7 +81,7 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 ### Remaining Tasks
 
 #### Phase 7: Documentation & Deployment
-- [ ] Complete README.md with setup instructions
+- [x] Complete README.md with setup instructions
 - [ ] Production deployment config
 
 ## How to Run (Development)
