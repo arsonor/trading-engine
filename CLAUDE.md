@@ -58,18 +58,25 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 - [x] `backend/app/services/stream_manager.py` - Real-time data streaming
 
 #### Phase 6: Testing (Completed)
-- [x] Backend unit tests (pytest)
-  - `backend/tests/unit/test_rule_engine.py` - Rule engine unit tests
-  - `backend/tests/unit/test_api_alerts.py` - Alerts API tests
-  - `backend/tests/unit/test_api_rules.py` - Rules API tests
-  - `backend/tests/unit/test_api_watchlist.py` - Watchlist API tests
-- [x] Backend integration tests
-  - `backend/tests/integration/test_websocket.py` - WebSocket integration tests
-- [x] Frontend component tests (vitest)
-  - `frontend/src/test/components/Layout.test.jsx` - Layout component tests
-  - `frontend/src/test/hooks/useWebSocket.test.js` - WebSocket hook tests
-  - `frontend/src/test/services/api.test.js` - API service tests
-  - `frontend/src/test/store/index.test.js` - Zustand store tests
+- [x] Backend unit tests (pytest) - 118 tests
+  - `backend/tests/unit/test_rule_engine.py` - Rule engine unit tests (59 tests)
+  - `backend/tests/unit/test_api_alerts.py` - Alerts API tests (16 tests)
+  - `backend/tests/unit/test_api_rules.py` - Rules API tests (27 tests)
+  - `backend/tests/unit/test_api_watchlist.py` - Watchlist API tests (16 tests)
+- [x] Backend integration tests - 38 tests
+  - `backend/tests/integration/test_websocket.py` - WebSocket integration tests (24 tests)
+  - `backend/tests/integration/test_workflows.py` - Cross-component workflow tests (14 tests)
+    - Alert lifecycle workflows (create, read, update, filter, stats)
+    - Rule management with cascade deletes
+    - Rule engine evaluation integration
+    - Watchlist management workflows
+    - Cross-component workflows (complete trading alert flow)
+- [x] Frontend component tests (vitest) - 60 tests
+  - `frontend/src/test/components/Layout.test.jsx` - Layout component tests (7 tests)
+  - `frontend/src/test/hooks/useWebSocket.test.js` - WebSocket hook tests (12 tests)
+  - `frontend/src/test/services/api.test.js` - API service tests (18 tests)
+  - `frontend/src/test/store/index.test.js` - Zustand store tests (23 tests)
+- [x] Total: 216 tests (156 backend + 60 frontend), ~55% backend code coverage
 
 ### Remaining Tasks
 
@@ -140,7 +147,8 @@ trading-engine/
 │   │   │   ├── test_api_rules.py
 │   │   │   └── test_api_watchlist.py
 │   │   └── integration/
-│   │       └── test_websocket.py
+│   │       ├── test_websocket.py
+│   │       └── test_workflows.py # Cross-component workflow tests
 │   ├── Dockerfile
 │   ├── alembic.ini
 │   └── pyproject.toml
