@@ -9,38 +9,37 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 const OriginalWebSocket = global.WebSocket;
 
 describe('useWebSocket', () => {
-  let mockWs;
   let wsInstances;
 
   beforeEach(() => {
     wsInstances = [];
 
-    // Create a controllable mock WebSocket
-    mockWs = vi.fn().mockImplementation((url) => {
-      const instance = {
-        url,
-        readyState: 0, // CONNECTING
-        onopen: null,
-        onclose: null,
-        onmessage: null,
-        onerror: null,
-        send: vi.fn(),
-        close: vi.fn().mockImplementation(function() {
+    // Create a controllable mock WebSocket class
+    class MockWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+
+      constructor(url) {
+        this.url = url;
+        this.readyState = 0; // CONNECTING
+        this.onopen = null;
+        this.onclose = null;
+        this.onmessage = null;
+        this.onerror = null;
+        this.send = vi.fn();
+        this.close = vi.fn().mockImplementation(() => {
           this.readyState = 3; // CLOSED
           if (this.onclose) {
             this.onclose({ target: this });
           }
-        }),
-      };
-      wsInstances.push(instance);
-      return instance;
-    });
+        });
+        wsInstances.push(this);
+      }
+    }
 
-    global.WebSocket = mockWs;
-    global.WebSocket.CONNECTING = 0;
-    global.WebSocket.OPEN = 1;
-    global.WebSocket.CLOSING = 2;
-    global.WebSocket.CLOSED = 3;
+    global.WebSocket = MockWebSocket;
   });
 
   afterEach(() => {
@@ -63,7 +62,6 @@ describe('useWebSocket', () => {
 
     renderHook(() => useWebSocket());
 
-    expect(mockWs).toHaveBeenCalled();
     expect(wsInstances.length).toBeGreaterThan(0);
   });
 

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WatchlistBase(BaseModel):
@@ -22,9 +22,8 @@ class WatchlistCreate(WatchlistBase):
 class WatchlistItem(WatchlistBase):
     """Watchlist item response schema."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     added_at: datetime
     is_active: bool
-
-    class Config:
-        from_attributes = True

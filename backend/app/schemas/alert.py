@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SetupType(str, Enum):
@@ -58,14 +58,13 @@ class AlertUpdate(BaseModel):
 class Alert(AlertBase):
     """Alert response schema."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     rule_id: Optional[int] = None
     rule_name: Optional[str] = None
     is_read: bool
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class AlertListResponse(BaseModel):

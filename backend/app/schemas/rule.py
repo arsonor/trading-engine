@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RuleType(str, Enum):
@@ -46,10 +46,9 @@ class RuleUpdate(BaseModel):
 class Rule(RuleBase):
     """Rule response schema."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     alerts_triggered: int = 0
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True
