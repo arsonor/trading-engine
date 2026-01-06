@@ -57,12 +57,21 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 - [x] `backend/app/services/alpaca_client.py` - Alpaca API client wrapper
 - [x] `backend/app/services/stream_manager.py` - Real-time data streaming
 
-### Remaining Tasks
+#### Phase 6: Testing (Completed)
+- [x] Backend unit tests (pytest)
+  - `backend/tests/unit/test_rule_engine.py` - Rule engine unit tests
+  - `backend/tests/unit/test_api_alerts.py` - Alerts API tests
+  - `backend/tests/unit/test_api_rules.py` - Rules API tests
+  - `backend/tests/unit/test_api_watchlist.py` - Watchlist API tests
+- [x] Backend integration tests
+  - `backend/tests/integration/test_websocket.py` - WebSocket integration tests
+- [x] Frontend component tests (vitest)
+  - `frontend/src/test/components/Layout.test.jsx` - Layout component tests
+  - `frontend/src/test/hooks/useWebSocket.test.js` - WebSocket hook tests
+  - `frontend/src/test/services/api.test.js` - API service tests
+  - `frontend/src/test/store/index.test.js` - Zustand store tests
 
-#### Phase 6: Testing
-- [ ] Backend unit tests (pytest)
-- [ ] Backend integration tests
-- [ ] Frontend component tests (vitest)
+### Remaining Tasks
 
 #### Phase 7: Documentation & Deployment
 - [ ] Complete README.md with setup instructions
@@ -124,6 +133,14 @@ trading-engine/
 │   ├── rules/
 │   │   └── default_rules.yaml
 │   ├── tests/
+│   │   ├── conftest.py           # Test fixtures
+│   │   ├── unit/
+│   │   │   ├── test_rule_engine.py
+│   │   │   ├── test_api_alerts.py
+│   │   │   ├── test_api_rules.py
+│   │   │   └── test_api_watchlist.py
+│   │   └── integration/
+│   │       └── test_websocket.py
 │   ├── Dockerfile
 │   ├── alembic.ini
 │   └── pyproject.toml
@@ -140,6 +157,16 @@ trading-engine/
 │   │   │   └── api.js
 │   │   ├── store/
 │   │   │   └── index.js
+│   │   ├── test/                  # Test files
+│   │   │   ├── setup.js
+│   │   │   ├── components/
+│   │   │   │   └── Layout.test.jsx
+│   │   │   ├── hooks/
+│   │   │   │   └── useWebSocket.test.js
+│   │   │   ├── services/
+│   │   │   │   └── api.test.js
+│   │   │   └── store/
+│   │   │       └── index.test.js
 │   │   ├── types/
 │   │   │   └── api.d.ts          # Generated from OpenAPI
 │   │   └── pages/
@@ -199,29 +226,45 @@ VITE_API_URL=http://localhost:8000
 VITE_WS_URL=ws://localhost:8000
 ```
 
+## Running Tests
+
+### Backend Tests
+```bash
+cd backend
+
+# Run all tests
+uv run pytest -v
+
+# Run unit tests only
+uv run pytest tests/unit -v
+
+# Run integration tests only
+uv run pytest tests/integration -v
+
+# Run with coverage
+uv run pytest --cov=app --cov-report=term-missing
+```
+
+### Frontend Tests
+```bash
+cd frontend
+
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npm test -- --watch
+
+# Run with coverage
+npm run test:coverage
+```
+
 ## Next Steps
 
 When continuing development, the remaining tasks are:
 
-1. **Write backend unit tests**:
-   ```bash
-   cd backend
-   uv run pytest tests/unit -v
-   ```
-
-2. **Write backend integration tests**:
-   ```bash
-   cd backend
-   uv run pytest tests/integration -v
-   ```
-
-3. **Write frontend component tests**:
-   ```bash
-   cd frontend
-   npm test
-   ```
-
-4. **Complete README.md** with full setup instructions
+1. **Complete README.md** with full setup instructions
+2. **Production deployment configuration**
 
 ## Docker Usage
 

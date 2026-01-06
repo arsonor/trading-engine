@@ -118,14 +118,14 @@ trading-engine/
 
 ## Implementation Phases
 
-### Phase 1: API Contract & Project Setup
+### Phase 1: API Contract & Project Setup (COMPLETED)
 - [x] Write OpenAPI specification (`openapi/spec.yaml`)
 - [x] Initialize backend with uv
 - [x] Initialize frontend with Vite
-- [ ] Generate TypeScript types from OpenAPI spec
-- [ ] Set up Docker configuration
-- [ ] Configure database (Alembic migrations)
-- [ ] Create `.env.example` with all config options
+- [x] Generate TypeScript types from OpenAPI spec
+- [x] Set up Docker configuration
+- [x] Configure database (Alembic migrations)
+- [x] Create `.env.example` with all config options
 
 ### Phase 2: Core Backend (COMPLETED)
 - [x] Implement config.py with Pydantic settings
@@ -134,10 +134,10 @@ trading-engine/
 - [x] Implement rule engine
 - [x] Create default rules YAML
 
-### Phase 3: Rule Engine & Alerts
+### Phase 3: Rule Engine & Alerts (COMPLETED)
 - [x] Build rule evaluation engine
-- [ ] Create Alpaca client wrapper
-- [ ] Create stream manager for Alpaca WebSocket
+- [x] Create Alpaca client wrapper
+- [x] Create stream manager for Alpaca WebSocket
 
 ### Phase 4: API Layer (COMPLETED)
 - [x] Implement REST endpoints for alerts, rules, watchlist
@@ -154,12 +154,12 @@ trading-engine/
 - [x] Build Settings page
 - [x] Add responsive styling with Tailwind CSS
 
-### Phase 6: Testing
-- [ ] Unit tests for rule engine
-- [ ] Unit tests for alert service
-- [ ] Integration tests for API endpoints
-- [ ] Integration tests for WebSocket
-- [ ] Frontend component tests
+### Phase 6: Testing (COMPLETED)
+- [x] Unit tests for rule engine
+- [x] Unit tests for alert service (alerts API)
+- [x] Integration tests for API endpoints (rules, watchlist APIs)
+- [x] Integration tests for WebSocket
+- [x] Frontend component tests (Layout, hooks, services, store)
 
 ### Phase 7: Documentation & Deployment
 - [ ] Complete README with setup instructions
