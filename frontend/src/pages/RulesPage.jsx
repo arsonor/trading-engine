@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useRulesStore } from '../store';
 import { format } from 'date-fns';
+import RuleForm from '../components/RuleForm';
 
 function RulesPage() {
-  const { rules, loading, fetchRules, toggleRule, deleteRule } = useRulesStore();
+  const { rules, loading, fetchRules, toggleRule, deleteRule, createRule } = useRulesStore();
   const [expandedRule, setExpandedRule] = useState(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   useEffect(() => {
     fetchRules();
@@ -22,14 +24,40 @@ function RulesPage() {
     }
   };
 
+  const handleCreateRule = async (ruleData) => {
+    await createRule(ruleData);
+    setShowCreateForm(false);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-900">Trading Rules</h2>
-        <div className="text-sm text-gray-500">
-          {rules.filter((r) => r.is_active).length} of {rules.length} active
+        <div className="flex items-center space-x-4">
+          <span className="text-sm text-gray-500">
+            {rules.filter((r) => r.is_active).length} of {rules.length} active
+          </span>
+          {!showCreateForm && (
+            <button
+              onClick={() => setShowCreateForm(true)}
+              className="btn btn-primary"
+            >
+              + Create Rule
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Create Rule Form */}
+      {showCreateForm && (
+        <div className="card">
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">Create New Rule</h3>
+          <RuleForm
+            onSubmit={handleCreateRule}
+            onCancel={() => setShowCreateForm(false)}
+          />
+        </div>
+      )}
 
       {/* Rules List */}
       <div className="space-y-4">
@@ -38,11 +66,11 @@ function RulesPage() {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto"></div>
             <p className="mt-2 text-gray-500">Loading rules...</p>
           </div>
-        ) : rules.length === 0 ? (
+        ) : rules.length === 0 && !showCreateForm ? (
           <div className="text-center py-8">
             <p className="text-gray-500">No rules configured</p>
             <p className="text-sm text-gray-400 mt-2">
-              Add rules through the API or YAML configuration
+              Click "Create Rule" to add your first trading rule
             </p>
           </div>
         ) : (
