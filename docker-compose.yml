@@ -13,7 +13,7 @@ services:
       - ALPACA_API_KEY=${ALPACA_API_KEY}
       - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
       - ALPACA_BASE_URL=${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}
-      - CORS_ORIGINS=http://localhost,http://localhost:80
+      - CORS_ORIGINS=["http://localhost","http://localhost:80"]
     depends_on:
       db:
         condition: service_healthy
