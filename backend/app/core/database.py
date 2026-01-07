@@ -45,6 +45,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db() -> None:
     """Initialize database tables."""
+    # Import models to ensure they are registered with Base.metadata
+    # This is needed for Base.metadata.create_all() to work
+    from app.models import Alert, Rule, Watchlist  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

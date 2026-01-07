@@ -235,19 +235,33 @@ Deploy the complete application stack:
 ```bash
 # Configure environment
 cp .env.example .env
-# Edit .env with production values
+# Edit .env and add your Alpaca API credentials:
+# - ALPACA_API_KEY
+# - ALPACA_SECRET_KEY
 
-# Build and start all services
-docker-compose up -d
-
-# Run database migrations
-docker-compose exec backend uv run alembic upgrade head
+# Build and start all services (migrations run automatically)
+docker-compose up -d --build
 ```
+
+**Important Notes:**
+- Migrations run automatically when the backend container starts
+- The `DATABASE_URL` in your `.env` file is **ignored** when using Docker
+- Docker uses the database URL defined in `docker-compose.yml` (which points to the `db` service)
 
 Services:
 - Frontend: `http://localhost:80`
 - Backend API: `http://localhost:8000`
 - PostgreSQL: `localhost:5432`
+
+**If the backend container keeps restarting:**
+```bash
+# Check logs for errors
+docker logs trading-engine-backend
+
+# Force clean rebuild
+docker-compose down -v
+docker-compose up -d --build
+```
 
 ## Running Tests
 

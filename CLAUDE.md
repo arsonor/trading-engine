@@ -283,15 +283,31 @@ docker-compose -f docker-compose.dev.yml up -d
 
 ### Production (full stack)
 ```bash
-# Copy .env.example to .env and fill in values
+# Copy .env.example to .env and fill in Alpaca API keys
 cp .env.example .env
-docker-compose up -d
+# Edit .env to add your ALPACA_API_KEY and ALPACA_SECRET_KEY
+
+# Build and start all containers
+docker-compose up -d --build
+
+# Note: Migrations run automatically on backend startup
+# No need to run them manually
 ```
 
-### Run migrations in container
+### Troubleshooting Docker
+
+If the backend container keeps restarting:
 ```bash
-docker-compose exec backend uv run alembic upgrade head
+# Check logs for errors
+docker logs trading-engine-backend
+
+# Force rebuild
+docker-compose down -v
+docker-compose up -d --build
 ```
+
+**Important**: The `.env` file's `DATABASE_URL` is only used for local development.
+Docker containers use the DATABASE_URL defined in `docker-compose.yml` which points to the `db` service (not `localhost`).
 
 ## Design Decisions
 

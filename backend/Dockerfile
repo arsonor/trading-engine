@@ -3,7 +3,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install uv
+# Install uv and bash
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy dependency files
@@ -18,9 +18,13 @@ COPY app/ app/
 COPY rules/ rules/
 COPY alembic/ alembic/
 COPY alembic.ini .
+COPY start.sh .
+
+# Make startup script executable
+RUN chmod +x start.sh
 
 # Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the startup script (runs migrations then starts app)
+CMD ["./start.sh"]
