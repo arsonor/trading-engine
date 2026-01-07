@@ -64,9 +64,9 @@ export const marketDataApi = {
   getHistory: (symbol, params = {}) => api.get(`/market-data/${symbol}/history`, { params }),
 };
 
-// Health API
+// Health API (health endpoint is at root level, not under /api/v1)
 export const healthApi = {
-  check: () => api.get('/health'),
+  check: () => axios.get(`${API_BASE_URL}/health`),
 };
 
 export default api;
