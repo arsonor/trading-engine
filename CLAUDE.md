@@ -139,6 +139,8 @@ trading-engine/
 │   │   └── versions/
 │   ├── rules/
 │   │   └── default_rules.yaml
+│   ├── scripts/
+│   │   └── seed_test_alerts.py   # Seed test data for UI testing
 │   ├── tests/
 │   │   ├── conftest.py           # Test fixtures
 │   │   ├── unit/
@@ -271,8 +273,20 @@ npm run test:coverage
 
 When continuing development, the remaining tasks are:
 
-1. **Complete README.md** with full setup instructions
+1. **Implement Alert Generation Service** - Connect StreamManager to RuleEngine to automatically create alerts when rules trigger:
+   - Create `backend/app/services/alert_generator.py` - Background service that:
+     - Listens to market data callbacks from StreamManager
+     - Loads active rules from database
+     - Evaluates rules using RuleEngine
+     - Creates Alert records when rules trigger
+     - Broadcasts new alerts via WebSocket
+   - Wire up the service in `main.py` startup
+   - Add tests for the integration
 2. **Production deployment configuration**
+
+### Development Utilities
+
+- **Seed test alerts**: `cd backend && uv run python scripts/seed_test_alerts.py` - Creates 20 sample alerts for UI testing
 
 ## Docker Usage
 

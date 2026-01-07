@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.models import Alert as AlertModel
@@ -33,8 +34,8 @@ async def list_alerts(
     db: AsyncSession = Depends(get_db),
 ) -> AlertListResponse:
     """List alerts with pagination and filtering."""
-    # Build query
-    query = select(AlertModel)
+    # Build query with eager loading of rule relationship
+    query = select(AlertModel).options(selectinload(AlertModel.rule))
 
     if symbol:
         query = query.where(AlertModel.symbol == symbol.upper())
@@ -146,7 +147,7 @@ async def get_alert(
     db: AsyncSession = Depends(get_db),
 ) -> Alert:
     """Get alert by ID."""
-    query = select(AlertModel).where(AlertModel.id == alert_id)
+    query = select(AlertModel).options(selectinload(AlertModel.rule)).where(AlertModel.id == alert_id)
     result = await db.execute(query)
     alert = result.scalar_one_or_none()
 
@@ -177,7 +178,7 @@ async def update_alert(
     db: AsyncSession = Depends(get_db),
 ) -> Alert:
     """Update alert (e.g., mark as read)."""
-    query = select(AlertModel).where(AlertModel.id == alert_id)
+    query = select(AlertModel).options(selectinload(AlertModel.rule)).where(AlertModel.id == alert_id)
     result = await db.execute(query)
     alert = result.scalar_one_or_none()
 
