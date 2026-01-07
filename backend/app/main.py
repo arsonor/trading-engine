@@ -55,10 +55,14 @@ async def lifespan(app: FastAPI):
         on_quote=broadcast_quote,
     )
 
-    # Start stream manager if credentials are configured
+    # Start stream manager if credentials are configured (non-fatal if it fails)
     if settings.alpaca_api_key and settings.alpaca_secret_key:
-        await stream_manager.start()
-        logger.info("Stream manager started")
+        try:
+            await stream_manager.start()
+            logger.info("Stream manager started")
+        except Exception as e:
+            logger.error(f"Failed to start stream manager: {e}")
+            logger.warning("Backend will continue without live market data streaming")
 
     yield
 
