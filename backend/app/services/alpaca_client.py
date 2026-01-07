@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.live import StockDataStream
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest, StockSnapshotRequest
@@ -201,10 +202,12 @@ class AlpacaClient:
             StockDataStream instance for subscribing to live data
         """
         if self._stream is None:
+            # Convert string feed to DataFeed enum
+            feed = DataFeed.IEX if self._data_feed.lower() == "iex" else DataFeed.SIP
             self._stream = StockDataStream(
                 api_key=self._api_key,
                 secret_key=self._secret_key,
-                feed=self._data_feed,
+                feed=feed,
             )
         return self._stream
 

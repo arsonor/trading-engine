@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from typing import Callable, Optional, Set
 
+from alpaca.data.enums import DataFeed
 from alpaca.data.live import StockDataStream
 from alpaca.data.models import Bar as AlpacaBar
 from alpaca.data.models import Quote as AlpacaQuote
@@ -65,10 +66,12 @@ class StreamManager:
 
     def _create_stream(self) -> StockDataStream:
         """Create a new stock data stream."""
+        # Convert string feed to DataFeed enum
+        feed = DataFeed.IEX if self._data_feed.lower() == "iex" else DataFeed.SIP
         return StockDataStream(
             api_key=self._api_key,
             secret_key=self._secret_key,
-            feed=self._data_feed,
+            feed=feed,
         )
 
     async def _handle_trade(self, trade: AlpacaTrade) -> None:
