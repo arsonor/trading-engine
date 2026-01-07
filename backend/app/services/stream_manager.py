@@ -188,14 +188,20 @@ class StreamManager:
 
         self._running = True
 
-        if self._stream is None:
-            self._stream = self._create_stream()
+        try:
+            if self._stream is None:
+                self._stream = self._create_stream()
+        except Exception as e:
+            logger.error(f"Failed to create stream: {e}")
+            self._running = False
+            return
 
         async def run_stream():
             try:
                 await self._stream.run()
             except Exception as e:
                 logger.error(f"Stream error: {e}")
+            finally:
                 self._running = False
 
         self._stream_task = asyncio.create_task(run_stream())
