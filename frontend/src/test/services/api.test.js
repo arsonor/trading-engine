@@ -19,9 +19,17 @@ vi.mock('axios', () => {
     },
   };
 
+  // Direct axios methods (for calls like axios.get() instead of instance.get())
+  const mockAxiosDirect = {
+    get: vi.fn(),
+    post: vi.fn(),
+  };
+
   return {
     default: {
       create: vi.fn(() => mockAxiosInstance),
+      get: mockAxiosDirect.get,
+      post: mockAxiosDirect.post,
     },
   };
 });
@@ -56,6 +64,7 @@ describe('API Service', () => {
     mockAxiosInstance.put.mockReset();
     mockAxiosInstance.patch.mockReset();
     mockAxiosInstance.delete.mockReset();
+    axios.get.mockReset();
   });
 
   describe('alertsApi', () => {
@@ -210,11 +219,13 @@ describe('API Service', () => {
 
   describe('healthApi', () => {
     it('check calls GET /health', async () => {
-      mockAxiosInstance.get.mockResolvedValue({ data: { status: 'healthy' } });
+      // healthApi uses axios.get directly, not the instance
+      axios.get.mockResolvedValue({ data: { status: 'healthy' } });
 
       await healthApi.check();
 
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/health');
+      // Health endpoint is at root level, so it includes the full URL
+      expect(axios.get).toHaveBeenCalledWith('http://localhost:8000/health');
     });
   });
 });

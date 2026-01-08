@@ -2,8 +2,11 @@
  * Tests for Zustand stores
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from '@testing-library/react';
+
+// Suppress console.error for expected error handling tests
+let consoleErrorSpy;
 
 // Mock the API services
 vi.mock('../../services/api', () => ({
@@ -180,6 +183,9 @@ describe('useRulesStore', () => {
   let rulesApi;
 
   beforeEach(async () => {
+    // Suppress expected console.error calls in error handling tests
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     vi.resetModules();
     const storeModule = await import('../../store');
     useRulesStore = storeModule.useRulesStore;
@@ -193,6 +199,10 @@ describe('useRulesStore', () => {
       loading: false,
       error: null,
     });
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
   });
 
   it('has correct initial state', () => {
