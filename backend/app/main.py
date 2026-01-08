@@ -12,6 +12,7 @@ from app.api.v1.websocket import get_manager
 from app.config import get_settings
 from app.core.database import close_db, init_db
 from app.schemas import HealthResponse, HealthStatus
+from app.services.alert_generator import get_alert_generator
 from app.services.stream_manager import get_stream_manager
 
 logger = logging.getLogger(__name__)
@@ -48,12 +49,33 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
 
-    # Initialize stream manager with callbacks
+    # Initialize alert generator
+    alert_generator = get_alert_generator()
+
+    # Create combined callbacks that broadcast market data AND generate alerts
+    async def on_trade_with_alerts(symbol: str, market_data) -> None:
+        """Handle trade data: broadcast to WebSocket AND generate alerts."""
+        await broadcast_trade(symbol, market_data)
+        await alert_generator.on_market_data(symbol, market_data)
+
+    async def on_quote_with_alerts(symbol: str, market_data) -> None:
+        """Handle quote data: broadcast to WebSocket AND generate alerts."""
+        await broadcast_quote(symbol, market_data)
+        await alert_generator.on_market_data(symbol, market_data)
+
+    # Initialize stream manager with combined callbacks
     stream_manager = get_stream_manager()
     stream_manager.set_callbacks(
-        on_trade=broadcast_trade,
-        on_quote=broadcast_quote,
+        on_trade=on_trade_with_alerts,
+        on_quote=on_quote_with_alerts,
     )
+
+    # Start alert generator
+    try:
+        await alert_generator.start()
+        logger.info("Alert generator started")
+    except Exception as e:
+        logger.error(f"Failed to start alert generator: {e}")
 
     # Start stream manager if credentials are configured (non-fatal if it fails)
     if settings.alpaca_api_key and settings.alpaca_secret_key:
@@ -68,6 +90,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await stream_manager.stop()
+    await alert_generator.stop()
     await close_db()
 
 

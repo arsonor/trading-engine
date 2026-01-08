@@ -58,12 +58,13 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 - [x] `backend/app/services/stream_manager.py` - Real-time data streaming
 
 #### Phase 6: Testing (Completed)
-- [x] Backend unit tests (pytest) - 118 tests
+- [x] Backend unit tests (pytest) - 151 tests
   - `backend/tests/unit/test_rule_engine.py` - Rule engine unit tests (59 tests)
   - `backend/tests/unit/test_api_alerts.py` - Alerts API tests (16 tests)
   - `backend/tests/unit/test_api_rules.py` - Rules API tests (27 tests)
   - `backend/tests/unit/test_api_watchlist.py` - Watchlist API tests (16 tests)
-- [x] Backend integration tests - 38 tests
+  - `backend/tests/unit/test_alert_generator.py` - Alert generator unit tests (33 tests)
+- [x] Backend integration tests - 52 tests
   - `backend/tests/integration/test_websocket.py` - WebSocket integration tests (24 tests)
   - `backend/tests/integration/test_workflows.py` - Cross-component workflow tests (14 tests)
     - Alert lifecycle workflows (create, read, update, filter, stats)
@@ -71,16 +72,31 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
     - Rule engine evaluation integration
     - Watchlist management workflows
     - Cross-component workflows (complete trading alert flow)
+  - `backend/tests/integration/test_alert_generator_integration.py` - Alert generator integration tests (10 tests)
+    - Market data → alert creation flow
+    - Multiple rules triggering
+    - WebSocket broadcast verification
+    - Rule toggle affects alert generation
 - [x] Frontend component tests (vitest) - 60 tests
   - `frontend/src/test/components/Layout.test.jsx` - Layout component tests (7 tests)
   - `frontend/src/test/hooks/useWebSocket.test.js` - WebSocket hook tests (12 tests)
   - `frontend/src/test/services/api.test.js` - API service tests (18 tests)
   - `frontend/src/test/store/index.test.js` - Zustand store tests (23 tests)
-- [x] Total: 216 tests (156 backend + 60 frontend), ~55% backend code coverage
+- [x] Total: 263 tests (203 backend + 60 frontend)
+
+#### Phase 7: Alert Generation Service (Completed)
+- [x] `backend/app/services/alert_generator.py` - Background service that:
+  - Listens to market data callbacks from StreamManager
+  - Loads active rules from database with TTL-based caching (60s)
+  - Evaluates rules using RuleEngine
+  - Creates Alert records when rules trigger
+  - Broadcasts new alerts via WebSocket to "alerts" channel
+- [x] Wired up in `main.py` lifespan with combined callbacks
+- [x] Unit tests (33 tests) and integration tests (10 tests)
 
 ### Remaining Tasks
 
-#### Phase 7: Documentation & Deployment
+#### Phase 8: Documentation & Deployment
 - [x] Complete README.md with setup instructions
 - [ ] Production deployment config
 
@@ -130,8 +146,9 @@ trading-engine/
 │   │   │   ├── market_data.py
 │   │   │   └── common.py
 │   │   ├── services/
-│   │   │   ├── alpaca_client.py  # Alpaca API wrapper
-│   │   │   └── stream_manager.py # Real-time streaming
+│   │   │   ├── alpaca_client.py   # Alpaca API wrapper
+│   │   │   ├── stream_manager.py  # Real-time streaming
+│   │   │   └── alert_generator.py # Alert generation from market data
 │   │   └── engine/
 │   │       └── rule_engine.py
 │   ├── alembic/                  # Database migrations
@@ -147,10 +164,12 @@ trading-engine/
 │   │   │   ├── test_rule_engine.py
 │   │   │   ├── test_api_alerts.py
 │   │   │   ├── test_api_rules.py
-│   │   │   └── test_api_watchlist.py
+│   │   │   ├── test_api_watchlist.py
+│   │   │   └── test_alert_generator.py
 │   │   └── integration/
 │   │       ├── test_websocket.py
-│   │       └── test_workflows.py # Cross-component workflow tests
+│   │       ├── test_workflows.py # Cross-component workflow tests
+│   │       └── test_alert_generator_integration.py
 │   ├── Dockerfile
 │   ├── alembic.ini
 │   └── pyproject.toml
@@ -268,21 +287,6 @@ npm test -- --watch
 # Run with coverage
 npm run test:coverage
 ```
-
-## Next Steps
-
-When continuing development, the remaining tasks are:
-
-1. **Implement Alert Generation Service** - Connect StreamManager to RuleEngine to automatically create alerts when rules trigger:
-   - Create `backend/app/services/alert_generator.py` - Background service that:
-     - Listens to market data callbacks from StreamManager
-     - Loads active rules from database
-     - Evaluates rules using RuleEngine
-     - Creates Alert records when rules trigger
-     - Broadcasts new alerts via WebSocket
-   - Wire up the service in `main.py` startup
-   - Add tests for the integration
-2. **Production deployment configuration**
 
 ### Development Utilities
 

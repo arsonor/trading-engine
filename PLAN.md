@@ -138,6 +138,7 @@ trading-engine/
 - [x] Build rule evaluation engine
 - [x] Create Alpaca client wrapper
 - [x] Create stream manager for Alpaca WebSocket
+- [x] Create alert generator service (connects StreamManager → RuleEngine → Alerts → WebSocket)
 
 ### Phase 4: API Layer (COMPLETED)
 - [x] Implement REST endpoints for alerts, rules, watchlist
