@@ -2,6 +2,22 @@
 
 A real-time trading alert system that monitors stocks via the Alpaca Markets API and generates actionable trading alerts based on configurable rules.
 
+## Table of Contents
+
+- [Problem Statement](#problem-statement) - Why this system exists
+- [What This System Does](#what-this-system-does) - Core features and capabilities
+- [System Architecture](#system-architecture) - High-level architecture diagram
+- [Technology Stack](#technology-stack) - Frontend, backend, database, and infrastructure
+- [Prerequisites](#prerequisites) - What you need to get started
+- [Quick Start](#quick-start) - Get up and running in minutes
+- [Docker Deployment](#docker-deployment) - Containerized deployment options
+- [Running Tests](#running-tests) - Backend and frontend test suites
+- [API Endpoints](#api-endpoints) - REST API reference
+- [Project Structure](#project-structure) - Codebase organization
+- [Configuration](#configuration) - Trading rules configuration guide
+- [Troubleshooting](#troubleshooting) - Common issues and solutions
+- [License](#license) - MIT License
+
 ## Problem Statement
 
 Active traders need to monitor multiple stocks simultaneously for trading opportunities, but manually watching price movements, volume spikes, and technical patterns across many securities is impractical. This creates a need for an automated system that can:
@@ -287,9 +303,9 @@ uv run pytest tests/unit/test_rule_engine.py -v
 ```
 
 **Test Coverage:**
-- Unit tests: 118 tests (rule engine, API endpoints)
-- Integration tests: 38 tests (WebSocket, cross-component workflows)
-- Total: 156 backend tests, ~55% code coverage
+- Unit tests: 155 tests (rule engine, API endpoints, alert generator)
+- Integration tests: 48 tests (WebSocket, cross-component workflows, alert generation)
+- Total: 203 backend tests
 
 ### Frontend Tests
 
@@ -313,32 +329,117 @@ npm run test:coverage
 - Store tests: 23 tests
 - Total: 60 frontend tests
 
-### End-to-End Testing
+### Testing Without Live Market Data
 
-To verify the complete system:
+You can test the complete system without Alpaca API credentials or waiting for market hours. There are two methods:
 
-1. **Start the backend and frontend** (see Quick Start above)
+#### Method 1: Seed Sample Alerts (Quick Dashboard Demo)
 
-2. **Create a trading rule** via the Rules page:
-   ```yaml
-   name: Volume Spike Alert
-   conditions:
-     - field: volume_ratio
-       operator: ">="
-       value: 2.0
-   filters:
-     min_price: 10.0
-     min_volume: 100000
-   targets:
-     stop_loss_percent: -3.0
-     target_rr_ratio: 2.0
-   confidence:
-     base_score: 0.75
-   ```
+Populate the database with sample alerts to test the dashboard UI:
+
+```bash
+# If running locally
+cd backend
+uv run python scripts/seed_test_alerts.py
+
+# If running with Docker
+docker exec -it trading-engine-backend uv run python scripts/seed_test_alerts.py
+```
+
+This creates 20 sample alerts with random symbols, prices, and setup types. Refresh the frontend to see them.
+
+#### Method 2: Simulate Market Data (Test Rule Evaluation)
+
+Test the full alert generation pipeline by simulating market data:
+
+**Step 1: Create a Rule**
+
+Go to the **Rules** page in the frontend and click **"+ Create Rule"**:
+- **Name**: `Price Above 100`
+- **Conditions**: `price > 100`
+- **Active**: ✓ Enabled
+
+Or via API:
+```bash
+curl -X POST "http://localhost:8000/api/v1/rules" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Price Above 100",
+    "description": "Alert when price exceeds 100",
+    "rule_type": "price",
+    "config_yaml": "{\"conditions\":[{\"field\":\"price\",\"operator\":\">\",\"value\":100}]}",
+    "is_active": true,
+    "priority": 10
+  }'
+```
+
+**Step 2: Simulate Market Data**
+
+Use the simulation endpoint to trigger the rule:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/market-data/simulate" \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "price": 150.0, "volume": 1000000}'
+```
+
+Or use the Swagger UI at `http://localhost:8000/docs`:
+1. Find `POST /api/v1/market-data/simulate`
+2. Click "Try it out"
+3. Enter: `{"symbol": "AAPL", "price": 150.0}`
+4. Click "Execute"
+
+**Expected Response:**
+```json
+{
+  "symbol": "AAPL",
+  "price": 150.0,
+  "rules_evaluated": 1,
+  "alerts_triggered": 1,
+  "alerts": [
+    {
+      "id": 1,
+      "symbol": "AAPL",
+      "setup_type": "breakout",
+      "entry_price": 150.0,
+      "rule_id": 1
+    }
+  ],
+  "message": "Simulated AAPL @ $150.00 - 1 alert(s) triggered"
+}
+```
+
+The alert will:
+- Be saved to the database
+- Be broadcast via WebSocket to connected clients
+- Appear on the **Alerts** page in the frontend
+
+**Step 3: Test Non-Triggering Data**
+
+Simulate data that doesn't match the rule:
+```bash
+curl -X POST "http://localhost:8000/api/v1/market-data/simulate" \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "price": 50.0}'
+```
+
+This returns `alerts_triggered: 0` because 50 < 100.
+
+### End-to-End Testing with Live Data
+
+To test with real market data:
+
+1. **Configure Alpaca API credentials** in your `.env` file
+
+2. **Start the backend and frontend** (see Quick Start above)
 
 3. **Add symbols to your watchlist** via the Settings page
 
-4. **Monitor the Dashboard** for real-time alerts when market conditions match your rules
+4. **Create trading rules** via the Rules page
+
+5. **Monitor the Dashboard** for real-time alerts when market conditions match your rules
+
+**Note:** Live data only streams during US market hours (9:30 AM - 4:00 PM ET)
 
 ## API Endpoints
 

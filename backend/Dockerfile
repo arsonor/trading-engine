@@ -17,11 +17,12 @@ RUN uv sync --frozen --no-dev
 COPY app/ app/
 COPY rules/ rules/
 COPY alembic/ alembic/
+COPY scripts/ scripts/
 COPY alembic.ini .
 COPY start.sh .
 
-# Make startup script executable
-RUN chmod +x start.sh
+# Fix line endings (Windows CRLF -> Unix LF) and make executable
+RUN sed -i 's/\r$//' start.sh && chmod +x start.sh
 
 # Expose port
 EXPOSE 8000

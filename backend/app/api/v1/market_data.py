@@ -2,12 +2,14 @@
 
 import random
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.schemas import Bar, MarketData, Timeframe
+from app.services.alert_generator import get_alert_generator
 from app.services.alpaca_client import get_alpaca_client
 
 router = APIRouter()
@@ -166,3 +168,115 @@ async def get_historical_bars(
 
     # Demo mode
     return _generate_demo_bars(symbol, timeframe, start, end, limit)
+
+
+# ============== Test/Simulation Endpoints ==============
+
+
+class SimulateMarketDataRequest(BaseModel):
+    """Request body for simulating market data."""
+
+    symbol: str = Field(..., description="Stock symbol (e.g., AAPL)")
+    price: float = Field(..., gt=0, description="Current price")
+    volume: Optional[int] = Field(1000000, ge=0, description="Trading volume")
+    prev_close: Optional[float] = Field(None, gt=0, description="Previous close price")
+    day_high: Optional[float] = Field(None, gt=0, description="Day's high")
+    day_low: Optional[float] = Field(None, gt=0, description="Day's low")
+    day_open: Optional[float] = Field(None, gt=0, description="Day's open")
+
+
+class SimulateMarketDataResponse(BaseModel):
+    """Response from market data simulation."""
+
+    symbol: str
+    price: float
+    rules_evaluated: int
+    alerts_triggered: int
+    alerts: List[Dict[str, Any]]
+    message: str
+    debug: Optional[Dict[str, Any]] = None
+
+
+@router.post("/simulate", response_model=SimulateMarketDataResponse)
+async def simulate_market_data(request: SimulateMarketDataRequest) -> SimulateMarketDataResponse:
+    """
+    Simulate market data to test rule evaluation and alert generation.
+
+    This endpoint allows testing the AlertGenerator without live market data.
+    It creates a MarketData object from the request and passes it through
+    the alert generation pipeline.
+
+    **Example request:**
+    ```json
+    {
+        "symbol": "AAPL",
+        "price": 150.0,
+        "volume": 1000000
+    }
+    ```
+
+    If you have a rule like "price > 100", this will trigger an alert.
+    """
+    symbol = request.symbol.upper()
+
+    # Build MarketData from request
+    market_data = MarketData(
+        symbol=symbol,
+        price=request.price,
+        volume=request.volume,
+        timestamp=datetime.utcnow(),
+        prev_close=request.prev_close,
+        day_high=request.day_high or request.price,
+        day_low=request.day_low or request.price,
+        day_open=request.day_open or request.price,
+    )
+
+    # Get alert generator and ensure it's running
+    alert_generator = get_alert_generator()
+    if not alert_generator._running:
+        await alert_generator.start()
+
+    # Force refresh rules cache to pick up any new rules
+    await alert_generator.refresh_rules_cache(force=True)
+
+    # Capture initial state to count new alerts
+    rules_count = len(alert_generator._rules_cache)
+
+    # Process the simulated market data
+    alerts_created = await alert_generator._evaluate_and_generate(
+        symbol,
+        alert_generator._enrich_market_data(symbol, market_data),
+    )
+
+    # Format alerts for response
+    alerts_data = []
+    for alert in alerts_created:
+        alerts_data.append({
+            "id": alert.id,
+            "symbol": alert.symbol,
+            "setup_type": alert.setup_type,
+            "entry_price": alert.entry_price,
+            "stop_loss": alert.stop_loss,
+            "target_price": alert.target_price,
+            "confidence_score": alert.confidence_score,
+            "rule_id": alert.rule_id,
+        })
+
+    # Build debug info
+    debug_info = {
+        "rules_in_cache": [
+            {"id": rid, "name": rule_def.name, "enabled": rule_def.enabled}
+            for rid, (_, rule_def) in alert_generator._rules_cache.items()
+        ],
+        "market_data_used": alert_generator._enrich_market_data(symbol, market_data),
+    }
+
+    return SimulateMarketDataResponse(
+        symbol=symbol,
+        price=request.price,
+        rules_evaluated=rules_count,
+        alerts_triggered=len(alerts_created),
+        alerts=alerts_data,
+        message=f"Simulated {symbol} @ ${request.price:.2f} - {len(alerts_created)} alert(s) triggered",
+        debug=debug_info,
+    )

@@ -19,12 +19,12 @@ const CONDITION_FIELDS = [
 ];
 
 const OPERATORS = [
-  { value: 'gt', label: '> (greater than)' },
-  { value: 'gte', label: '>= (greater or equal)' },
-  { value: 'lt', label: '< (less than)' },
-  { value: 'lte', label: '<= (less or equal)' },
-  { value: 'eq', label: '== (equal)' },
-  { value: 'neq', label: '!= (not equal)' },
+  { value: '>', label: '> (greater than)' },
+  { value: '>=', label: '>= (greater or equal)' },
+  { value: '<', label: '< (less than)' },
+  { value: '<=', label: '<= (less or equal)' },
+  { value: '==', label: '== (equal)' },
+  { value: '!=', label: '!= (not equal)' },
 ];
 
 function RuleForm({ onSubmit, onCancel }) {
@@ -34,7 +34,7 @@ function RuleForm({ onSubmit, onCancel }) {
     rule_type: 'volume',
     priority: 10,
     is_active: true,
-    conditions: [{ field: 'volume_ratio', operator: 'gte', value: 2.0 }],
+    conditions: [{ field: 'price', operator: '>', value: 100 }],
     filters: {
       min_price: '',
       max_price: '',
@@ -85,7 +85,7 @@ function RuleForm({ onSubmit, onCancel }) {
       ...prev,
       conditions: [
         ...prev.conditions,
-        { field: 'price', operator: 'gt', value: 0 },
+        { field: 'price', operator: '>', value: 0 },
       ],
     }));
   };

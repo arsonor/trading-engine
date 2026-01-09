@@ -58,21 +58,21 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 - [x] `backend/app/services/stream_manager.py` - Real-time data streaming
 
 #### Phase 6: Testing (Completed)
-- [x] Backend unit tests (pytest) - 151 tests
-  - `backend/tests/unit/test_rule_engine.py` - Rule engine unit tests (59 tests)
-  - `backend/tests/unit/test_api_alerts.py` - Alerts API tests (16 tests)
-  - `backend/tests/unit/test_api_rules.py` - Rules API tests (27 tests)
-  - `backend/tests/unit/test_api_watchlist.py` - Watchlist API tests (16 tests)
-  - `backend/tests/unit/test_alert_generator.py` - Alert generator unit tests (33 tests)
-- [x] Backend integration tests - 52 tests
-  - `backend/tests/integration/test_websocket.py` - WebSocket integration tests (24 tests)
-  - `backend/tests/integration/test_workflows.py` - Cross-component workflow tests (14 tests)
+- [x] Backend unit tests (pytest) - 155 tests
+  - `backend/tests/unit/test_rule_engine.py` - Rule engine unit tests
+  - `backend/tests/unit/test_api_alerts.py` - Alerts API tests
+  - `backend/tests/unit/test_api_rules.py` - Rules API tests
+  - `backend/tests/unit/test_api_watchlist.py` - Watchlist API tests
+  - `backend/tests/unit/test_alert_generator.py` - Alert generator unit tests
+- [x] Backend integration tests - 48 tests
+  - `backend/tests/integration/test_websocket.py` - WebSocket integration tests
+  - `backend/tests/integration/test_workflows.py` - Cross-component workflow tests
     - Alert lifecycle workflows (create, read, update, filter, stats)
     - Rule management with cascade deletes
     - Rule engine evaluation integration
     - Watchlist management workflows
     - Cross-component workflows (complete trading alert flow)
-  - `backend/tests/integration/test_alert_generator_integration.py` - Alert generator integration tests (10 tests)
+  - `backend/tests/integration/test_alert_generator_integration.py` - Alert generator integration tests
     - Market data → alert creation flow
     - Multiple rules triggering
     - WebSocket broadcast verification
