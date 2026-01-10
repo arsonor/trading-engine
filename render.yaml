@@ -13,7 +13,6 @@ services:
   - type: web
     name: trading-engine-api
     runtime: python
-    pythonVersion: "3.10.12"  # Explicit Python version to avoid 3.13 default
     plan: free
     region: oregon
     buildCommand: |
@@ -21,6 +20,8 @@ services:
     startCommand: |
       cd backend && uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.10.12"
       - key: APP_ENV
         value: production
       - key: DEBUG
