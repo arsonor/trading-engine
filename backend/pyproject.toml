@@ -36,9 +36,6 @@ dev = [
     "ruff>=0.14.10",
 ]
 
-[project.scripts]
-start = "uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
