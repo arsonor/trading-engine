@@ -16,9 +16,9 @@ services:
     plan: free
     region: oregon
     buildCommand: |
-      cd backend && pip install uv && uv sync --frozen --no-dev
+      cd backend && pip install -e .
     startCommand: |
-      cd backend && uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT
+      cd backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.12"
