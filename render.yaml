@@ -38,7 +38,7 @@ services:
       - key: ALPACA_BASE_URL
         value: https://paper-api.alpaca.markets
       - key: CORS_ORIGINS
-        value: https://trading-engine-ui.onrender.com
+        value: '["https://trading-engine-ui.onrender.com"]'
     healthCheckPath: /health
 
   # Frontend Static Site
