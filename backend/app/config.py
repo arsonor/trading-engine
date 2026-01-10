@@ -29,6 +29,19 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./trading_engine.db"
 
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def transform_database_url(cls, v: str) -> str:
+        """Transform database URL for async compatibility.
+
+        Render.com provides postgres:// URLs, but asyncpg requires postgresql+asyncpg://.
+        """
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql://") and "+asyncpg" not in v:
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
     # Alpaca API
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""

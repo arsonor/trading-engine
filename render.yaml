@@ -1,0 +1,59 @@
+# Render Blueprint - Infrastructure as Code
+# https://render.com/docs/blueprint-spec
+
+databases:
+  - name: trading-engine-db
+    databaseName: trading_engine
+    user: trading_user
+    plan: free
+    region: oregon
+
+services:
+  # Backend API Service
+  - type: web
+    name: trading-engine-api
+    runtime: python
+    pythonVersion: "3.10.12"  # Explicit Python version to avoid 3.13 default
+    plan: free
+    region: oregon
+    buildCommand: |
+      cd backend && pip install uv && uv sync --frozen --no-dev
+    startCommand: |
+      cd backend && uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trading-engine-db
+          property: connectionString
+        # Note: The config.py transforms postgres:// to postgresql+asyncpg:// automatically
+      - key: ALPACA_API_KEY
+        sync: false  # You'll set this manually in dashboard
+      - key: ALPACA_SECRET_KEY
+        sync: false  # You'll set this manually in dashboard
+      - key: ALPACA_BASE_URL
+        value: https://paper-api.alpaca.markets
+      - key: CORS_ORIGINS
+        value: https://trading-engine-ui.onrender.com
+    healthCheckPath: /health
+
+  # Frontend Static Site
+  - type: web
+    name: trading-engine-ui
+    runtime: static
+    plan: free
+    region: oregon
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://trading-engine-api.onrender.com
+      - key: VITE_WS_URL
+        value: wss://trading-engine-api.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
