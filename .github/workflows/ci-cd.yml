@@ -36,7 +36,8 @@ jobs:
         run: uv run ruff check app/
 
       - name: Run tests
-        run: uv run pytest -v --cov=app --cov-report=xml
+        run: uv run pytest -v --cov=app --cov-report=xml --timeout=60
+        timeout-minutes: 5
 
       - name: Upload coverage report
         uses: codecov/codecov-action@v4
