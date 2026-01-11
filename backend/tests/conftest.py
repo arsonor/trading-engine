@@ -15,26 +15,6 @@ from app.models import Alert, Rule, Watchlist
 # Test database URL (in-memory SQLite)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-# Global test engine and session factory for integration tests that need to patch
-_test_engine = create_async_engine(
-    TEST_DATABASE_URL,
-    echo=False,
-    future=True,
-)
-
-TestSessionLocal = async_sessionmaker(
-    _test_engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
-
-
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def cleanup_global_engine():
-    """Dispose global test engine after all tests complete."""
-    yield
-    await _test_engine.dispose()
-
 
 @pytest_asyncio.fixture(scope="function")
 async def test_engine():
@@ -49,25 +29,30 @@ async def test_engine():
 
 
 @pytest_asyncio.fixture(scope="function")
-async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
-    """Create a fresh database session for each test."""
-    # Create session factory for this test
-    TestSessionLocal = async_sessionmaker(
+async def test_session_factory(test_engine):
+    """Create a session factory for integration tests that need to patch async_session_maker."""
+    # Create all tables
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(
         test_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
 
-    # Create all tables
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async with TestSessionLocal() as session:
-        yield session
+    yield session_factory
 
     # Drop all tables after test
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest_asyncio.fixture(scope="function")
+async def db_session(test_session_factory) -> AsyncGenerator[AsyncSession, None]:
+    """Create a fresh database session for each test."""
+    async with test_session_factory() as session:
+        yield session
 
 
 @pytest_asyncio.fixture(scope="function")

@@ -6,12 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import Alert, Rule
 from app.schemas.market_data import MarketData
 from app.services.alert_generator import AlertGenerator, get_alert_generator
-from tests.conftest import TestSessionLocal
 
 
 @pytest_asyncio.fixture
@@ -85,14 +84,14 @@ class TestAlertGeneratorIntegration:
 
     @pytest.mark.asyncio
     async def test_market_data_triggers_alert_creation(
-        self, db_session: AsyncSession, simple_price_rule: Rule
+        self, db_session: AsyncSession, simple_price_rule: Rule, test_session_factory: async_sessionmaker
     ):
         """Test: Market data above threshold creates alert in database."""
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
         # Patch async_session_maker for the entire test
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             # Market data that should trigger the rule (price > 100)
@@ -125,13 +124,13 @@ class TestAlertGeneratorIntegration:
 
     @pytest.mark.asyncio
     async def test_market_data_below_threshold_no_alert(
-        self, db_session: AsyncSession, simple_price_rule: Rule
+        self, db_session: AsyncSession, simple_price_rule: Rule, test_session_factory: async_sessionmaker
     ):
         """Test: Market data below threshold does not create alert."""
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             # Market data that should NOT trigger the rule (price <= 100)
@@ -159,12 +158,13 @@ class TestAlertGeneratorIntegration:
         db_session: AsyncSession,
         simple_price_rule: Rule,
         volume_rule: Rule,
+        test_session_factory: async_sessionmaker,
     ):
         """Test: Market data matching multiple rules creates multiple alerts."""
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             # Market data that triggers both rules
@@ -200,12 +200,13 @@ class TestAlertGeneratorIntegration:
         self,
         db_session: AsyncSession,
         inactive_rule: Rule,
+        test_session_factory: async_sessionmaker,
     ):
         """Test: Inactive rules do not generate alerts."""
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             # Market data that would trigger the rule if active
@@ -228,7 +229,7 @@ class TestAlertGeneratorIntegration:
 
     @pytest.mark.asyncio
     async def test_alert_has_correct_fields(
-        self, db_session: AsyncSession
+        self, db_session: AsyncSession, test_session_factory: async_sessionmaker
     ):
         """Test: Created alert has all correct fields populated."""
         # Create a rule with targets
@@ -257,7 +258,7 @@ confidence:
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             market_data = MarketData(
@@ -294,13 +295,13 @@ confidence:
 
     @pytest.mark.asyncio
     async def test_websocket_broadcast_called(
-        self, db_session: AsyncSession, simple_price_rule: Rule
+        self, db_session: AsyncSession, simple_price_rule: Rule, test_session_factory: async_sessionmaker
     ):
         """Test: WebSocket broadcast is called when alert is created."""
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             market_data = MarketData(
@@ -328,13 +329,13 @@ confidence:
 
     @pytest.mark.asyncio
     async def test_cache_refresh_loads_rules(
-        self, db_session: AsyncSession, simple_price_rule: Rule
+        self, db_session: AsyncSession, simple_price_rule: Rule, test_session_factory: async_sessionmaker
     ):
         """Test: Rules are loaded into cache on refresh."""
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.refresh_rules_cache(force=True)
 
         # Check rule is in cache
@@ -345,13 +346,13 @@ confidence:
 
     @pytest.mark.asyncio
     async def test_rule_toggle_affects_alerts(
-        self, db_session: AsyncSession, simple_price_rule: Rule
+        self, db_session: AsyncSession, simple_price_rule: Rule, test_session_factory: async_sessionmaker
     ):
         """Test: Toggling rule affects alert generation after cache refresh."""
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             market_data = MarketData(
@@ -393,7 +394,7 @@ class TestAlertGeneratorRuleEngine:
     """Integration tests for RuleEngine within AlertGenerator."""
 
     @pytest.mark.asyncio
-    async def test_reference_value_comparison(self, db_session: AsyncSession):
+    async def test_reference_value_comparison(self, db_session: AsyncSession, test_session_factory: async_sessionmaker):
         """Test rule with reference value comparison."""
         # Create rule that compares price to a reference field
         rule = Rule(
@@ -415,7 +416,7 @@ conditions:
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             # Market data where price > day_high
@@ -442,7 +443,7 @@ conditions:
         assert alerts[0].symbol == "AAPL"
 
     @pytest.mark.asyncio
-    async def test_filter_blocks_low_volume(self, db_session: AsyncSession):
+    async def test_filter_blocks_low_volume(self, db_session: AsyncSession, test_session_factory: async_sessionmaker):
         """Test rule filters block low volume stocks."""
         rule = Rule(
             name="Filtered Rule",
@@ -465,7 +466,7 @@ filters:
         AlertGenerator.reset_instance()
         generator = AlertGenerator.get_instance()
 
-        with patch('app.services.alert_generator.async_session_maker', TestSessionLocal):
+        with patch('app.services.alert_generator.async_session_maker', test_session_factory):
             await generator.start()
 
             # Market data with low volume (below filter)
