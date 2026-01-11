@@ -15,6 +15,26 @@ from app.models import Alert, Rule, Watchlist
 # Test database URL (in-memory SQLite)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
+# Global test engine and session factory for integration tests that need to patch
+_test_engine = create_async_engine(
+    TEST_DATABASE_URL,
+    echo=False,
+    future=True,
+)
+
+TestSessionLocal = async_sessionmaker(
+    _test_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def cleanup_global_engine():
+    """Dispose global test engine after all tests complete."""
+    yield
+    await _test_engine.dispose()
+
 
 @pytest_asyncio.fixture(scope="function")
 async def test_engine():
