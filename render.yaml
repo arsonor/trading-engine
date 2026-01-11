@@ -49,9 +49,9 @@ services:
     staticPublishPath: frontend/dist
     envVars:
       - key: VITE_API_URL
-        value: https://trading-engine-api.onrender.com
+        value: https://trading-engine-api-5iai.onrender.com
       - key: VITE_WS_URL
-        value: wss://trading-engine-api.onrender.com
+        value: wss://trading-engine-api-5iai.onrender.com
     routes:
       - type: rewrite
         source: /*
