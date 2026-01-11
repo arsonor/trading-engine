@@ -8,10 +8,14 @@ A real-time trading alert system that monitors stocks via the Alpaca Markets API
 - [What This System Does](#what-this-system-does) - Core features and capabilities
 - [System Architecture](#system-architecture) - High-level architecture diagram
 - [Technology Stack](#technology-stack) - Frontend, backend, database, and infrastructure
+- [Live Demo](#live-demo) - Production deployment on Render
 - [Prerequisites](#prerequisites) - What you need to get started
 - [Quick Start](#quick-start) - Get up and running in minutes
 - [Docker Deployment](#docker-deployment) - Containerized deployment options
+- [Cloud Deployment](#cloud-deployment) - Deploy to Render.com
+- [CI/CD Pipeline](#cicd-pipeline) - GitHub Actions automation
 - [Running Tests](#running-tests) - Backend and frontend test suites
+- [Usage and Demonstration](#usage-and-demonstration) - Testing without live market data
 - [API Endpoints](#api-endpoints) - REST API reference
 - [Project Structure](#project-structure) - Codebase organization
 - [Configuration](#configuration) - Trading rules configuration guide
@@ -147,11 +151,26 @@ The Trading Engine solves these problems by providing:
 | **Docker** | Containerization |
 | **Docker Compose** | Multi-container orchestration |
 | **nginx** | Frontend static file serving (production) |
+| **Render.com** | Cloud hosting (PostgreSQL, backend, frontend) |
+| **GitHub Actions** | CI/CD pipeline automation |
 
 ### External APIs
 | Service | Purpose |
 |---------|---------|
 | **Alpaca Markets** | Real-time market data and paper trading |
+
+## Live Demo
+
+The application is deployed and running on Render.com:
+
+| Service | URL |
+|---------|-----|
+| **Frontend Dashboard** | https://trading-engine-ui.onrender.com |
+| **Backend API** | https://trading-engine-api-5iai.onrender.com |
+| **API Documentation** | https://trading-engine-api-5iai.onrender.com/docs |
+| **Health Check** | https://trading-engine-api-5iai.onrender.com/health |
+
+> **Note:** Free tier services may spin down after inactivity. The first request might take 30-60 seconds while the service wakes up.
 
 ## Prerequisites
 
@@ -279,6 +298,103 @@ docker-compose down -v
 docker-compose up -d --build
 ```
 
+## Cloud Deployment
+
+### Deploy to Render.com
+
+This project includes a `render.yaml` blueprint for one-click deployment to Render.
+
+#### Option 1: Deploy via Render Dashboard
+
+1. Fork this repository to your GitHub account
+
+2. Go to [Render Dashboard](https://dashboard.render.com) and sign in
+
+3. Click **New** → **Blueprint**
+
+4. Connect your GitHub repository
+
+5. Render will detect `render.yaml` and create:
+   - PostgreSQL database (free tier)
+   - Backend API service
+   - Frontend static site
+
+6. **Configure secrets** in the Render dashboard:
+   - Go to your `trading-engine-api` service → Environment
+   - Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`
+
+#### Option 2: Manual Deployment
+
+1. Create a PostgreSQL database on Render
+
+2. Create a Web Service for the backend:
+   - **Build Command:** `cd backend && pip install -e .`
+   - **Start Command:** `cd backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - **Environment Variables:**
+     - `PYTHON_VERSION`: `3.10.12`
+     - `DATABASE_URL`: (from your database)
+     - `ALPACA_API_KEY`: (your key)
+     - `ALPACA_SECRET_KEY`: (your secret)
+     - `CORS_ORIGINS`: `["https://your-frontend-url.onrender.com"]`
+
+3. Create a Static Site for the frontend:
+   - **Build Command:** `cd frontend && npm ci && npm run build`
+   - **Publish Directory:** `frontend/dist`
+   - **Environment Variables:**
+     - `VITE_API_URL`: `https://your-backend-url.onrender.com`
+     - `VITE_WS_URL`: `wss://your-backend-url.onrender.com`
+
+## CI/CD Pipeline
+
+This project uses GitHub Actions for continuous integration and deployment.
+
+### Workflow Overview
+
+The CI/CD pipeline (`.github/workflows/ci-cd.yml`) runs on every push and pull request to `main`:
+
+```
+Push/PR to main
+      │
+      ├──→ Backend Tests (parallel)
+      │         ├── Lint with ruff
+      │         └── Run pytest (203 tests)
+      │
+      └──→ Frontend Tests (parallel)
+                ├── Lint with ESLint
+                ├── Run vitest (60 tests)
+                └── Build verification
+      │
+      ▼
+   All tests pass?
+      │
+      ├── No  → Pipeline fails, PR blocked
+      │
+      └── Yes → Deploy to Render (main branch only)
+                  ├── Trigger backend deploy hook
+                  └── Trigger frontend deploy hook
+```
+
+### Setting Up CI/CD
+
+1. **GitHub Secrets Required:**
+
+   Go to your repository → Settings → Secrets and variables → Actions → New repository secret:
+
+   | Secret | Description |
+   |--------|-------------|
+   | `RENDER_BACKEND_DEPLOY_HOOK` | Deploy hook URL from Render backend service |
+   | `RENDER_FRONTEND_DEPLOY_HOOK` | Deploy hook URL from Render frontend service |
+
+2. **Get Render Deploy Hooks:**
+   - Go to your Render service → Settings → Build & Deploy
+   - Copy the "Deploy Hook" URL
+
+3. **Pipeline Features:**
+   - Runs on Ubuntu with Python 3.10 and Node.js 20
+   - Uses `uv` for fast Python dependency management
+   - 30-second timeout per test to prevent hanging
+   - Automatic deployment only on successful tests
+
 ## Running Tests
 
 ### Backend Tests
@@ -328,6 +444,8 @@ npm run test:coverage
 - Service tests: 18 tests
 - Store tests: 23 tests
 - Total: 60 frontend tests
+
+## Usage and Demonstration
 
 ### Testing Without Live Market Data
 
@@ -491,10 +609,14 @@ trading-engine/
 │   │   ├── store/            # Zustand state
 │   │   └── test/             # Vitest tests
 │   └── package.json          # Node dependencies
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml         # GitHub Actions CI/CD pipeline
 ├── openapi/
 │   └── spec.yaml             # OpenAPI specification
 ├── docker-compose.yml        # Production Docker config
 ├── docker-compose.dev.yml    # Development Docker config
+├── render.yaml               # Render.com deployment blueprint
 └── .env.example              # Environment template
 ```
 

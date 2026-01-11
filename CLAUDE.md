@@ -94,11 +94,23 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 - [x] Wired up in `main.py` lifespan with combined callbacks
 - [x] Unit tests (33 tests) and integration tests (10 tests)
 
+#### Phase 8: CI/CD & Deployment (Completed)
+- [x] Complete README.md with setup instructions
+- [x] GitHub Actions CI/CD pipeline (`.github/workflows/ci-cd.yml`)
+  - Backend tests with pytest and ruff linter
+  - Frontend tests with vitest and build verification
+  - Automatic deployment to Render on main branch push
+- [x] Render.com production deployment (`render.yaml`)
+  - PostgreSQL database (free tier)
+  - Backend API service with automatic migrations
+  - Frontend static site with SPA routing
+- [x] Live URLs:
+  - Frontend: https://trading-engine-ui.onrender.com
+  - Backend API: https://trading-engine-api-5iai.onrender.com
+
 ### Remaining Tasks
 
-#### Phase 8: Documentation & Deployment
-- [x] Complete README.md with setup instructions
-- [ ] Production deployment config
+None - Project is complete!
 
 ## How to Run (Development)
 
@@ -208,10 +220,14 @@ trading-engine/
 │   ├── package.json
 │   ├── vite.config.js
 │   └── tailwind.config.js
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml             # GitHub Actions CI/CD pipeline
 ├── openapi/
 │   └── spec.yaml                 # Master API contract
-├── docker-compose.yml            # Production setup
+├── docker-compose.yml            # Production setup (Docker)
 ├── docker-compose.dev.yml        # Development (DB only)
+├── render.yaml                   # Render.com deployment blueprint
 ├── .env.example
 ├── PLAN.md
 ├── CLAUDE.md
