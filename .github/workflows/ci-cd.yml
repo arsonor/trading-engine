@@ -36,16 +36,8 @@ jobs:
         run: uv run ruff check app/
 
       - name: Run tests
-        run: uv run pytest -v --cov=app --cov-report=xml --timeout=60
-        timeout-minutes: 5
-
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v4
-        if: github.event_name == 'push'
-        with:
-          file: backend/coverage.xml
-          flags: backend
-        continue-on-error: true
+        run: uv run pytest -v --timeout=30
+        timeout-minutes: 2
 
   # Frontend Tests
   frontend-tests:
