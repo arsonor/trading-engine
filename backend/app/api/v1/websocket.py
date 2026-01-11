@@ -1,11 +1,10 @@
 """WebSocket API endpoint."""
 
-import asyncio
 import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Dict, Optional, Set
+from typing import Dict, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 

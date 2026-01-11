@@ -2,7 +2,7 @@
  * Tests for API service
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
 
 // Mock axios
@@ -35,7 +35,6 @@ vi.mock('axios', () => {
 });
 
 describe('API Service', () => {
-  let api;
   let alertsApi;
   let rulesApi;
   let watchlistApi;
@@ -51,7 +50,6 @@ describe('API Service', () => {
 
     // Import the module fresh
     const apiModule = await import('../../services/api');
-    api = apiModule.default;
     alertsApi = apiModule.alertsApi;
     rulesApi = apiModule.rulesApi;
     watchlistApi = apiModule.watchlistApi;

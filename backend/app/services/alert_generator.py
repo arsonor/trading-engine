@@ -18,6 +18,7 @@ from app.api.v1.websocket import get_manager
 from app.core.database import async_session_maker
 from app.engine.rule_engine import (
     ConfidenceModifier,
+    OperatorType,
     RuleCondition,
     RuleConfidence,
     RuleDefinition,
@@ -25,7 +26,6 @@ from app.engine.rule_engine import (
     RuleEvaluationResult,
     RuleFilters,
     RuleTargets,
-    OperatorType,
 )
 from app.models import Alert, Rule
 from app.schemas.market_data import MarketData
@@ -119,7 +119,7 @@ class AlertGenerator:
             try:
                 # Fetch active rules from database
                 async with async_session_maker() as session:
-                    query = select(Rule).where(Rule.is_active == True)
+                    query = select(Rule).where(Rule.is_active.is_(True))
                     result = await session.execute(query)
                     db_rules = result.scalars().all()
 

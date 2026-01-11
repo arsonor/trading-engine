@@ -1,6 +1,6 @@
 """Alerts API endpoints."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,7 +10,6 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.models import Alert as AlertModel
-from app.models import Rule as RuleModel
 from app.schemas import (
     Alert,
     AlertListResponse,

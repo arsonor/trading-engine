@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Callable, Optional, Set
 
 from alpaca.data.enums import DataFeed

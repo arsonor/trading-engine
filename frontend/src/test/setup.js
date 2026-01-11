@@ -28,7 +28,7 @@ class MockWebSocket {
     }, 10);
   }
 
-  send(data) {
+  send() {
     // Mock send - can be extended in tests
   }
 

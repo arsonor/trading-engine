@@ -35,7 +35,7 @@ export const useAlertsStore = create((set, get) => ({
     try {
       const { filters } = get();
       const params = Object.fromEntries(
-        Object.entries(filters).filter(([_, v]) => v !== '' && v !== null)
+        Object.entries(filters).filter(([, v]) => v !== '' && v !== null)
       );
       const response = await alertsApi.list(params);
       set({
@@ -86,7 +86,7 @@ export const useAlertsStore = create((set, get) => ({
 }));
 
 // Rules store
-export const useRulesStore = create((set, get) => ({
+export const useRulesStore = create((set) => ({
   rules: [],
   loading: false,
   error: null,
@@ -141,7 +141,7 @@ export const useRulesStore = create((set, get) => ({
 }));
 
 // Watchlist store
-export const useWatchlistStore = create((set, get) => ({
+export const useWatchlistStore = create((set) => ({
   items: [],
   loading: false,
   error: null,
@@ -192,7 +192,7 @@ export const useAppStore = create((set) => ({
     try {
       const response = await healthApi.check();
       set({ healthStatus: response.data });
-    } catch (error) {
+    } catch {
       set({ healthStatus: { status: 'unhealthy' } });
     }
   },
