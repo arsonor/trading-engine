@@ -110,7 +110,55 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 
 ### Remaining Tasks
 
-None - Project is complete!
+#### Phase 9: MCP (Model Context Protocol) Integration
+
+**Goal:** Enable AI assistants (Claude, ChatGPT) to interact with the trading engine via natural language using a hybrid MCP architecture.
+
+**Architecture:**
+- **Alpaca MCP Server** (Official) - Market data, trading, portfolio (43 endpoints)
+- **Trading Engine MCP Server** (Custom) - Alerts, rules, analysis, historical data
+
+**Sub-phases:**
+
+##### Phase 9.1: Project Setup
+- [ ] Add MCP SDK dependency (`mcp[cli]>=1.2.0`)
+- [ ] Create MCP module structure (`backend/app/mcp/`)
+- [ ] Set up MCP server configuration
+
+##### Phase 9.2: Core MCP Server
+- [ ] Create FastMCP server instance (`server.py`)
+- [ ] Implement database session management
+- [ ] Set up logging (avoid stdout for STDIO transport)
+
+##### Phase 9.3: Alert Tools
+- [ ] `explain_alert(alert_id)` - Why alert triggered
+- [ ] `list_alerts(symbol?, limit?)` - Recent alerts
+- [ ] `get_alert_statistics(days?)` - Performance stats
+
+##### Phase 9.4: Rule Management Tools
+- [ ] `list_rules()` - All trading rules
+- [ ] `create_rule_from_description(name, conditions)` - NL rule creation
+- [ ] `toggle_rule(rule_id)` - Enable/disable
+
+##### Phase 9.5: Analysis Tools
+- [ ] `analyze_watchlist()` - Bullish/bearish signals
+- [ ] `get_symbol_analysis(symbol)` - Deep analysis
+- [ ] `get_top_performers(days?)` - Best alerts
+
+##### Phase 9.6: Watchlist Tools
+- [ ] `get_watchlist()` / `add_to_watchlist()` / `remove_from_watchlist()`
+
+##### Phase 9.7: MCP Resources
+- [ ] `alerts://recent`, `rules://active`, `stats://daily`
+
+##### Phase 9.8: Alpaca MCP Integration
+- [ ] Configure official Alpaca MCP server
+- [ ] Test combined setup with Claude Desktop
+
+##### Phase 9.9: Testing & Documentation
+- [ ] Unit tests for MCP tools
+- [ ] Update README with MCP setup
+- [ ] Create `docs/mcp-setup.md` guide
 
 ## How to Run (Development)
 
@@ -161,8 +209,18 @@ trading-engine/
 │   │   │   ├── alpaca_client.py   # Alpaca API wrapper
 │   │   │   ├── stream_manager.py  # Real-time streaming
 │   │   │   └── alert_generator.py # Alert generation from market data
-│   │   └── engine/
-│   │       └── rule_engine.py
+│   │   ├── engine/
+│   │   │   └── rule_engine.py
+│   │   └── mcp/                   # MCP server (Phase 9)
+│   │       ├── __init__.py
+│   │       ├── server.py          # FastMCP server
+│   │       ├── tools/             # MCP tools
+│   │       │   ├── alerts.py
+│   │       │   ├── rules.py
+│   │       │   ├── analysis.py
+│   │       │   └── watchlist.py
+│   │       └── resources/         # MCP resources
+│   │           └── data.py
 │   ├── alembic/                  # Database migrations
 │   │   ├── env.py
 │   │   └── versions/
@@ -225,6 +283,11 @@ trading-engine/
 │       └── ci-cd.yml             # GitHub Actions CI/CD pipeline
 ├── openapi/
 │   └── spec.yaml                 # Master API contract
+├── docs/                         # Documentation (Phase 9)
+│   ├── mcp-setup.md              # MCP installation guide
+│   └── mcp-examples.md           # Example prompts
+├── config/                       # Configuration templates
+│   └── claude_desktop_config.json # Claude Desktop MCP config
 ├── docker-compose.yml            # Production setup (Docker)
 ├── docker-compose.dev.yml        # Development (DB only)
 ├── render.yaml                   # Render.com deployment blueprint
