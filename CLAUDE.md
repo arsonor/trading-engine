@@ -108,9 +108,7 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
   - Frontend: https://trading-engine-ui.onrender.com
   - Backend API: https://trading-engine-api-5iai.onrender.com
 
-### Remaining Tasks
-
-#### Phase 9: MCP (Model Context Protocol) Integration
+#### Phase 9: MCP (Model Context Protocol) Integration (In Progress)
 
 **Goal:** Enable AI assistants (Claude, ChatGPT) to interact with the trading engine via natural language using a hybrid MCP architecture.
 
@@ -120,36 +118,49 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 
 **Sub-phases:**
 
-##### Phase 9.1: Project Setup
-- [ ] Add MCP SDK dependency (`mcp[cli]>=1.2.0`)
-- [ ] Create MCP module structure (`backend/app/mcp/`)
-- [ ] Set up MCP server configuration
+##### Phase 9.1: Project Setup (Completed)
+- [x] Add MCP SDK dependency (`mcp[cli]>=1.2.0`)
+- [x] Create MCP module structure (`backend/app/mcp/`)
+- [x] Set up MCP server configuration
 
-##### Phase 9.2: Core MCP Server
-- [ ] Create FastMCP server instance (`server.py`)
-- [ ] Implement database session management
-- [ ] Set up logging (avoid stdout for STDIO transport)
+##### Phase 9.2: Core MCP Server (Completed)
+- [x] Create FastMCP server instance (`server.py`)
+- [x] Implement database session management
+- [x] Set up logging (avoid stdout for STDIO transport)
 
-##### Phase 9.3: Alert Tools
-- [ ] `explain_alert(alert_id)` - Why alert triggered
-- [ ] `list_alerts(symbol?, limit?)` - Recent alerts
-- [ ] `get_alert_statistics(days?)` - Performance stats
+##### Phase 9.3: Alert Tools (Completed)
+- [x] `explain_alert(alert_id)` - Why alert triggered
+- [x] `list_alerts(symbol?, limit?, setup_type?)` - Recent alerts with filters
+- [x] `get_alert_by_id(alert_id)` - Get specific alert details
+- [x] `mark_alert_read(alert_id)` - Mark alert as read
+- [x] `get_alert_statistics(days?)` - Performance stats
 
-##### Phase 9.4: Rule Management Tools
-- [ ] `list_rules()` - All trading rules
-- [ ] `create_rule_from_description(name, conditions)` - NL rule creation
-- [ ] `toggle_rule(rule_id)` - Enable/disable
+##### Phase 9.4: Rule Management Tools (Completed)
+- [x] `list_rules(active_only?)` - All trading rules
+- [x] `get_rule(rule_id)` - Get rule details with config
+- [x] `create_rule_from_description(name, description, conditions)` - NL rule creation
+- [x] `toggle_rule(rule_id)` - Enable/disable
+- [x] `delete_rule(rule_id)` - Remove rule
 
-##### Phase 9.5: Analysis Tools
-- [ ] `analyze_watchlist()` - Bullish/bearish signals
-- [ ] `get_symbol_analysis(symbol)` - Deep analysis
-- [ ] `get_top_performers(days?)` - Best alerts
+##### Phase 9.5: Analysis Tools (Completed)
+- [x] `analyze_watchlist()` - Bullish/bearish signals
+- [x] `get_symbol_analysis(symbol)` - Deep analysis
+- [x] `compare_symbols(symbols[])` - Compare multiple symbols
+- [x] `get_top_performers(days?, limit?)` - Best alerts
 
-##### Phase 9.6: Watchlist Tools
-- [ ] `get_watchlist()` / `add_to_watchlist()` / `remove_from_watchlist()`
+##### Phase 9.6: Watchlist Tools (Completed)
+- [x] `get_watchlist()` - Get current watchlist
+- [x] `add_to_watchlist(symbol, notes?)` - Add symbol
+- [x] `remove_from_watchlist(symbol)` - Remove symbol
 
-##### Phase 9.7: MCP Resources
-- [ ] `alerts://recent`, `rules://active`, `stats://daily`
+##### Phase 9.7: MCP Resources (Completed)
+- [x] `alerts://recent` - Recent alerts as resource
+- [x] `alerts://unread` - Unread alerts
+- [x] `rules://active` - Active rules configuration
+- [x] `stats://daily` - Daily statistics summary
+- [x] `watchlist://current` - Current watchlist
+
+### Remaining Tasks
 
 ##### Phase 9.8: Alpaca MCP Integration
 - [ ] Configure official Alpaca MCP server

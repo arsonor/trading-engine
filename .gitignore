@@ -79,3 +79,5 @@ frontend/build/
 # Misc
 *.bak
 *.tmp
+
+tmpclaude-*
