@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "trading-engine": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "G:/Users/Martin/GITHUB/trading-engine/backend",
+        "run",
+        "run_mcp.py"
+      ],
+      "env": {
+        "DATABASE_URL": "sqlite+aiosqlite:///G:/Users/Martin/GITHUB/trading-engine/backend/trading_engine.db"
+      }
+    }
+  }
+}
