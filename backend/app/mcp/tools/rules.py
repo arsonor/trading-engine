@@ -211,12 +211,12 @@ async def create_rule_from_description(
         await session.refresh(rule)
 
         lines = [
-            f"# Rule Created Successfully",
+            "# Rule Created Successfully",
             "",
             f"**ID:** {rule.id}",
             f"**Name:** {rule.name}",
             f"**Type:** {rule.rule_type}",
-            f"**Status:** Active",
+            "**Status:** Active",
             f"**Priority:** {rule.priority}",
             "",
             "## Description",
@@ -358,7 +358,7 @@ async def delete_rule(rule_id: int) -> str:
         await session.commit()
 
         lines = [
-            f"# Rule Deleted",
+            "# Rule Deleted",
             "",
             f"**ID:** {rule_id}",
             f"**Name:** {rule_name}",

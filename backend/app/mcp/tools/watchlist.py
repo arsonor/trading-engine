@@ -126,10 +126,10 @@ async def add_to_watchlist(symbol: str, notes: Optional[str] = None) -> str:
         await session.refresh(item)
 
         lines = [
-            f"# Added to Watchlist",
+            "# Added to Watchlist",
             "",
             f"**Symbol:** {symbol}",
-            f"**Status:** Active",
+            "**Status:** Active",
             f"**Added:** {item.added_at.strftime('%Y-%m-%d %H:%M')}",
         ]
 
@@ -176,7 +176,7 @@ async def remove_from_watchlist(symbol: str) -> str:
         await session.commit()
 
         lines = [
-            f"# Removed from Watchlist",
+            "# Removed from Watchlist",
             "",
             f"**Symbol:** {symbol}",
             f"**Was Added:** {added_date}",

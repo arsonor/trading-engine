@@ -457,7 +457,7 @@ async def get_top_performers(days: int = 7, limit: int = 10) -> str:
             return f"No alerts with confidence scores found in the last {days} days."
 
         lines = [
-            f"# Top Performing Alerts",
+            "# Top Performing Alerts",
             f"*Last {days} day{'s' if days != 1 else ''} | Top {limit}*",
             "",
         ]

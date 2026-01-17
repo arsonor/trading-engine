@@ -95,10 +95,9 @@ def _register_tools_and_resources():
     Tools use decorators that reference the mcp server instance.
     """
     # Import tools - these register via decorators
-    from app.mcp.tools import alerts, analysis, rules, watchlist  # noqa: F401
-
     # Import resources - these register via decorators
     from app.mcp.resources import data  # noqa: F401
+    from app.mcp.tools import alerts, analysis, rules, watchlist  # noqa: F401
 
     logger.info("MCP tools and resources registered")
 
