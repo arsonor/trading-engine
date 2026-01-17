@@ -3,17 +3,23 @@
   "_windows_path": "%APPDATA%\\Claude\\claude_desktop_config.json",
   "_macos_path": "~/Library/Application Support/Claude/claude_desktop_config.json",
   "_linux_path": "~/.config/Claude/claude_desktop_config.json",
+  "_database_options": {
+    "_local_sqlite": "sqlite+aiosqlite:///C:/path/to/trading-engine/backend/trading_engine.db",
+    "_render_postgres": "postgresql+asyncpg://USER:PASSWORD@HOST.oregon-postgres.render.com/trading_engine",
+    "_docker_postgres": "postgresql+asyncpg://postgres:postgres@localhost:5432/trading_engine"
+  },
   "mcpServers": {
     "trading-engine": {
       "command": "uv",
       "args": [
         "--directory",
-        "G:/Users/Martin/GITHUB/trading-engine/backend",
+        "C:/path/to/trading-engine/backend",
         "run",
         "run_mcp.py"
       ],
       "env": {
-        "DATABASE_URL": "sqlite+aiosqlite:///G:/Users/Martin/GITHUB/trading-engine/backend/trading_engine.db"
+        "_comment": "Choose one: local SQLite, Render PostgreSQL, or Docker PostgreSQL (see _database_options above)",
+        "DATABASE_URL": "sqlite+aiosqlite:///C:/path/to/trading-engine/backend/trading_engine.db"
       }
     },
     "alpaca": {

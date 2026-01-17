@@ -336,6 +336,166 @@ Once configured, you can interact with your trading engine using natural languag
 | `ALPACA_SECRET_KEY` | Alpaca secret key | Required |
 | `ALPACA_PAPER_TRADE` | Use paper trading (true/false) | `true` |
 
+## Database Options
+
+MCP can connect to different databases depending on your deployment strategy:
+
+### Option 1: Local SQLite (Default)
+Best for: Local development, offline use, isolated testing
+
+```json
+"DATABASE_URL": "sqlite+aiosqlite:///C:/path/to/trading-engine/backend/trading_engine.db"
+```
+
+### Option 2: Render PostgreSQL (Recommended for Production)
+Best for: Unified data with Render deployment, persistent cloud storage
+
+```json
+"DATABASE_URL": "postgresql+asyncpg://USER:PASSWORD@HOST.oregon-postgres.render.com/trading_engine"
+```
+
+### Option 3: Docker PostgreSQL
+Best for: Local self-hosted deployment
+
+```json
+"DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5432/trading_engine"
+```
+
+## Connecting MCP to Render (Unified Cloud Setup)
+
+If you have deployed the Trading Engine to Render, you can configure MCP to use the same database. This means Claude will see the same data as your web dashboard.
+
+### Step 1: Get Your Render Database URL
+
+1. Go to [Render Dashboard](https://dashboard.render.com)
+2. Click on your PostgreSQL database (e.g., `trading-engine-db`)
+3. Find **External Database URL** under "Connections"
+4. Copy the URL (format: `postgres://user:password@host/database`)
+
+### Step 2: Update Claude Desktop Config
+
+Edit your config file:
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+Update the `DATABASE_URL` to use Render's PostgreSQL:
+
+```json
+{
+  "mcpServers": {
+    "trading-engine": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "C:/path/to/trading-engine/backend",
+        "run",
+        "run_mcp.py"
+      ],
+      "env": {
+        "DATABASE_URL": "postgresql+asyncpg://trading_user:YOUR_PASSWORD@YOUR_HOST.oregon-postgres.render.com/trading_engine"
+      }
+    },
+    "alpaca": {
+      "command": "uvx",
+      "args": ["alpaca-mcp-server", "serve"],
+      "env": {
+        "ALPACA_API_KEY": "your_alpaca_api_key",
+        "ALPACA_SECRET_KEY": "your_alpaca_secret_key",
+        "ALPACA_PAPER_TRADE": "true"
+      }
+    }
+  }
+}
+```
+
+**Important:**
+- Change `postgres://` to `postgresql+asyncpg://` for the async driver
+- Replace `YOUR_PASSWORD` and `YOUR_HOST` with actual values from Render
+- Restart Claude Desktop after making changes
+
+### Step 3: Verify Connection
+
+Ask Claude: "How many alerts do I have?" - The count should match your Render dashboard.
+
+### Architecture After Setup
+
+```
+┌─────────────────────────────────────┐
+│  Render PostgreSQL (cloud)          │
+│  Single source of truth             │
+└──────────────┬──────────────────────┘
+               │
+      ┌────────┴────────┐
+      │                 │
+      ▼                 ▼
+┌───────────┐    ┌────────────┐
+│  Render   │    │    MCP     │
+│  Web App  │    │  (Claude)  │
+└───────────┘    └────────────┘
+```
+
+## Render Free Tier: Database Expiration
+
+Render's free PostgreSQL databases expire after **30 days**. Here's how to handle it.
+
+### Timeline
+
+```
+Day 1 ────────────────► Day 30
+  │                        │
+  │  Database works        │  Database EXPIRES
+  │  normally              │  All data deleted
+  └────────────────────────┘
+```
+
+### Before Expiration: Export Your Data
+
+Run this command to backup your database:
+
+```bash
+pg_dump "postgres://trading_user:PASSWORD@HOST.oregon-postgres.render.com/trading_engine" > backup.sql
+```
+
+Or use a GUI tool like pgAdmin, DBeaver, or TablePlus.
+
+### After Expiration: Create New Database
+
+1. **Delete the expired database** in Render Dashboard
+2. **Create a new free database**:
+   - Go to Render Dashboard → New → PostgreSQL
+   - Name: `trading-engine-db`
+   - Database: `trading_engine`
+   - User: `trading_user`
+3. **Update DATABASE_URL** in two places:
+   - Render Dashboard → `trading-engine-api` service → Environment
+   - Your local Claude Desktop config (`claude_desktop_config.json`)
+4. **Redeploy the backend** (migrations run automatically on startup)
+5. **Import your backup** (optional):
+   ```bash
+   psql "NEW_DATABASE_URL" < backup.sql
+   ```
+
+### Avoiding Expiration
+
+| Option | Cost | Benefit |
+|--------|------|---------|
+| Recreate every 30 days | Free | Keep using free tier |
+| Upgrade to Starter | $7/month | No expiration, better performance |
+| Use external PostgreSQL | Varies | Supabase, Neon, Railway (free tiers available) |
+
+### Alternative Free PostgreSQL Providers
+
+If Render's 30-day limit is inconvenient, consider:
+
+| Provider | Free Tier | Expiration |
+|----------|-----------|------------|
+| [Supabase](https://supabase.com) | 500MB | Pauses after 1 week inactivity |
+| [Neon](https://neon.tech) | 512MB | No expiration |
+| [Railway](https://railway.app) | $5 credit/month | Usage-based |
+
+To use an alternative, just update the `DATABASE_URL` in both Render and MCP config.
+
 ## Architecture
 
 ```
