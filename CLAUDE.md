@@ -172,12 +172,18 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 - [x] Document setup instructions for Claude Code CLI
 - [x] Test both MCP servers together
 
-### Remaining Tasks
+##### Phase 9.10: Testing & Documentation (Completed)
+- [x] Unit tests for MCP tools (110 tests in `tests/unit/mcp/`)
+- [x] Integration tests with mock database (42 tests in `tests/integration/mcp/`)
+- [x] MCP documentation complete in `docs/mcp-setup.md`
 
-##### Phase 9.10: Testing & Documentation
-- [ ] Unit tests for MCP tools
-- [ ] Integration tests with mock database
-- [ ] Update README with MCP setup instructions
+### Phase 9 Complete
+
+All MCP implementation phases (9.1-9.10) are now complete:
+- **17 MCP tools** for alerts, rules, analysis, and watchlist management
+- **5 MCP resources** for quick data access
+- **43 Alpaca MCP tools** via official integration
+- **152 tests** (110 unit + 42 integration)
 
 ## How to Run (Development)
 
