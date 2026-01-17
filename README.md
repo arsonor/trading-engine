@@ -11,6 +11,7 @@ A real-time trading alert system that monitors stocks via the Alpaca Markets API
 - [Live Demo](#live-demo) - Production deployment on Render
 - [Prerequisites](#prerequisites) - What you need to get started
 - [Quick Start](#quick-start) - Get up and running in minutes
+- [MCP Integration](#mcp-integration) - AI assistant integration with Claude
 - [Docker Deployment](#docker-deployment) - Containerized deployment options
 - [Cloud Deployment](#cloud-deployment) - Deploy to Render.com
 - [CI/CD Pipeline](#cicd-pipeline) - GitHub Actions automation
@@ -159,6 +160,13 @@ The Trading Engine solves these problems by providing:
 |---------|---------|
 | **Alpaca Markets** | Real-time market data and paper trading |
 
+### AI Integration
+| Technology | Purpose |
+|------------|---------|
+| **MCP (Model Context Protocol)** | AI assistant integration |
+| **FastMCP** | MCP server framework for Python |
+| **Alpaca MCP Server** | Official Alpaca MCP integration (43 tools) |
+
 ## Live Demo
 
 The application is deployed and running on Render.com:
@@ -247,6 +255,122 @@ npm run dev
 ```
 
 The dashboard will be available at `http://localhost:5173`
+
+## MCP Integration
+
+The Trading Engine includes MCP (Model Context Protocol) integration, allowing AI assistants like Claude to interact with the system using natural language.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Claude / AI Assistant                     │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+              ┌────────────────┴────────────────┐
+              │                                 │
+              ▼                                 ▼
+┌─────────────────────────┐       ┌─────────────────────────┐
+│   Trading Engine MCP    │       │     Alpaca MCP Server   │
+│      (Custom)           │       │     (Official)          │
+│                         │       │                         │
+│  • Alert Tools (5)      │       │  • Market Data (18)     │
+│  • Rule Management (5)  │       │  • Trading (8)          │
+│  • Analysis (4)         │       │  • Portfolio (4)        │
+│  • Watchlist (3)        │       │  • Watchlists (7)       │
+│  • Resources (5)        │       │  • Other (6)            │
+│                         │       │                         │
+│  Total: 17 tools        │       │  Total: 43 tools        │
+└───────────┬─────────────┘       └──────────────┬──────────┘
+            │                                    │
+            ▼                                    ▼
+┌─────────────────────────┐       ┌─────────────────────────┐
+│  Trading Engine DB      │       │   Alpaca Markets API    │
+│  (SQLite/PostgreSQL)    │       │   (Paper or Live)       │
+└─────────────────────────┘       └─────────────────────────┘
+```
+
+### Quick Setup for Claude Desktop
+
+1. **Install Alpaca MCP Server:**
+   ```bash
+   uvx alpaca-mcp-server init
+   ```
+
+2. **Configure Claude Desktop:**
+
+   Add to your Claude Desktop config file:
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+   ```json
+   {
+     "mcpServers": {
+       "trading-engine": {
+         "command": "uv",
+         "args": [
+           "--directory",
+           "/path/to/trading-engine/backend",
+           "run",
+           "run_mcp.py"
+         ],
+         "env": {
+           "DATABASE_URL": "sqlite+aiosqlite:///path/to/trading_engine.db"
+         }
+       },
+       "alpaca": {
+         "command": "uvx",
+         "args": ["alpaca-mcp-server", "serve"],
+         "env": {
+           "ALPACA_API_KEY": "your_api_key",
+           "ALPACA_SECRET_KEY": "your_secret_key",
+           "ALPACA_PAPER_TRADE": "true"
+         }
+       }
+     }
+   }
+   ```
+
+3. **Restart Claude Desktop**
+
+### Available MCP Tools
+
+#### Trading Engine Tools
+| Tool | Description |
+|------|-------------|
+| `explain_alert` | Get detailed explanation of why an alert triggered |
+| `list_alerts` | List recent alerts with optional filters |
+| `get_alert_statistics` | Performance stats for alerts |
+| `list_rules` | List all trading rules |
+| `create_rule_from_description` | Create rules using natural language |
+| `toggle_rule` | Enable/disable rules |
+| `analyze_watchlist` | Analyze watched stocks for signals |
+| `get_symbol_analysis` | Deep analysis of a symbol |
+| `compare_symbols` | Compare multiple symbols |
+| `get_top_performers` | Best performing alerts |
+
+#### Alpaca Tools (via official MCP server)
+| Category | Tools |
+|----------|-------|
+| Market Data | `get_stock_bars`, `get_stock_latest_quote`, `get_crypto_bars`, etc. |
+| Trading | `place_stock_order`, `place_crypto_order`, `cancel_order`, etc. |
+| Account | `get_account_info`, `get_all_positions`, `get_portfolio_history` |
+
+### Example Prompts
+
+Once configured, interact with your trading engine naturally:
+
+```
+"Show me all unread alerts from today"
+"Why did NVDA trigger an alert?"
+"Create a rule to alert when tech stocks gap up more than 5%"
+"Which stocks on my watchlist look bullish?"
+"What's the current price of AAPL?"
+"Compare NVDA, AMD, and INTC performance"
+"Buy 10 shares of MSFT at market price"
+```
+
+For complete documentation, see [docs/mcp-setup.md](docs/mcp-setup.md).
 
 ## Docker Deployment
 
@@ -419,9 +543,9 @@ uv run pytest tests/unit/test_rule_engine.py -v
 ```
 
 **Test Coverage:**
-- Unit tests: 155 tests (rule engine, API endpoints, alert generator)
-- Integration tests: 48 tests (WebSocket, cross-component workflows, alert generation)
-- Total: 203 backend tests
+- Unit tests: 265 tests (rule engine, API endpoints, alert generator, MCP tools)
+- Integration tests: 90 tests (WebSocket, workflows, alert generation, MCP workflows)
+- Total: 355 backend tests
 
 ### Frontend Tests
 
@@ -591,6 +715,10 @@ trading-engine/
 │   │   ├── api/v1/           # API endpoints
 │   │   ├── core/             # Database setup
 │   │   ├── engine/           # Rule evaluation engine
+│   │   ├── mcp/              # MCP server integration
+│   │   │   ├── tools/        # MCP tools (alerts, rules, analysis, watchlist)
+│   │   │   ├── resources/    # MCP resources
+│   │   │   └── server.py     # FastMCP server
 │   │   ├── models/           # SQLAlchemy models
 │   │   ├── schemas/          # Pydantic schemas
 │   │   ├── services/         # Alpaca integration
@@ -598,7 +726,7 @@ trading-engine/
 │   │   └── main.py           # FastAPI app
 │   ├── alembic/              # Database migrations
 │   ├── rules/                # Default rule configurations
-│   ├── tests/                # pytest tests
+│   ├── tests/                # pytest tests (unit + integration)
 │   └── pyproject.toml        # Python dependencies
 ├── frontend/
 │   ├── src/
@@ -614,6 +742,10 @@ trading-engine/
 │       └── ci-cd.yml         # GitHub Actions CI/CD pipeline
 ├── openapi/
 │   └── spec.yaml             # OpenAPI specification
+├── docs/
+│   └── mcp-setup.md          # MCP integration documentation
+├── config/
+│   └── claude_desktop_config.json  # Claude Desktop MCP config template
 ├── docker-compose.yml        # Production Docker config
 ├── docker-compose.dev.yml    # Development Docker config
 ├── render.yaml               # Render.com deployment blueprint
