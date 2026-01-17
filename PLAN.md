@@ -283,17 +283,17 @@ Implement MCP servers to enable AI assistants (Claude, ChatGPT) to interact with
 - [x] `stats://daily` - Daily statistics summary
 - [x] `watchlist://current` - Current watchlist
 
-#### Phase 9.8: Alpaca MCP Integration
-- [ ] Clone and configure Alpaca MCP server
-- [ ] Test Alpaca MCP tools locally
-- [ ] Document available Alpaca tools for reference
-- [ ] Create combined configuration for both servers
+#### Phase 9.8: Alpaca MCP Integration (COMPLETED)
+- [x] Clone and configure Alpaca MCP server
+- [x] Test Alpaca MCP tools locally
+- [x] Document available Alpaca tools for reference
+- [x] Create combined configuration for both servers
 
-#### Phase 9.9: Claude Desktop Configuration
-- [ ] Create `claude_desktop_config.json` template
-- [ ] Document setup instructions for Claude Desktop
-- [ ] Document setup instructions for Claude Code CLI
-- [ ] Test both MCP servers together
+#### Phase 9.9: Claude Desktop Configuration (COMPLETED)
+- [x] Create `claude_desktop_config.json` template
+- [x] Document setup instructions for Claude Desktop
+- [x] Document setup instructions for Claude Code CLI
+- [x] Test both MCP servers together
 
 #### Phase 9.10: Testing & Documentation
 - [ ] Unit tests for MCP tools

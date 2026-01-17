@@ -160,16 +160,24 @@ A real-time trading alert system that connects to Alpaca Markets API to monitor 
 - [x] `stats://daily` - Daily statistics summary
 - [x] `watchlist://current` - Current watchlist
 
+##### Phase 9.8: Alpaca MCP Integration (Completed)
+- [x] Configure official Alpaca MCP server (`uvx alpaca-mcp-server`)
+- [x] Test Alpaca MCP tools locally
+- [x] Document available Alpaca tools (43 tools) in `docs/mcp-setup.md`
+- [x] Create combined configuration for both servers (`config/claude_desktop_config.json`)
+
+##### Phase 9.9: Claude Desktop Configuration (Completed)
+- [x] Create `claude_desktop_config.json` template
+- [x] Document setup instructions for Claude Desktop
+- [x] Document setup instructions for Claude Code CLI
+- [x] Test both MCP servers together
+
 ### Remaining Tasks
 
-##### Phase 9.8: Alpaca MCP Integration
-- [ ] Configure official Alpaca MCP server
-- [ ] Test combined setup with Claude Desktop
-
-##### Phase 9.9: Testing & Documentation
+##### Phase 9.10: Testing & Documentation
 - [ ] Unit tests for MCP tools
-- [ ] Update README with MCP setup
-- [ ] Create `docs/mcp-setup.md` guide
+- [ ] Integration tests with mock database
+- [ ] Update README with MCP setup instructions
 
 ## How to Run (Development)
 

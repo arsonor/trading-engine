@@ -1,4 +1,8 @@
 {
+  "_comment": "Copy this file to your Claude Desktop config location and replace placeholders with actual values",
+  "_windows_path": "%APPDATA%\\Claude\\claude_desktop_config.json",
+  "_macos_path": "~/Library/Application Support/Claude/claude_desktop_config.json",
+  "_linux_path": "~/.config/Claude/claude_desktop_config.json",
   "mcpServers": {
     "trading-engine": {
       "command": "uv",
@@ -10,6 +14,15 @@
       ],
       "env": {
         "DATABASE_URL": "sqlite+aiosqlite:///G:/Users/Martin/GITHUB/trading-engine/backend/trading_engine.db"
+      }
+    },
+    "alpaca": {
+      "command": "uvx",
+      "args": ["alpaca-mcp-server", "serve"],
+      "env": {
+        "ALPACA_API_KEY": "YOUR_ALPACA_API_KEY",
+        "ALPACA_SECRET_KEY": "YOUR_ALPACA_SECRET_KEY",
+        "ALPACA_PAPER_TRADE": "true"
       }
     }
   }
