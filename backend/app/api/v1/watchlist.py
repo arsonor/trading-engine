@@ -1,5 +1,6 @@
 """Watchlist API endpoints."""
 
+import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models import Watchlist as WatchlistModel
 from app.schemas import WatchlistCreate, WatchlistItem
+from app.services.stream_manager import get_stream_manager
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -60,6 +63,15 @@ async def add_to_watchlist(
     await db.commit()
     await db.refresh(item)
 
+    # Auto-subscribe to the new symbol for real-time data
+    try:
+        stream_manager = get_stream_manager()
+        if stream_manager.is_running:
+            await stream_manager.subscribe([symbol])
+            logger.info(f"Auto-subscribed to new watchlist symbol: {symbol}")
+    except Exception as e:
+        logger.warning(f"Failed to auto-subscribe to {symbol}: {e}")
+
     return WatchlistItem(
         id=item.id,
         symbol=item.symbol,
@@ -88,3 +100,12 @@ async def remove_from_watchlist(
 
     await db.delete(item)
     await db.commit()
+
+    # Auto-unsubscribe from the removed symbol
+    try:
+        stream_manager = get_stream_manager()
+        if stream_manager.is_running:
+            await stream_manager.unsubscribe([symbol])
+            logger.info(f"Auto-unsubscribed from removed watchlist symbol: {symbol}")
+    except Exception as e:
+        logger.warning(f"Failed to auto-unsubscribe from {symbol}: {e}")

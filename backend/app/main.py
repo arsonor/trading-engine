@@ -6,11 +6,13 @@ from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
 from app.api.v1.router import api_router
 from app.api.v1.websocket import get_manager
 from app.config import get_settings
-from app.core.database import close_db, init_db
+from app.core.database import async_session_maker, close_db, init_db
+from app.models import Watchlist as WatchlistModel
 from app.schemas import HealthResponse, HealthStatus
 from app.services.alert_generator import get_alert_generator
 from app.services.stream_manager import get_stream_manager
@@ -82,6 +84,23 @@ async def lifespan(app: FastAPI):
         try:
             await stream_manager.start()
             logger.info("Stream manager started")
+
+            # Auto-subscribe to all watchlist symbols
+            try:
+                async with async_session_maker() as db:
+                    query = select(WatchlistModel).where(WatchlistModel.is_active == True)
+                    result = await db.execute(query)
+                    watchlist_items = result.scalars().all()
+                    symbols = [item.symbol for item in watchlist_items]
+
+                    if symbols:
+                        await stream_manager.subscribe(symbols)
+                        logger.info(f"Auto-subscribed to {len(symbols)} watchlist symbols: {symbols}")
+                    else:
+                        logger.info("No symbols in watchlist to auto-subscribe")
+            except Exception as e:
+                logger.error(f"Failed to auto-subscribe to watchlist: {e}")
+
         except Exception as e:
             logger.error(f"Failed to start stream manager: {e}")
             logger.warning("Backend will continue without live market data streaming")
