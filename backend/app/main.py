@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
             # Auto-subscribe to all watchlist symbols
             try:
                 async with async_session_maker() as db:
-                    query = select(WatchlistModel).where(WatchlistModel.is_active == True)
+                    query = select(WatchlistModel).where(WatchlistModel.is_active.is_(True))
                     result = await db.execute(query)
                     watchlist_items = result.scalars().all()
                     symbols = [item.symbol for item in watchlist_items]
