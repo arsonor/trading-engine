@@ -145,16 +145,17 @@ class StreamManager:
 
         if self._stream is None:
             self._stream = self._create_stream()
-            self._stream.subscribe_trades(self._handle_trade, *new_symbols)
-            self._stream.subscribe_quotes(self._handle_quote, *new_symbols)
-            self._stream.subscribe_bars(self._handle_bar, *new_symbols)
-        else:
-            self._stream.subscribe_trades(self._handle_trade, *new_symbols)
-            self._stream.subscribe_quotes(self._handle_quote, *new_symbols)
-            self._stream.subscribe_bars(self._handle_bar, *new_symbols)
+
+        self._stream.subscribe_trades(self._handle_trade, *new_symbols)
+        self._stream.subscribe_quotes(self._handle_quote, *new_symbols)
+        self._stream.subscribe_bars(self._handle_bar, *new_symbols)
 
         self._subscribed_symbols.update(new_symbols)
         logger.info(f"Subscribed to symbols: {new_symbols}")
+
+        # Start the stream task if not already running (lazy start)
+        if self._running and self._stream_task is None:
+            await self._start_stream_task()
 
     async def unsubscribe(self, symbols: list[str]) -> None:
         """Unsubscribe from real-time data for symbols.
@@ -176,8 +177,33 @@ class StreamManager:
         self._subscribed_symbols -= symbols_to_remove
         logger.info(f"Unsubscribed from symbols: {symbols_to_remove}")
 
+    async def _start_stream_task(self) -> None:
+        """Start the stream run task (internal method)."""
+        if self._stream_task is not None:
+            return
+
+        if self._stream is None:
+            logger.warning("Cannot start stream task: stream not created")
+            return
+
+        async def run_stream():
+            try:
+                logger.info("Starting Alpaca WebSocket stream...")
+                await self._stream.run()
+            except Exception as e:
+                logger.error(f"Stream error: {e}")
+            finally:
+                self._running = False
+                self._stream_task = None
+
+        self._stream_task = asyncio.create_task(run_stream())
+        logger.info("Stream task started")
+
     async def start(self) -> None:
-        """Start the stream manager."""
+        """Start the stream manager.
+
+        Note: The actual WebSocket connection starts lazily when symbols are subscribed.
+        """
         if self._running:
             return
 
@@ -186,25 +212,7 @@ class StreamManager:
             return
 
         self._running = True
-
-        try:
-            if self._stream is None:
-                self._stream = self._create_stream()
-        except Exception as e:
-            logger.error(f"Failed to create stream: {e}")
-            self._running = False
-            return
-
-        async def run_stream():
-            try:
-                await self._stream.run()
-            except Exception as e:
-                logger.error(f"Stream error: {e}")
-            finally:
-                self._running = False
-
-        self._stream_task = asyncio.create_task(run_stream())
-        logger.info("Stream manager started")
+        logger.info("Stream manager ready (will connect when symbols are subscribed)")
 
     async def stop(self) -> None:
         """Stop the stream manager."""
