@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
     if settings.alpaca_api_key and settings.alpaca_secret_key:
         try:
             await stream_manager.start()
-            print(f"[STARTUP] Stream manager ready", flush=True)
+            print("[STARTUP] Stream manager ready", flush=True)
 
             # Auto-subscribe to all watchlist symbols
             try:
@@ -97,7 +97,7 @@ async def lifespan(app: FastAPI):
                     if symbols:
                         print(f"[STARTUP] Auto-subscribing to {len(symbols)} watchlist symbols: {symbols}", flush=True)
                         await stream_manager.subscribe(symbols)
-                        print(f"[STARTUP] Subscription complete", flush=True)
+                        print("[STARTUP] Subscription complete", flush=True)
                     else:
                         print("[STARTUP] No symbols in watchlist to auto-subscribe", flush=True)
             except Exception as e:

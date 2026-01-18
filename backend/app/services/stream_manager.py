@@ -155,7 +155,7 @@ class StreamManager:
             self._stream.subscribe_bars(self._handle_bar, *new_symbols)
 
             self._subscribed_symbols.update(new_symbols)
-            print(f"[STREAM] Subscribed successfully", flush=True)
+            print("[STREAM] Subscribed successfully", flush=True)
 
             # Start the stream task if not already running (lazy start)
             if self._running and self._stream_task is None:
