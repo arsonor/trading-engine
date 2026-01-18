@@ -80,10 +80,11 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to start alert generator: {e}")
 
     # Start stream manager if credentials are configured (non-fatal if it fails)
+    # Note: Live streaming is optional - app works without it via simulate endpoint
     if settings.alpaca_api_key and settings.alpaca_secret_key:
         try:
             await stream_manager.start()
-            logger.info("Stream manager started")
+            print(f"[STARTUP] Stream manager ready", flush=True)
 
             # Auto-subscribe to all watchlist symbols
             try:
@@ -94,16 +95,19 @@ async def lifespan(app: FastAPI):
                     symbols = [item.symbol for item in watchlist_items]
 
                     if symbols:
+                        print(f"[STARTUP] Auto-subscribing to {len(symbols)} watchlist symbols: {symbols}", flush=True)
                         await stream_manager.subscribe(symbols)
-                        logger.info(f"Auto-subscribed to {len(symbols)} watchlist symbols: {symbols}")
+                        print(f"[STARTUP] Subscription complete", flush=True)
                     else:
-                        logger.info("No symbols in watchlist to auto-subscribe")
+                        print("[STARTUP] No symbols in watchlist to auto-subscribe", flush=True)
             except Exception as e:
-                logger.error(f"Failed to auto-subscribe to watchlist: {e}")
+                print(f"[STARTUP] Failed to auto-subscribe to watchlist: {type(e).__name__}: {e}", flush=True)
 
         except Exception as e:
-            logger.error(f"Failed to start stream manager: {e}")
-            logger.warning("Backend will continue without live market data streaming")
+            print(f"[STARTUP] Failed to start stream manager: {type(e).__name__}: {e}", flush=True)
+            print("[STARTUP] Backend will continue without live market data streaming", flush=True)
+    else:
+        print("[STARTUP] Alpaca credentials not configured - live streaming disabled", flush=True)
 
     yield
 

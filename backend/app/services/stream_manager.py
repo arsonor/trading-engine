@@ -136,34 +136,34 @@ class StreamManager:
             symbols: List of stock symbols to subscribe to
         """
         if not self._api_key or not self._secret_key:
-            logger.warning("Alpaca credentials not configured, skipping subscription")
+            print("[STREAM] Alpaca credentials not configured, skipping subscription", flush=True)
             return
 
         new_symbols = set(s.upper() for s in symbols) - self._subscribed_symbols
         if not new_symbols:
-            logger.debug(f"All symbols already subscribed: {symbols}")
             return
 
         try:
             if self._stream is None:
-                logger.info("Creating Alpaca stream...")
+                print("[STREAM] Creating Alpaca stream...", flush=True)
                 self._stream = self._create_stream()
-                logger.info("Alpaca stream created successfully")
+                print("[STREAM] Alpaca stream created", flush=True)
 
-            logger.info(f"Subscribing to {len(new_symbols)} symbols: {new_symbols}")
+            print(f"[STREAM] Subscribing to {len(new_symbols)} symbols: {new_symbols}", flush=True)
             self._stream.subscribe_trades(self._handle_trade, *new_symbols)
             self._stream.subscribe_quotes(self._handle_quote, *new_symbols)
             self._stream.subscribe_bars(self._handle_bar, *new_symbols)
 
             self._subscribed_symbols.update(new_symbols)
-            logger.info(f"Successfully subscribed to: {new_symbols}")
+            print(f"[STREAM] Subscribed successfully", flush=True)
 
             # Start the stream task if not already running (lazy start)
             if self._running and self._stream_task is None:
+                print("[STREAM] Starting stream task...", flush=True)
                 await self._start_stream_task()
 
         except Exception as e:
-            logger.error(f"Failed to subscribe to symbols: {type(e).__name__}: {e}")
+            print(f"[STREAM] Failed to subscribe: {type(e).__name__}: {e}", flush=True)
 
     async def unsubscribe(self, symbols: list[str]) -> None:
         """Unsubscribe from real-time data for symbols.
@@ -191,27 +191,24 @@ class StreamManager:
             return
 
         if self._stream is None:
-            logger.warning("Cannot start stream task: stream not created")
+            print("[STREAM] Cannot start stream task: stream not created", flush=True)
             return
 
         async def run_stream():
             try:
-                logger.info(
-                    f"Starting Alpaca WebSocket stream "
-                    f"(subscribed to {len(self._subscribed_symbols)} symbols)..."
-                )
+                print(f"[STREAM] Connecting to Alpaca WebSocket ({len(self._subscribed_symbols)} symbols)...", flush=True)
                 await self._stream.run()
             except asyncio.CancelledError:
-                logger.info("Stream task was cancelled")
+                print("[STREAM] Stream task cancelled", flush=True)
             except Exception as e:
-                logger.error(f"Stream error: {type(e).__name__}: {e}")
+                print(f"[STREAM] Stream error: {type(e).__name__}: {e}", flush=True)
                 # Don't crash the app - stream will be unavailable but app continues
             finally:
-                logger.info("Stream task ended")
+                print("[STREAM] Stream task ended", flush=True)
                 self._stream_task = None
 
         self._stream_task = asyncio.create_task(run_stream())
-        logger.info("Stream task created")
+        print("[STREAM] Stream task created", flush=True)
 
     async def start(self) -> None:
         """Start the stream manager.
@@ -222,17 +219,15 @@ class StreamManager:
             return
 
         if not self._api_key or not self._secret_key:
-            logger.warning(
-                "Alpaca credentials not configured, stream manager not started. "
-                f"API key present: {bool(self._api_key)}, Secret key present: {bool(self._secret_key)}"
+            print(
+                f"[STREAM] Alpaca credentials not configured. "
+                f"API key present: {bool(self._api_key)}, Secret key present: {bool(self._secret_key)}",
+                flush=True
             )
             return
 
         self._running = True
-        logger.info(
-            f"Stream manager ready (feed: {self._data_feed}, "
-            f"will connect when symbols are subscribed)"
-        )
+        print(f"[STREAM] Stream manager ready (feed: {self._data_feed})", flush=True)
 
     async def stop(self) -> None:
         """Stop the stream manager."""
