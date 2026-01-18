@@ -197,7 +197,9 @@ class StreamManager:
         async def run_stream():
             try:
                 print(f"[STREAM] Connecting to Alpaca WebSocket ({len(self._subscribed_symbols)} symbols)...", flush=True)
-                await self._stream.run()
+                # Use _run_forever() directly instead of run() since we're already in an async context
+                # run() calls asyncio.run() internally which conflicts with FastAPI's event loop
+                await self._stream._run_forever()
             except asyncio.CancelledError:
                 print("[STREAM] Stream task cancelled", flush=True)
             except Exception as e:
