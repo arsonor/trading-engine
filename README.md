@@ -2,6 +2,10 @@
 
 A real-time trading alert system that monitors stocks via the Alpaca Markets API and generates actionable trading alerts based on configurable rules.
 
+![Trading Dashboard](docs/trading_dashboard.png)
+
+![Alerts Page](docs/alerts_page.png)
+
 ## Table of Contents
 
 - [Problem Statement](#problem-statement) - Why this system exists
@@ -204,6 +208,9 @@ cp .env.example .env
 
 # Edit .env with your Alpaca API credentials
 # Get your keys from: https://app.alpaca.markets/paper/dashboard/overview
+
+# IMPORTANT: Copy .env to backend/ directory (backend looks for .env in its own directory)
+cp .env backend/.env
 ```
 
 Required environment variables:
@@ -215,12 +222,15 @@ DATABASE_URL=sqlite+aiosqlite:///./trading_engine.db
 ALPACA_API_KEY=your_alpaca_api_key
 ALPACA_SECRET_KEY=your_alpaca_secret_key
 ALPACA_BASE_URL=https://paper-api.alpaca.markets
-CORS_ORIGINS=http://localhost:5173
+# CORS_ORIGINS must be in JSON array format
+CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]
 
 # Frontend
 VITE_API_URL=http://localhost:8000
 VITE_WS_URL=ws://localhost:8000
 ```
+
+> **Note:** The backend reads `.env` from the `backend/` directory. After editing the root `.env`, copy it to `backend/.env` to apply changes locally.
 
 ### 3. Start the Backend
 
