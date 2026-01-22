@@ -62,9 +62,39 @@ The Trading Engine solves these problems by providing:
 
 5. **WebSocket Updates**: Live push notifications ensure you see new alerts immediately without refreshing.
 
+6. **MCP (Model Context Protocol) Integration**: AI assistants like Claude can interact with the trading engine through natural language:
+   - Query and manage alerts using conversational prompts
+   - Create and configure trading rules from descriptions
+   - Analyze watchlist symbols and get market insights
+   - Combined with the official Alpaca MCP server for direct market data and trading capabilities
+
 ## System Architecture
 
+The system consists of a React frontend, FastAPI backend, and integrates with both the Alpaca Markets API for market data and MCP (Model Context Protocol) servers for AI assistant interaction.
+
 ```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         AI Assistant (Claude)                            │
+│                                                                          │
+│         Uses natural language to query alerts, create rules,            │
+│              analyze symbols, and execute trades                         │
+└─────────────────────────────┬───────────────────────────────────────────┘
+                              │ MCP Protocol
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────┐
+│  Trading Engine MCP     │     │   Alpaca MCP Server     │
+│  (17 tools)             │     │   (43 tools)            │
+│  - Alert management     │     │   - Market data         │
+│  - Rule configuration   │     │   - Order execution     │
+│  - Symbol analysis      │     │   - Portfolio mgmt      │
+└───────────┬─────────────┘     └───────────┬─────────────┘
+            │                               │
+            ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────┐
+│  Trading Engine DB      │     │   Alpaca Markets API    │
+└─────────────────────────┘     └─────────────────────────┘
+
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                              Frontend                                    │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
@@ -183,6 +213,8 @@ The application is deployed and running on Render.com:
 | **Health Check** | https://trading-engine-api-5iai.onrender.com/health |
 
 > **Note:** Free tier services may spin down after inactivity. The first request might take 30-60 seconds while the service wakes up.
+>
+> **Important:** To use the frontend dashboard, you must first wake up the backend API by visiting the [Backend API URL](https://trading-engine-api-5iai.onrender.com) or [Health Check](https://trading-engine-api-5iai.onrender.com/health). Wait until it responds (up to 60 seconds on free tier), then the frontend will be able to connect and display data.
 
 ## Prerequisites
 
