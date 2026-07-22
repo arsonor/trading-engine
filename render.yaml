@@ -61,7 +61,7 @@ services:
   - type: cron
     name: trading-engine-premarket-scan
     runtime: python
-    plan: free
+    plan: starter
     region: frankfurt
     schedule: "*/5 9-14 * * 1-5"
     buildCommand: |
