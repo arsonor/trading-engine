@@ -1,440 +1,290 @@
-# Trading Engine - Project Specifications
+# Trading Engine — Project Specifications
 
-## Project Overview
+> **Status: v2 rebuild in progress.**
+> The project is pivoting from a *watchlist tick-monitor* (Alpaca streaming, small
+> symbol list) to a **pre-market universe scanner** (FMP data, scheduled scans over the
+> full US equity universe). Read the "Architecture Pivot" section before making changes.
 
-A real-time trading alert system that connects to Alpaca Markets API to monitor stocks and generate trading alerts based on configurable rules.
+---
 
-## Tech Stack
+## 1. Product Definition
 
-- **Backend**: FastAPI (Python 3.10+) with uv package manager
-- **Frontend**: React 19 + Vite (JavaScript)
-- **Database**: SQLite (dev) / PostgreSQL (prod) with SQLAlchemy ORM
-- **Real-time**: WebSocket for live updates
-- **Rules Configuration**: YAML files
-- **API Contract**: Design-First OpenAPI specification
+**What it is:** An **alerts-only** pre-market stock scanner. It scans the US equity
+universe during the pre-market session and surfaces a short list of candidates where a
+~5% intraday move is *structurally plausible*, delivered to a web dashboard the end user
+opens on desktop or phone.
 
-## Current Implementation Status
+**What it is NOT:**
+- It does **not** execute trades. No broker integration, no order placement.
+- It does **not** predict or promise a 5% gain. It filters *candidates*; the "5%" is a
+  feasibility screen, not a forecast. All UI language must reflect this.
+- It is **not** financial advice. It is a decision-support tool.
 
-### Completed
+**End user:** A single non-technical trader (project owner's friend) who accesses the
+deployed dashboard by URL.
 
-#### Phase 1: Project Setup
-- [x] OpenAPI specification (`openapi/spec.yaml`) - Full API contract defined
-- [x] Backend initialized with uv (`backend/`)
-- [x] Frontend initialized with Vite + React (`frontend/`)
-- [x] Tailwind CSS configured
+---
 
-#### Phase 2: Backend Core
-- [x] `backend/app/config.py` - Pydantic settings with env vars
-- [x] `backend/app/core/database.py` - SQLAlchemy async setup
-- [x] `backend/app/models/` - Alert, Rule, Watchlist models
-- [x] `backend/app/schemas/` - Pydantic schemas for API
-- [x] `backend/app/engine/rule_engine.py` - Rule evaluation logic
-- [x] `backend/rules/default_rules.yaml` - Default trading rules
+## 2. Architecture Pivot (v1 → v2)
 
-#### Phase 3: API Layer
-- [x] `backend/app/main.py` - FastAPI entry point
-- [x] `backend/app/api/v1/alerts.py` - Alert CRUD endpoints
-- [x] `backend/app/api/v1/rules.py` - Rules CRUD endpoints
-- [x] `backend/app/api/v1/watchlist.py` - Watchlist endpoints
-- [x] `backend/app/api/v1/market_data.py` - Market data endpoints (demo)
-- [x] `backend/app/api/v1/websocket.py` - WebSocket endpoint
+| Dimension | v1 (current code) | v2 (target) |
+|---|---|---|
+| Data source | Alpaca (REST + WebSocket) | **FMP (Financial Modeling Prep)** |
+| Scope | ~10 user-picked symbols | **Full US equity universe (~6,000+)** |
+| Trigger model | Continuous tick stream | **Scheduled pre-market scans (cron)** |
+| Logic | YAML per-tick rule engine | **3-stage filtration pipeline** |
+| Fundamentals | None | **Float, 20d avg volume, SMAs, resistance** |
+| DB (local) | SQLite | **PostgreSQL** |
+| DB (prod) | Render PostgreSQL | **Supabase PostgreSQL** |
+| Frontend host | Render static site | **Vercel** |
+| Trading | Alpaca MCP (paper/live) | **Removed — alerts only** |
 
-#### Phase 4: Frontend
-- [x] `frontend/src/services/api.js` - Axios API client
-- [x] `frontend/src/hooks/useWebSocket.js` - WebSocket hook
-- [x] `frontend/src/store/index.js` - Zustand state management
-- [x] `frontend/src/components/common/Layout.jsx` - Main layout
-- [x] `frontend/src/pages/DashboardPage.jsx` - Dashboard
-- [x] `frontend/src/pages/AlertsPage.jsx` - Alerts list with filters
-- [x] `frontend/src/pages/RulesPage.jsx` - Rules management
-- [x] `frontend/src/pages/SettingsPage.jsx` - Settings & watchlist
+### Why Alpaca was dropped
+Alpaca's free plan caps the WebSocket at 30 symbols, serves REST market data with a
+15-minute delay, and its real-time feed is IEX-only (~2–3% of consolidated volume).
+Critically, **Alpaca provides no float or short-interest data on any plan**, and
+`Static_Float` is the very first filter in the pipeline. Since the user does not trade,
+the broker relationship has no remaining value. FMP supplies price + volume + float +
+screener + news in one provider.
 
-#### Phase 5: Infrastructure (Completed)
-- [x] `.env.example` - Environment configuration template
-- [x] `frontend/src/types/api.d.ts` - Generated TypeScript types
-- [x] Alembic migrations configured (`backend/alembic/`)
-- [x] Docker configuration (Dockerfiles + docker-compose.yml)
-- [x] `backend/app/services/alpaca_client.py` - Alpaca API client wrapper
-- [x] `backend/app/services/stream_manager.py` - Real-time data streaming
+### What survives from v1 (~30–40%)
+Keep and reuse: the React/Vite/Zustand frontend shell, the client-facing WebSocket
+broadcast channel, the FastAPI app skeleton, the alert persistence + broadcast pattern,
+Alembic setup, the test harness, and CI/CD.
 
-#### Phase 6: Testing (Completed)
-- [x] Backend unit tests (pytest) - 155 tests
-  - `backend/tests/unit/test_rule_engine.py` - Rule engine unit tests
-  - `backend/tests/unit/test_api_alerts.py` - Alerts API tests
-  - `backend/tests/unit/test_api_rules.py` - Rules API tests
-  - `backend/tests/unit/test_api_watchlist.py` - Watchlist API tests
-  - `backend/tests/unit/test_alert_generator.py` - Alert generator unit tests
-- [x] Backend integration tests - 48 tests
-  - `backend/tests/integration/test_websocket.py` - WebSocket integration tests
-  - `backend/tests/integration/test_workflows.py` - Cross-component workflow tests
-    - Alert lifecycle workflows (create, read, update, filter, stats)
-    - Rule management with cascade deletes
-    - Rule engine evaluation integration
-    - Watchlist management workflows
-    - Cross-component workflows (complete trading alert flow)
-  - `backend/tests/integration/test_alert_generator_integration.py` - Alert generator integration tests
-    - Market data → alert creation flow
-    - Multiple rules triggering
-    - WebSocket broadcast verification
-    - Rule toggle affects alert generation
-- [x] Frontend component tests (vitest) - 60 tests
-  - `frontend/src/test/components/Layout.test.jsx` - Layout component tests (7 tests)
-  - `frontend/src/test/hooks/useWebSocket.test.js` - WebSocket hook tests (12 tests)
-  - `frontend/src/test/services/api.test.js` - API service tests (18 tests)
-  - `frontend/src/test/store/index.test.js` - Zustand store tests (23 tests)
-- [x] Total: 263 tests (203 backend + 60 frontend)
+### What is replaced (~60–70%)
+Retire: `alpaca_client.py`, `stream_manager.py`, the watchlist-streaming model, and the
+per-tick YAML `rule_engine` as the primary trigger path. The 3-stage scanner replaces it.
+Thresholds remain **externally configurable** (YAML/env) so they can be tuned without a
+redeploy.
 
-#### Phase 7: Alert Generation Service (Completed)
-- [x] `backend/app/services/alert_generator.py` - Background service that:
-  - Listens to market data callbacks from StreamManager
-  - Loads active rules from database with TTL-based caching (60s)
-  - Evaluates rules using RuleEngine
-  - Creates Alert records when rules trigger
-  - Broadcasts new alerts via WebSocket to "alerts" channel
-- [x] Wired up in `main.py` lifespan with combined callbacks
-- [x] Unit tests (33 tests) and integration tests (10 tests)
+---
 
-#### Phase 8: CI/CD & Deployment (Completed)
-- [x] Complete README.md with setup instructions
-- [x] GitHub Actions CI/CD pipeline (`.github/workflows/ci-cd.yml`)
-  - Backend tests with pytest and ruff linter
-  - Frontend tests with vitest and build verification
-  - Automatic deployment to Render on main branch push
-- [x] Render.com production deployment (`render.yaml`)
-  - PostgreSQL database (free tier)
-  - Backend API service with automatic migrations
-  - Frontend static site with SPA routing
-- [x] Live URLs:
-  - Frontend: https://trading-engine-ui.onrender.com
-  - Backend API: https://trading-engine-api-5iai.onrender.com
+## 3. Tech Stack (v2)
 
-#### Phase 9: MCP (Model Context Protocol) Integration (In Progress)
+- **Backend**: FastAPI (Python 3.10+), `uv`, async SQLAlchemy, Alembic
+- **Frontend**: React 19 + Vite + Zustand + Tailwind
+- **Database**: PostgreSQL everywhere (local Docker → Supabase in prod)
+- **Market data**: FMP (REST + WebSocket + screener + float + news)
+- **Scheduling**: Render Cron Job (UTC — DST handled explicitly in code)
+- **Real-time to browser**: WebSocket
+- **API contract**: Design-first OpenAPI (`openapi/spec.yaml`)
 
-**Goal:** Enable AI assistants (Claude, ChatGPT) to interact with the trading engine via natural language using a hybrid MCP architecture.
+### Deployment topology
+```
+Vercel (frontend, static)
+   │  HTTPS + WSS
+   ▼
+Render Web Service (always-on: REST API + client WebSocket)
+   │
+   ├── Render Cron Job (pre-market scanner, 4:00–9:25 AM ET)
+   │        │
+   │        └──> FMP API
+   ▼
+Supabase PostgreSQL
+```
 
-**Architecture:**
-- **Alpaca MCP Server** (Official) - Market data, trading, portfolio (43 endpoints)
-- **Trading Engine MCP Server** (Custom) - Alerts, rules, analysis, historical data
+---
 
-**Sub-phases:**
+## 4. The Scanner Specification
 
-##### Phase 9.1: Project Setup (Completed)
-- [x] Add MCP SDK dependency (`mcp[cli]>=1.2.0`)
-- [x] Create MCP module structure (`backend/app/mcp/`)
-- [x] Set up MCP server configuration
+### 4.1 Data dictionary
 
-##### Phase 9.2: Core MCP Server (Completed)
-- [x] Create FastMCP server instance (`server.py`)
-- [x] Implement database session management
-- [x] Set up logging (avoid stdout for STDIO transport)
+| Field | Meaning | Source | Refresh |
+|---|---|---|---|
+| `static_float` | Shares available to trade | FMP All Shares Float | Nightly |
+| `volume_avg_20d` | 20-day SMA of daily volume | FMP historical daily | Nightly |
+| `price_close_yesterday` | Prior regular-session close | FMP daily quote | Nightly |
+| `high_yesterday` | Prior session high | FMP historical daily | Nightly |
+| `high_20d` | 20-day high | FMP historical daily | Nightly |
+| `sma_50`, `sma_200` | 50/200-day SMAs | FMP historical daily | Nightly |
+| `premarket_volume_profile` | Cumulative premarket volume by 5-min bucket from 04:00 ET, averaged over 20 sessions | FMP intraday (extended hours) | Nightly |
+| `price_premarket_current` | Live premarket price | FMP real-time quote | Live |
+| `volume_premarket_accumulated` | Volume traded since 04:00 ET today | FMP intraday bars | Live |
+| `catalyst` | News / earnings tag | FMP news + earnings calendar | Live (Phase 4) |
 
-##### Phase 9.3: Alert Tools (Completed)
-- [x] `explain_alert(alert_id)` - Why alert triggered
-- [x] `list_alerts(symbol?, limit?, setup_type?)` - Recent alerts with filters
-- [x] `get_alert_by_id(alert_id)` - Get specific alert details
-- [x] `mark_alert_read(alert_id)` - Mark alert as read
-- [x] `get_alert_statistics(days?)` - Performance stats
+### 4.2 Derived metrics
 
-##### Phase 9.4: Rule Management Tools (Completed)
-- [x] `list_rules(active_only?)` - All trading rules
-- [x] `get_rule(rule_id)` - Get rule details with config
-- [x] `create_rule_from_description(name, description, conditions)` - NL rule creation
-- [x] `toggle_rule(rule_id)` - Enable/disable
-- [x] `delete_rule(rule_id)` - Remove rule
+```
+gap_pct            = (price_premarket_current - price_close_yesterday) / price_close_yesterday * 100
+rvol_pct           = volume_premarket_accumulated / expected_volume_at_this_time_of_day * 100
+nearest_resistance = min( high_yesterday, high_20d, sma_50, sma_200 )  # of those ABOVE current price
+upside_pct         = (nearest_resistance - price_premarket_current) / price_premarket_current * 100
+```
 
-##### Phase 9.5: Analysis Tools (Completed)
-- [x] `analyze_watchlist()` - Bullish/bearish signals
-- [x] `get_symbol_analysis(symbol)` - Deep analysis
-- [x] `compare_symbols(symbols[])` - Compare multiple symbols
-- [x] `get_top_performers(days?, limit?)` - Best alerts
+> **RVOL is time-of-day normalized.** `expected_volume_at_this_time_of_day` comes from
+> `premarket_volume_profile` — the average cumulative premarket volume this ticker had
+> reached by this same clock time over the last 20 sessions. This is deliberately more
+> accurate (and more expensive) than dividing by the full-day 20d average.
 
-##### Phase 9.6: Watchlist Tools (Completed)
-- [x] `get_watchlist()` - Get current watchlist
-- [x] `add_to_watchlist(symbol, notes?)` - Add symbol
-- [x] `remove_from_watchlist(symbol)` - Remove symbol
+### 4.3 The three stages
 
-##### Phase 9.7: MCP Resources (Completed)
-- [x] `alerts://recent` - Recent alerts as resource
-- [x] `alerts://unread` - Unread alerts
-- [x] `rules://active` - Active rules configuration
-- [x] `stats://daily` - Daily statistics summary
-- [x] `watchlist://current` - Current watchlist
+**Stage 1 — Structural liquidity (nightly + at scan start)**
+- `static_float < 75,000,000`
+- `volume_avg_20d > 500,000`
+- Executed as a SQL query against the pre-computed reference table.
 
-##### Phase 9.8: Alpaca MCP Integration (Completed)
-- [x] Configure official Alpaca MCP server (`uvx alpaca-mcp-server`)
-- [x] Test Alpaca MCP tools locally
-- [x] Document available Alpaca tools (43 tools) in `docs/mcp-setup.md`
-- [x] Create combined configuration for both servers (`config/claude_desktop_config.json`)
+**Stage 2 — Momentum engine (every 5 min, 04:00 → 09:25 ET)**
+- `3.0 <= gap_pct <= 15.0`
+- `rvol_pct > 10.0`
 
-##### Phase 9.9: Claude Desktop Configuration (Completed)
-- [x] Create `claude_desktop_config.json` template
-- [x] Document setup instructions for Claude Desktop
-- [x] Document setup instructions for Claude Code CLI
-- [x] Test both MCP servers together
+**Stage 3 — Room-to-run (final confirmation, 09:25 ET)**
+- `upside_pct >= 5.5` (5% target + 0.5% slippage/fee buffer)
 
-##### Phase 9.10: Testing & Documentation (Completed)
-- [x] Unit tests for MCP tools (110 tests in `tests/unit/mcp/`)
-- [x] Integration tests with mock database (42 tests in `tests/integration/mcp/`)
-- [x] MCP documentation complete in `docs/mcp-setup.md`
+**Risk filters (block the alert regardless of the above)**
+- Minimum price floor (configurable; default $2 — sub-$2 names hit 5% on noise)
+- Minimum dollar volume (configurable — avoids untradeable thinness)
+- Market-wide condition check (index tape context; a red tape lowers confidence)
+- Halt risk flag (best-effort, Phase 4)
 
-### Phase 9 Complete
+### 4.4 Alert output contract
 
-All MCP implementation phases (9.1-9.10) are now complete:
-- **17 MCP tools** for alerts, rules, analysis, and watchlist management
-- **5 MCP resources** for quick data access
-- **43 Alpaca MCP tools** via official integration
-- **152 tests** (110 unit + 42 integration)
+Every alert carries: `ticker`, `gap_pct`, `rvol_pct`, `catalyst` (nullable),
+`confidence_score`, `suggested_entry_window`, `entry_reference_price`,
+`nearest_resistance`, `upside_pct`, `scan_timestamp`.
 
-## How to Run (Development)
+> **Confidence score:** starts as a transparent, documented weighted formula with
+> constants in config. The weights are **provisional assumptions until backtested**
+> (Phase 5). The UI must never present the score as validated.
 
-### Backend
+### 4.5 Timing model
+
+Scans run **every 5 minutes from 04:00 to 09:25 ET**. Each run is **stateless**: it
+recomputes accumulated premarket volume by summing intraday bars from 04:00 ET to now,
+rather than carrying state between runs. The 09:25 run is the final confirmation pass and
+is the one that applies Stage 3 and pushes the definitive alert set.
+
+> **Render cron is UTC.** ET/DST conversion must be explicit in code. A UTC-pinned
+> schedule silently drifts by one hour twice a year — for a market-timed scanner this is
+> a correctness bug, not a cosmetic one. Schedule generously in UTC and gate the actual
+> work on a computed ET timestamp.
+
+---
+
+## 5. Database Schema (v2)
+
+**New tables**
+1. `universe` — ticker, name, exchange, is_active, last_refreshed
+2. `reference_data` — ticker (FK), static_float, volume_avg_20d, price_close_yesterday,
+   high_yesterday, high_20d, sma_50, sma_200, computed_at
+3. `premarket_volume_profile` — ticker (FK), bucket_minute (minutes from 04:00),
+   avg_cumulative_volume, sessions_sampled, computed_at
+4. `scan_runs` — id, started_at, finished_at, stage_counts_json, status, error
+5. `alerts` — **extended**: ticker, gap_pct, rvol_pct, catalyst, confidence_score,
+   entry_reference_price, nearest_resistance, upside_pct, suggested_entry_window,
+   scan_run_id (FK), is_read, created_at
+
+**Retained**: `rules` (now holds tunable scanner thresholds rather than per-tick
+conditions), `watchlist` (demoted to an optional user favourites list).
+
+---
+
+## 6. Environment Variables
+
 ```bash
-cd backend
-uv sync
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### Frontend
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-## File Structure
-
-```
-trading-engine/
-├── backend/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py              # FastAPI entry
-│   │   ├── config.py            # Settings
-│   │   ├── api/
-│   │   │   └── v1/
-│   │   │       ├── router.py
-│   │   │       ├── alerts.py
-│   │   │       ├── rules.py
-│   │   │       ├── watchlist.py
-│   │   │       ├── market_data.py
-│   │   │       └── websocket.py
-│   │   ├── core/
-│   │   │   └── database.py
-│   │   ├── models/
-│   │   │   ├── alert.py
-│   │   │   ├── rule.py
-│   │   │   └── watchlist.py
-│   │   ├── schemas/
-│   │   │   ├── alert.py
-│   │   │   ├── rule.py
-│   │   │   ├── watchlist.py
-│   │   │   ├── market_data.py
-│   │   │   └── common.py
-│   │   ├── services/
-│   │   │   ├── alpaca_client.py   # Alpaca API wrapper
-│   │   │   ├── stream_manager.py  # Real-time streaming
-│   │   │   └── alert_generator.py # Alert generation from market data
-│   │   ├── engine/
-│   │   │   └── rule_engine.py
-│   │   └── mcp/                   # MCP server (Phase 9)
-│   │       ├── __init__.py
-│   │       ├── server.py          # FastMCP server
-│   │       ├── tools/             # MCP tools
-│   │       │   ├── alerts.py
-│   │       │   ├── rules.py
-│   │       │   ├── analysis.py
-│   │       │   └── watchlist.py
-│   │       └── resources/         # MCP resources
-│   │           └── data.py
-│   ├── alembic/                  # Database migrations
-│   │   ├── env.py
-│   │   └── versions/
-│   ├── rules/
-│   │   └── default_rules.yaml
-│   ├── scripts/
-│   │   └── seed_test_alerts.py   # Seed test data for UI testing
-│   ├── tests/
-│   │   ├── conftest.py           # Test fixtures
-│   │   ├── unit/
-│   │   │   ├── test_rule_engine.py
-│   │   │   ├── test_api_alerts.py
-│   │   │   ├── test_api_rules.py
-│   │   │   ├── test_api_watchlist.py
-│   │   │   └── test_alert_generator.py
-│   │   └── integration/
-│   │       ├── test_websocket.py
-│   │       ├── test_workflows.py # Cross-component workflow tests
-│   │       └── test_alert_generator_integration.py
-│   ├── Dockerfile
-│   ├── alembic.ini
-│   └── pyproject.toml
-├── frontend/
-│   ├── src/
-│   │   ├── main.jsx
-│   │   ├── App.jsx
-│   │   ├── components/
-│   │   │   └── common/
-│   │   │       └── Layout.jsx
-│   │   ├── hooks/
-│   │   │   └── useWebSocket.js
-│   │   ├── services/
-│   │   │   └── api.js
-│   │   ├── store/
-│   │   │   └── index.js
-│   │   ├── test/                  # Test files
-│   │   │   ├── setup.js
-│   │   │   ├── components/
-│   │   │   │   └── Layout.test.jsx
-│   │   │   ├── hooks/
-│   │   │   │   └── useWebSocket.test.js
-│   │   │   ├── services/
-│   │   │   │   └── api.test.js
-│   │   │   └── store/
-│   │   │       └── index.test.js
-│   │   ├── types/
-│   │   │   └── api.d.ts          # Generated from OpenAPI
-│   │   └── pages/
-│   │       ├── DashboardPage.jsx
-│   │       ├── AlertsPage.jsx
-│   │       ├── RulesPage.jsx
-│   │       └── SettingsPage.jsx
-│   ├── Dockerfile
-│   ├── nginx.conf
-│   ├── package.json
-│   ├── vite.config.js
-│   └── tailwind.config.js
-├── .github/
-│   └── workflows/
-│       └── ci-cd.yml             # GitHub Actions CI/CD pipeline
-├── openapi/
-│   └── spec.yaml                 # Master API contract
-├── docs/                         # Documentation (Phase 9)
-│   ├── mcp-setup.md              # MCP installation guide
-│   └── mcp-examples.md           # Example prompts
-├── config/                       # Configuration templates
-│   └── claude_desktop_config.json # Claude Desktop MCP config
-├── docker-compose.yml            # Production setup (Docker)
-├── docker-compose.dev.yml        # Development (DB only)
-├── render.yaml                   # Render.com deployment blueprint
-├── .env.example
-├── PLAN.md
-├── CLAUDE.md
-└── README.md
-```
-
-## API Endpoints Summary
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/api/v1/alerts` | List alerts |
-| GET | `/api/v1/alerts/{id}` | Get alert |
-| PATCH | `/api/v1/alerts/{id}` | Update alert |
-| GET | `/api/v1/alerts/stats` | Alert statistics |
-| GET | `/api/v1/rules` | List rules |
-| POST | `/api/v1/rules` | Create rule |
-| PUT | `/api/v1/rules/{id}` | Update rule |
-| DELETE | `/api/v1/rules/{id}` | Delete rule |
-| POST | `/api/v1/rules/{id}/toggle` | Toggle rule |
-| GET | `/api/v1/watchlist` | Get watchlist |
-| POST | `/api/v1/watchlist` | Add to watchlist |
-| DELETE | `/api/v1/watchlist/{symbol}` | Remove from watchlist |
-| GET | `/api/v1/market-data/{symbol}` | Get market data |
-| WS | `/api/v1/ws` | WebSocket endpoint |
-
-## Environment Variables
-
-```
-# Backend (.env)
+# Backend (backend/.env)
 APP_ENV=development
 DEBUG=true
-DATABASE_URL=sqlite+aiosqlite:///./trading_engine.db
-ALPACA_API_KEY=your_api_key
-ALPACA_SECRET_KEY=your_secret_key
-ALPACA_BASE_URL=https://paper-api.alpaca.markets
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/trading_engine
+FMP_API_KEY=your_fmp_key
+FMP_BASE_URL=https://financialmodelingprep.com
 CORS_ORIGINS=http://localhost:5173
+SCANNER_TIMEZONE=America/New_York
+SCANNER_ENABLED=true
 
-# Frontend (.env)
+# Scanner thresholds (tunable without redeploy)
+SCAN_FLOAT_MAX=75000000
+SCAN_AVG_VOLUME_MIN=500000
+SCAN_GAP_MIN=3.0
+SCAN_GAP_MAX=15.0
+SCAN_RVOL_MIN=10.0
+SCAN_UPSIDE_MIN=5.5
+SCAN_PRICE_FLOOR=2.0
+
+# Frontend (Vercel env)
 VITE_API_URL=http://localhost:8000
 VITE_WS_URL=ws://localhost:8000
 ```
 
-## Running Tests
+> No hardcoded `onrender.com` URLs anywhere in frontend source. No secrets in
+> `render.yaml` or committed files.
 
-### Backend Tests
+---
+
+## 7. How to Run (Development)
+
+```bash
+# 1. Database
+docker compose -f docker-compose.dev.yml up -d
+
+# 2. Backend
+cd backend
+uv sync
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload --port 8000     # http://localhost:8000/docs
+
+# 3. Frontend
+cd frontend
+npm install
+npm run dev                                          # http://localhost:5173
+```
+
+### Smoke tests (no live market data required)
 ```bash
 cd backend
-
-# Run all tests
-uv run pytest -v
-
-# Run unit tests only
-uv run pytest tests/unit -v
-
-# Run integration tests only
-uv run pytest tests/integration -v
-
-# Run with coverage
-uv run pytest --cov=app --cov-report=term-missing
+uv run python scripts/seed_test_alerts.py            # sample alerts into the dashboard
+uv run python scripts/run_scan.py --dry-run --fixture # scanner against recorded fixtures
 ```
 
-### Frontend Tests
+### Tests
 ```bash
-cd frontend
-
-# Run all tests
-npm test
-
-# Run tests in watch mode
-npm test -- --watch
-
-# Run with coverage
-npm run test:coverage
+cd backend  && uv run pytest -v
+cd frontend && npm test
 ```
 
-### Development Utilities
+---
 
-- **Seed test alerts**: `cd backend && uv run python scripts/seed_test_alerts.py` - Creates 20 sample alerts for UI testing
+## 8. Testing Strategy for the Scanner
 
-## Docker Usage
+Market-hours dependency makes naive testing impossible. Rules:
+- **Record fixtures**: capture real FMP responses once, replay them in tests. Never hit
+  the live API in CI.
+- **Golden-case tests**: hand-built tickers that must pass/fail each stage boundary
+  (gap exactly 3.0 / 15.0, rvol 10.0, upside 5.5) to pin inclusive-vs-exclusive edges.
+- **Time injection**: the scanner takes an injectable "now" so any point in the
+  04:00–09:25 window can be simulated. Never call `datetime.now()` directly in logic.
+- **DST tests**: assert correct ET resolution on both sides of both DST transitions.
 
-### Development (database only)
-```bash
-docker-compose -f docker-compose.dev.yml up -d
-```
+---
 
-### Production (full stack)
-```bash
-# Copy .env.example to .env and fill in Alpaca API keys
-cp .env.example .env
-# Edit .env to add your ALPACA_API_KEY and ALPACA_SECRET_KEY
+## 9. Design Decisions
 
-# Build and start all containers
-docker-compose up -d --build
+- **Alerts-only**: no trade execution, ever. Keeps scope, cost, and liability contained.
+- **Scheduled scans over streaming**: universe-wide scanning cannot be expressed as a
+  symbol subscription; cron is both correct and cheaper.
+- **Pre-computed reference data**: the nightly job is what makes a 6,000-ticker morning
+  scan fit inside rate limits and a 25-minute window.
+- **Stateless scan runs**: each run recomputes from bars. Simpler, crash-tolerant, and
+  cron-friendly (no shared state between invocations).
+- **Thresholds in config, not code**: the end user's strategy will evolve; tuning must
+  not require a deploy.
+- **Postgres everywhere**: removes the class of bugs where SQLite dev diverges from
+  Postgres prod.
+- **Honest UI**: candidates, not predictions. Confidence scores labelled provisional
+  until backtested.
 
-# Note: Migrations run automatically on backend startup
-# No need to run them manually
-```
+---
 
-### Troubleshooting Docker
+## 10. Open Items to Validate
 
-If the backend container keeps restarting:
-```bash
-# Check logs for errors
-docker logs trading-engine-backend
-
-# Force rebuild
-docker-compose down -v
-docker-compose up -d --build
-```
-
-**Important**: The `.env` file's `DATABASE_URL` is only used for local development.
-Docker containers use the DATABASE_URL defined in `docker-compose.yml` which points to the `db` service (not `localhost`).
-
-## Design Decisions
-
-- **Design-First API**: OpenAPI spec is written first, then implemented
-- **WebSocket for real-time**: Alerts broadcast via WebSocket to all connected clients
-- **YAML for rules**: Human-readable rule configuration
-- **Zustand for state**: Lightweight state management in React
-- **SQLAlchemy async**: Async database operations for better performance
+1. **Which FMP tier** bundles screener + all-shares-float + intraday extended-hours
+   history + news. Confirm before committing to a plan.
+2. **Premarket volume coverage**: does FMP's intraday data cover from 04:00 ET, or only
+   from 08:00? This determines whether the full-early-session requirement is achievable
+   as specified.
+3. **Historical intraday depth**: needed both for the 20-session volume profile and for
+   Phase 5 backtesting. Likely the biggest hidden cost in the project.
+4. **Rate limits** on the chosen tier vs. worst-case Stage-2 candidate count.
+5. **Short interest** availability and lag (FINRA reports ~2×/month — slow filter only).
+6. **Auth**: dashboard is currently unauthenticated. Deferred by decision, but revisit
+   before wider sharing.

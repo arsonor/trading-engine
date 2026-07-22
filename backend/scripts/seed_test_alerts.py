@@ -67,7 +67,7 @@ async def seed_alerts():
         db.add_all(alerts)
         await db.commit()
 
-        print(f"✓ Created {len(alerts)} test alerts")
+        print(f"[OK] Created {len(alerts)} test alerts")
         print(f"  Rule ID: {rule_id or 'None (no rules exist)'}")
         print(f"  Symbols: {', '.join(set(a.symbol for a in alerts))}")
 

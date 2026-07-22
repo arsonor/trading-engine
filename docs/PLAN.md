@@ -1,396 +1,193 @@
-# Trading Engine Implementation Plan
+# Trading Engine — Implementation Plan (v2)
 
-## Overview
-
-Build a real-time trading alert system with:
-- **Backend**: FastAPI (Python 3.10+) with uv package manager
-- **Frontend**: React + Vite (JavaScript)
-- **Data Source**: Alpaca Markets API (paper account)
-- **Real-time**: WebSocket for live updates
-- **Database**: SQLite (dev) / PostgreSQL (prod)
-- **Rules**: YAML configuration files
-- **Containerization**: Docker + docker-compose
-- **API Contract**: Design-First OpenAPI specification
+> Companion documents: `docs/CLAUDE.md` (specification) and `docs/PROMPT.md`
+> (ready-to-use Claude Code prompts, one per phase).
 
 ---
 
-## API Contract Management (Design-First)
+## Objective
 
-### Strategy
-The OpenAPI specification is the **single source of truth** for the API contract between frontend and backend.
-
-### Workflow
-1. **Write OpenAPI spec first** (`openapi/spec.yaml`) before implementing endpoints
-2. **Generate TypeScript types** for frontend from the spec
-3. **Validate FastAPI implementation** matches the spec in CI
-
-### Tools
-- **openapi-typescript**: Generate TypeScript types from OpenAPI spec
-- **openapi-spec-validator**: Validate the OpenAPI spec is valid
+Rebuild the trading engine as an **alerts-only pre-market universe scanner** on FMP data,
+deployed as Render (backend + cron) + Vercel (frontend) + Supabase (PostgreSQL), reachable
+by URL on desktop and mobile.
 
 ---
 
-## Project Structure
+## v1 Status (what already exists)
 
-```
-trading-engine/
-├── backend/
-│   ├── app/
-│   │   ├── main.py                    # FastAPI entry point
-│   │   ├── config.py                  # Settings (Pydantic)
-│   │   ├── api/v1/
-│   │   │   ├── router.py              # API router
-│   │   │   ├── alerts.py              # Alert endpoints
-│   │   │   ├── rules.py               # Rules CRUD
-│   │   │   ├── watchlist.py           # Watchlist endpoints
-│   │   │   └── websocket.py           # WebSocket endpoint
-│   │   ├── models/                    # SQLAlchemy models
-│   │   ├── schemas/                   # Pydantic schemas
-│   │   ├── engine/
-│   │   │   └── rule_engine.py         # Rule evaluation
-│   │   └── utils/
-│   ├── rules/                         # YAML rule configs
-│   ├── tests/
-│   ├── pyproject.toml
-│   └── Dockerfile
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── hooks/
-│   │   ├── services/
-│   │   ├── store/
-│   │   └── pages/
-│   ├── package.json
-│   └── Dockerfile
-├── openapi/
-│   └── spec.yaml                      # Master OpenAPI specification
-├── docker/
-├── .env.example
-├── README.md
-├── CLAUDE.md
-└── PLAN.md
-```
+Completed and reusable:
+- FastAPI + async SQLAlchemy backend, Alembic migrations, `uv` tooling
+- React 19 / Vite / Zustand / Tailwind frontend with pages: Dashboard, Alerts, Rules, Settings
+- Client WebSocket channel with live alert broadcast
+- OpenAPI design-first contract (`openapi/spec.yaml`) + generated TS types
+- Test suite (~263 tests) and GitHub Actions CI/CD
+- Deployed on Render (free tier)
+- MCP server with 17 custom tools + 5 resources
+
+Completed but **being retired** in v2:
+- Alpaca client + stream manager (`alpaca_client.py`, `stream_manager.py`)
+- Watchlist-driven streaming model
+- Per-tick YAML rule engine as the primary trigger
+- Alpaca MCP integration (43 trading tools) — no trading in v2
 
 ---
 
-## Database Schema
+## Migration Decisions (locked)
 
-### Tables
-
-1. **alerts** - id, rule_id (FK), symbol, timestamp, setup_type, entry_price, stop_loss, target_price, confidence_score, market_data_json, is_read, created_at
-
-2. **rules** - id, name, description, rule_type, config_yaml, is_active, priority, created_at, updated_at
-
-3. **watchlist** - id, symbol, added_at, is_active, notes
-
----
-
-## API Endpoints
-
-### REST API (`/api/v1`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/alerts` | List alerts (paginated, filterable) |
-| GET | `/alerts/{id}` | Get alert by ID |
-| PATCH | `/alerts/{id}` | Update alert (mark read) |
-| GET | `/alerts/stats` | Alert statistics |
-| GET | `/rules` | List all rules |
-| POST | `/rules` | Create rule |
-| PUT | `/rules/{id}` | Update rule |
-| DELETE | `/rules/{id}` | Delete rule |
-| POST | `/rules/{id}/toggle` | Toggle rule active |
-| GET | `/watchlist` | Get watchlist |
-| POST | `/watchlist` | Add symbol |
-| DELETE | `/watchlist/{symbol}` | Remove symbol |
-| GET | `/market-data/{symbol}` | Current market data |
-| GET | `/market-data/{symbol}/history` | Historical bars |
-
-### WebSocket (`/api/v1/ws`)
-
-```json
-{"action": "subscribe", "channel": "alerts"}
-{"action": "subscribe", "channel": "market_data", "symbols": ["AAPL"]}
-```
+| Decision | Choice | Rationale |
+|---|---|---|
+| Data provider | **FMP** | Only affordable provider bundling price + volume + **float** + screener + news |
+| Trading | **None** | User trades elsewhere; drops broker dependency entirely |
+| Local DB | **PostgreSQL** | Parity with production; removes SQLite-only bugs |
+| Prod DB | **Supabase** | Free tier persists (does not delete after 30 days like Render free PG) |
+| Backend host | **Render** (web + cron) | Already configured; cron only bills for run time |
+| Frontend host | **Vercel** | Free, always-on, mirrors owner's other project stack |
+| Scan window | **04:00 → 09:25 ET**, every 5 min | Captures full early session, not just 09:00–09:25 |
+| RVOL | **Time-of-day normalized** | More accurate; requires a premarket volume profile |
+| Scheduler | **Render Cron Job** | Cheaper than always-on compute for scheduled work |
 
 ---
 
-## Implementation Phases
+## Phase Roadmap
 
-### Phase 1: API Contract & Project Setup (COMPLETED)
-- [x] Write OpenAPI specification (`openapi/spec.yaml`)
-- [x] Initialize backend with uv
-- [x] Initialize frontend with Vite
-- [x] Generate TypeScript types from OpenAPI spec
-- [x] Set up Docker configuration
-- [x] Configure database (Alembic migrations)
-- [x] Create `.env.example` with all config options
+### Phase 0 — Infrastructure Migration
+**Goal:** Postgres everywhere; Render/Vercel/Supabase topology wired; cron placeholder.
+**Depends on:** nothing. Provider-independent — safe to start immediately.
 
-### Phase 2: Core Backend (COMPLETED)
-- [x] Implement config.py with Pydantic settings
-- [x] Create SQLAlchemy models (Alert, Rule, Watchlist)
-- [x] Implement API endpoints
-- [x] Implement rule engine
-- [x] Create default rules YAML
+- [ ] Postgres for local dev via `docker-compose.dev.yml`; remove SQLite support
+- [ ] Audit + fix SQLite-specific assumptions (types, defaults, batch migrations)
+- [ ] Verify all Alembic migrations run clean against empty Postgres
+- [ ] Consolidate settings in `config.py`; add `FMP_API_KEY` placeholder
+- [ ] Supabase pooled-connection compatibility (pgBouncer / prepared statements)
+- [ ] Rewrite `render.yaml`: always-on web service + **cron job stub**; remove Render PG
+- [ ] Vercel config; API/WS URLs via env only (no hardcoded hosts)
+- [ ] `/health` reports DB connectivity
+- [ ] README "Getting started" rewritten and verified
 
-### Phase 3: Rule Engine & Alerts (COMPLETED)
-- [x] Build rule evaluation engine
-- [x] Create Alpaca client wrapper
-- [x] Create stream manager for Alpaca WebSocket
-- [x] Create alert generator service (connects StreamManager → RuleEngine → Alerts → WebSocket)
-
-### Phase 4: API Layer (COMPLETED)
-- [x] Implement REST endpoints for alerts, rules, watchlist
-- [x] Add pagination and filtering
-- [x] Create WebSocket endpoint for clients
-- [x] Add health check endpoint
-
-### Phase 5: Frontend (COMPLETED)
-- [x] Set up React Router and Zustand store
-- [x] Create WebSocket hook for real-time updates
-- [x] Build Dashboard page with stats panel
-- [x] Build Alerts page with filtering/search
-- [x] Build Rules page with enable/disable toggle
-- [x] Build Settings page
-- [x] Add responsive styling with Tailwind CSS
-
-### Phase 6: Testing (COMPLETED)
-- [x] Unit tests for rule engine
-- [x] Unit tests for alert service (alerts API)
-- [x] Integration tests for API endpoints (rules, watchlist APIs)
-- [x] Integration tests for WebSocket
-- [x] Frontend component tests (Layout, hooks, services, store)
-
-### Phase 7: Documentation & Deployment (COMPLETED)
-- [x] Complete README with setup instructions
-- [x] Update CLAUDE.md with specifications
-- [x] Configure production docker-compose
-- [x] Add nginx reverse proxy config
-
-### Phase 8: CI/CD & Cloud Deployment (COMPLETED)
-- [x] GitHub Actions CI/CD pipeline (`.github/workflows/ci-cd.yml`)
-- [x] Render.com deployment blueprint (`render.yaml`)
-- [x] PostgreSQL database on Render (free tier)
-- [x] Backend API service with automatic migrations
-- [x] Frontend static site with SPA routing
-- [x] Live deployment URLs configured
+**Done when:** clean checkout → docker up → migrate → backend + frontend run → existing
+seed/simulate smoke test still produces a visible alert.
 
 ---
 
-## Phase 9: MCP (Model Context Protocol) Integration
+### Phase 1 — FMP Client & Reference-Data Pipeline
+**Goal:** The nightly backbone. Everything downstream depends on this.
+**Depends on:** Phase 0.
 
-### Overview
+- [ ] FMP API client: auth, retries, backoff, rate-limit awareness, typed responses
+- [ ] **Fixture recorder** — capture real FMP responses to disk for offline tests
+- [ ] Universe sync: tradable US equities → `universe` table
+- [ ] Reference data job → `reference_data`: float, 20d avg volume, prior close,
+      prior high, 20d high, SMA-50, SMA-200
+- [ ] **Premarket volume profile** → `premarket_volume_profile`: cumulative volume in
+      5-min buckets from 04:00 ET, averaged over 20 sessions, per ticker
+- [ ] Alembic migrations for all new tables + indexes for the Stage-1 query
+- [ ] CLI entrypoint: `scripts/refresh_reference_data.py`
+- [ ] Idempotent + resumable (survives partial failure without corrupting the table)
 
-Implement MCP servers to enable AI assistants (Claude, ChatGPT) to interact with the trading engine using natural language. This uses a **hybrid architecture**:
-
-1. **Alpaca MCP Server** (Official) - Market data, trading, portfolio management
-2. **Trading Engine MCP Server** (Custom) - Alerts, rules, analysis, historical data
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           Claude / AI Assistant                          │
-│                                                                          │
-│  "Why did NVDA trigger?"  "Show bullish stocks"  "Place order for AAPL" │
-└──────────────────────────────┬───────────────────────────────────────────┘
-                               │
-              ┌────────────────┴────────────────┐
-              │                                 │
-              ▼                                 ▼
-┌─────────────────────────┐       ┌─────────────────────────────┐
-│   Trading Engine MCP    │       │     Alpaca MCP Server       │
-│      (Custom)           │       │     (Official)              │
-│                         │       │                             │
-│  Tools:                 │       │  Tools:                     │
-│  • explain_alert        │       │  • get_quote                │
-│  • list_alerts          │       │  • place_order              │
-│  • create_rule          │       │  • get_positions            │
-│  • analyze_watchlist    │       │  • get_portfolio_history    │
-│  • get_alert_stats      │       │  • get_news                 │
-│  • query_historical     │       │  • get_bars                 │
-│                         │       │  • (43 endpoints total)     │
-│  Resources:             │       │                             │
-│  • alerts://recent      │       │                             │
-│  • rules://active       │       │                             │
-│  • stats://daily        │       │                             │
-└───────────┬─────────────┘       └──────────────┬──────────────┘
-            │                                    │
-            ▼                                    ▼
-┌─────────────────────────┐       ┌─────────────────────────────┐
-│  Trading Engine Backend │       │      Alpaca Markets API     │
-│  (PostgreSQL + FastAPI) │       │                             │
-└─────────────────────────┘       └─────────────────────────────┘
-```
-
-### Use Cases
-
-| Use Case | Example Prompt | MCP Server | Tool(s) |
-|----------|----------------|------------|---------|
-| Alert Explanation | "Why did NVDA trigger an alert?" | Trading Engine | `explain_alert` |
-| Natural Language Rules | "Alert me when tech stocks drop 5%" | Trading Engine | `create_rule_from_description` |
-| Market Analysis | "Which watched stocks look bullish?" | Trading Engine | `analyze_watchlist` |
-| Performance Tracking | "How many alerts triggered this week?" | Trading Engine | `get_alert_statistics` |
-| Trade Execution | "Buy 10 shares of AAPL" | Alpaca | `place_order` |
-| Portfolio Check | "What's my current portfolio value?" | Alpaca | `get_account`, `get_positions` |
-| Market Data | "Show me NVDA's price history" | Alpaca | `get_bars` |
-| News Sentiment | "Any news affecting my watchlist?" | Alpaca | `get_news` |
-
-### Implementation Tasks
-
-#### Phase 9.1: Project Setup & Dependencies (COMPLETED)
-- [x] Add MCP SDK to backend dependencies (`mcp[cli]>=1.2.0`)
-- [x] Create MCP module structure (`backend/app/mcp/`)
-- [x] Set up MCP server configuration
-- [x] Create development scripts for testing MCP locally
-
-#### Phase 9.2: Core MCP Server Implementation (COMPLETED)
-- [x] Create FastMCP server instance (`backend/app/mcp/server.py`)
-- [x] Implement database session management for MCP
-- [x] Set up logging (avoid stdout for STDIO transport)
-- [x] Create base tool decorators and error handling
-
-#### Phase 9.3: Alert Tools (COMPLETED)
-- [x] `explain_alert(alert_id)` - Detailed explanation of why alert triggered
-- [x] `list_alerts(symbol?, limit?, setup_type?)` - List recent alerts with filters
-- [x] `get_alert_by_id(alert_id)` - Get specific alert details
-- [x] `mark_alert_read(alert_id)` - Mark alert as read
-- [x] `get_alert_statistics(days?)` - Alert stats for performance tracking
-
-#### Phase 9.4: Rule Management Tools (COMPLETED)
-- [x] `list_rules(active_only?)` - List all trading rules
-- [x] `get_rule(rule_id)` - Get rule details with config
-- [x] `create_rule_from_description(name, description, conditions)` - NL rule creation
-- [x] `toggle_rule(rule_id)` - Enable/disable rule
-- [x] `delete_rule(rule_id)` - Remove rule
-
-#### Phase 9.5: Analysis Tools (COMPLETED)
-- [x] `analyze_watchlist()` - Analyze all watched stocks, return bullish/bearish signals
-- [x] `get_symbol_analysis(symbol)` - Deep analysis of single symbol
-- [x] `compare_symbols(symbols[])` - Compare multiple symbols
-- [x] `get_top_performers(days?, limit?)` - Best performing alerts
-
-#### Phase 9.6: Watchlist Tools (COMPLETED)
-- [x] `get_watchlist()` - Get current watchlist
-- [x] `add_to_watchlist(symbol, notes?)` - Add symbol
-- [x] `remove_from_watchlist(symbol)` - Remove symbol
-
-#### Phase 9.7: MCP Resources (Read-only Data) (COMPLETED)
-- [x] `alerts://recent` - Recent alerts as resource
-- [x] `alerts://unread` - Unread alerts
-- [x] `rules://active` - Active rules configuration
-- [x] `stats://daily` - Daily statistics summary
-- [x] `watchlist://current` - Current watchlist
-
-#### Phase 9.8: Alpaca MCP Integration (COMPLETED)
-- [x] Clone and configure Alpaca MCP server
-- [x] Test Alpaca MCP tools locally
-- [x] Document available Alpaca tools for reference
-- [x] Create combined configuration for both servers
-
-#### Phase 9.9: Claude Desktop Configuration (COMPLETED)
-- [x] Create `claude_desktop_config.json` template
-- [x] Document setup instructions for Claude Desktop
-- [x] Document setup instructions for Claude Code CLI
-- [x] Test both MCP servers together
-
-#### Phase 9.10: Testing & Documentation (COMPLETED)
-- [x] Unit tests for MCP tools (110 tests)
-- [x] Integration tests with mock database (42 tests)
-- [x] MCP documentation in `docs/mcp-setup.md`
-- [x] Example prompts in documentation
-
-### File Structure (New)
-
-```
-backend/
-├── app/
-│   ├── mcp/
-│   │   ├── __init__.py
-│   │   ├── server.py              # FastMCP server definition
-│   │   ├── config.py              # MCP-specific configuration
-│   │   ├── tools/
-│   │   │   ├── __init__.py
-│   │   │   ├── alerts.py          # Alert-related tools
-│   │   │   ├── rules.py           # Rule management tools
-│   │   │   ├── analysis.py        # Analysis tools
-│   │   │   └── watchlist.py       # Watchlist tools
-│   │   └── resources/
-│   │       ├── __init__.py
-│   │       └── data.py            # MCP resources
-│   └── ...
-├── tests/
-│   └── unit/
-│       └── test_mcp_tools.py      # MCP tools tests
-└── ...
-
-docs/
-├── mcp-setup.md                   # MCP installation guide
-└── mcp-examples.md                # Example prompts and responses
-
-config/
-└── claude_desktop_config.json     # Template for Claude Desktop
-```
-
-### Configuration Templates
-
-#### Claude Desktop (`claude_desktop_config.json`)
-```json
-{
-  "mcpServers": {
-    "trading-engine": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "app.mcp.server"],
-      "cwd": "/path/to/trading-engine/backend",
-      "env": {
-        "DATABASE_URL": "postgresql+asyncpg://user:pass@host/db"
-      }
-    },
-    "alpaca": {
-      "command": "uv",
-      "args": ["run", "alpaca-mcp-server"],
-      "cwd": "/path/to/alpaca-mcp-server",
-      "env": {
-        "ALPACA_API_KEY": "your_key",
-        "ALPACA_SECRET_KEY": "your_secret",
-        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets"
-      }
-    }
-  }
-}
-```
-
-### Dependencies
-
-```toml
-# backend/pyproject.toml additions
-[project.dependencies]
-mcp = { version = ">=1.2.0", extras = ["cli"] }
-```
-
-### Success Criteria
-
-1. **Alert Explanation**: User asks "Why did AAPL alert?" → Returns detailed rule analysis
-2. **Natural Language Rules**: User says "Alert when price > 100" → Rule created in database
-3. **Watchlist Analysis**: User asks "Which stocks look good?" → Returns ranked analysis
-4. **Statistics**: User asks "How did my alerts perform?" → Returns performance metrics
-5. **Integration**: Both MCP servers work together in Claude Desktop
+**Risk:** this phase exposes whether the chosen FMP tier really provides extended-hours
+intraday history. **Validate before building the profile job.**
 
 ---
 
-## Environment Variables
+### Phase 2 — The Scanner Pipeline
+**Goal:** The 3-stage filtration engine.
+**Depends on:** Phase 1.
 
-```bash
-# Alpaca API
-ALPACA_API_KEY=your_api_key
-ALPACA_SECRET_KEY=your_secret_key
-ALPACA_BASE_URL=https://paper-api.alpaca.markets
+- [ ] Stage 1: SQL candidate query (float < 75M, avg vol > 500K) + price floor
+- [ ] Stage 2: gap% (3–15) and time-of-day-normalized RVOL (>10%) over candidates
+- [ ] Stage 3: nearest resistance + upside% (>= 5.5%) confirmation
+- [ ] Risk filters: price floor, min dollar volume, market-wide tape check
+- [ ] Injectable clock (no direct `datetime.now()` in logic) + explicit ET/DST handling
+- [ ] `scan_runs` persistence: per-stage counts, timing, errors — full observability
+- [ ] Stateless run design: recompute accumulated volume from 04:00 ET each pass
+- [ ] Golden-case boundary tests + fixture-replay tests (no live API in CI)
+- [ ] CLI: `scripts/run_scan.py` with `--dry-run`, `--fixture`, `--at <ET time>`
 
-# Database
-DATABASE_URL=sqlite+aiosqlite:///./trading_engine.db
+---
 
-# Frontend
-VITE_API_URL=http://localhost:8000
-VITE_WS_URL=ws://localhost:8000
-```
+### Phase 3 — Scoring, Alerts & Dashboard
+**Goal:** Turn survivors into alerts the end user can read on a phone.
+**Depends on:** Phase 2.
+
+- [ ] Confidence score: documented weighted formula, constants in config, flagged provisional
+- [ ] Extend `alerts` model + schemas to the v2 output contract
+- [ ] Persist alerts, deduplicate within a session, broadcast over existing WebSocket
+- [ ] Redesign alert card: ticker, gap%, RVOL, catalyst, confidence, entry window
+- [ ] Scan-run history view (what ran, how many survived each stage)
+- [ ] Settings page: edit scanner thresholds without redeploy
+- [ ] Mobile-first responsive pass — primary consumption device is a phone
+- [ ] Explicit "candidates, not predictions / not financial advice" framing in UI
+- [ ] Update `openapi/spec.yaml` + regenerate TS types
+
+---
+
+### Phase 4 — Enrichment
+**Goal:** The confirmation signals from the spec's layer 2 and 3.
+**Depends on:** Phase 3.
+
+- [ ] Catalyst detection: FMP news + earnings calendar tagging
+- [ ] Sector / index relative strength
+- [ ] Bid-ask spread filter (slippage guard)
+- [ ] Short interest (slow signal — FINRA lag ~2×/month, label accordingly)
+- [ ] Halt-risk flag (best-effort heuristic; document limitations honestly)
+- [ ] Gap-and-go historical pattern per ticker (has it made 5%+ first-hour moves before)
+
+---
+
+### Phase 5 — Backtesting & Calibration
+**Goal:** Replace guessed weights with fitted ones. The spec explicitly demands this.
+**Depends on:** Phase 4 + historical intraday data availability.
+
+- [ ] Historical replay harness over past pre-market sessions (extended hours required)
+- [ ] Outcome labelling: did the candidate reach +5% within the first hour?
+- [ ] Per-signal hit-rate analysis (which filters actually predict)
+- [ ] Fit confidence weights against outcomes; report precision/recall honestly
+- [ ] Threshold sensitivity sweep to justify 3%/15%/10%/5.5% (or revise them)
+- [ ] Publish results into the dashboard so the score's basis is visible
+
+> Until Phase 5 completes, **the confidence score is an assumption, not a model.**
+
+---
+
+### Phase 6 — Hardening (deferred, revisit before wider use)
+- [ ] Authentication on the dashboard (currently open by explicit decision)
+- [ ] Push / email notification delivery at 09:25 ET
+- [ ] Cost + rate-limit monitoring on FMP usage
+- [ ] Uptime monitoring and scan-failure alerting (a silent failed scan is the worst bug)
+- [ ] Decide fate of the MCP server (retain custom tools, drop Alpaca trading tools)
+
+---
+
+## Sequencing Rules
+
+1. **Phase 0 first** — it is provider-independent and unblocks everything.
+2. **Do not build Phase 2 before Phase 1's reference tables exist.** The scanner is a
+   thin layer over pre-computed data; building it first inverts the dependency.
+3. **Validate FMP capabilities before Phase 1's profile job.** If extended-hours
+   intraday history is unavailable or too shallow, the RVOL definition must be
+   renegotiated — better to learn this in Phase 1 than Phase 5.
+4. **Never let CI depend on live market data or market hours.** Fixtures always.
+5. One phase per Claude Code session; verify the "done when" before moving on.
+
+---
+
+## Known Risks
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| FMP lacks 04:00 ET intraday coverage | Breaks full-early-session requirement | Validate first; fall back to 08:00 start or simpler RVOL |
+| Historical intraday too shallow/costly | Blocks volume profile + backtesting | Check depth before Phase 1; may need a higher tier |
+| Rate limits vs. universe size | Scan can't finish in window | Stage 1 shrinks universe first; batch + cache aggressively |
+| Render cron UTC/DST drift | Scans fire at the wrong hour twice a year | Explicit ET conversion + DST tests |
+| Silent scan failure | User sees no alerts, assumes no candidates | `scan_runs` table + failure alerting + UI "last successful scan" |
+| Over-trusting the confidence score | User treats assumptions as validated | Label provisional; prioritise Phase 5 |
+| Old `backup.sql` restore | Legacy alerts reference dead rule IDs | Do **not** bulk-restore into Supabase |
+
+---
+
+## Legacy Note
+
+`backup.sql` (~34 MB) at repo root is a dump of the old Render PostgreSQL database. Its
+alert rows reference DB-stored rule IDs that no longer exist (rules moved to YAML), and
+its schema predates the v2 alert contract. Do not restore it wholesale. Extract the
+watchlist only, if anything.

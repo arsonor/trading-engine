@@ -49,6 +49,7 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+backup.sql
 
 # Logs
 *.log

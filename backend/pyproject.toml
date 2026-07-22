@@ -13,7 +13,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "aiohttp>=3.13.3",
-    "aiosqlite>=0.22.1",
     "alembic>=1.17.2",
     "alpaca-py>=0.43.2",
     "asyncpg>=0.31.0",
@@ -30,6 +29,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    # aiosqlite powers the in-memory test database only; the app itself is Postgres-only.
+    "aiosqlite>=0.22.1",
     "httpx>=0.28.1",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",

@@ -26,17 +26,20 @@ class MCPSettings(BaseSettings):
     server_name: str = "trading-engine"
     server_version: str = "1.0.0"
 
-    # Database
-    database_url: str = "sqlite+aiosqlite:///./trading_engine.db"
+    # Database — Postgres only, aligned with the main app config.
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/trading_engine"
 
     @field_validator("database_url", mode="after")
     @classmethod
-    def transform_database_url(cls, v: str) -> str:
-        """Transform database URL for async compatibility."""
+    def validate_database_url(cls, v: str) -> str:
         if v.startswith("postgres://"):
-            return v.replace("postgres://", "postgresql+asyncpg://", 1)
-        if v.startswith("postgresql://") and "+asyncpg" not in v:
-            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+            v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgresql://") and "+asyncpg" not in v:
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if not v.startswith("postgresql+asyncpg://"):
+            raise ValueError(
+                "MCP DATABASE_URL must be a Postgres async DSN. SQLite is not supported (v2)."
+            )
         return v
 
     # Logging - MCP uses STDIO, so we must log to stderr or file

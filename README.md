@@ -220,83 +220,92 @@ The application is deployed and running on Render.com:
 
 - **Python 3.10+** with [uv](https://docs.astral.sh/uv/) package manager
 - **Node.js 18+** with npm
-- **Docker** and **Docker Compose** (optional, for containerized deployment)
-- **Alpaca Markets account** (free) for API keys
+- **Docker** and **Docker Compose** (required for local Postgres)
+- **Alpaca Markets account** (optional — legacy v1 fallback; new v2 code uses FMP)
+- **FMP account** (needed from Phase 1 onwards; not required for Phase 0 verification)
 
 ## Quick Start
 
-### 1. Clone the Repository
+> **v2 status:** the project is migrating to a pre-market universe scanner on FMP data.
+> SQLite is no longer supported; the app is Postgres-only, locally and in production.
+> See `docs/CLAUDE.md` and `docs/PLAN.md` for the full plan.
+
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/yourusername/trading-engine.git
 cd trading-engine
 ```
 
-### 2. Configure Environment Variables
+### 2. Start Postgres (local dev)
 
 ```bash
-# Copy the example environment file
-cp .env.example .env
-
-# Edit .env with your Alpaca API credentials
-# Get your keys from: https://app.alpaca.markets/paper/dashboard/overview
-
-# IMPORTANT: Copy .env to backend/ directory (backend looks for .env in its own directory)
-cp .env backend/.env
+docker compose -f docker-compose.dev.yml up -d
 ```
 
-Required environment variables:
+This starts Postgres 16 on **host port 5433** (mapped to the container's 5432) so it
+does not clash with a native Postgres install that may already own 5432 on your machine.
+
+### 3. Configure environment variables
+
+The backend reads `.env` from the `backend/` directory.
+
+```bash
+cp .env.example backend/.env
+# then edit backend/.env
+```
+
+Minimum for Phase 0:
 ```env
-# Backend
 APP_ENV=development
 DEBUG=true
-DATABASE_URL=sqlite+aiosqlite:///./trading_engine.db
-ALPACA_API_KEY=your_alpaca_api_key
-ALPACA_SECRET_KEY=your_alpaca_secret_key
-ALPACA_BASE_URL=https://paper-api.alpaca.markets
-# CORS_ORIGINS must be in JSON array format
-CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]
-
-# Frontend
-VITE_API_URL=http://localhost:8000
-VITE_WS_URL=ws://localhost:8000
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/trading_engine
+CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
 
-> **Note:** The backend reads `.env` from the `backend/` directory. After editing the root `.env`, copy it to `backend/.env` to apply changes locally.
+FMP keys and scanner thresholds are wired in configuration but unused until Phase 1/2.
 
-### 3. Start the Backend
+### 4. Start the backend
 
 ```bash
 cd backend
-
-# Install dependencies
 uv sync
-
-# Run database migrations
 uv run alembic upgrade head
-
-# Start the development server
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The API will be available at `http://localhost:8000`
-- API Documentation: `http://localhost:8000/docs`
-- Health Check: `http://localhost:8000/health`
+- API docs: `http://localhost:8000/docs`
+- Health check (DB-probing): `http://localhost:8000/health` → `{"status":"healthy","database_connected":true,...}`
 
-### 4. Start the Frontend
+### 5. Start the frontend
 
 In a new terminal:
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start the development server
 npm run dev
 ```
 
-The dashboard will be available at `http://localhost:5173`
+Dashboard: `http://localhost:5173`.
+
+### 6. Smoke test (no live market data)
+
+```bash
+cd backend
+uv run python scripts/seed_test_alerts.py    # sample alerts visible in the dashboard
+```
+
+### Production database (Supabase)
+
+Supabase exposes two endpoints per project:
+
+| Endpoint | Host / port | Use it for |
+|---|---|---|
+| Pooled  | `aws-<region>.pooler.supabase.com:6543` (pgBouncer, transaction mode) | The **app runtime** (`DATABASE_URL` on the Render web service). The engine detects the pooler host and disables asyncpg's prepared-statement cache automatically. |
+| Direct  | `db.<project>.supabase.co:5432` | **Migrations** (`alembic upgrade head`). pgBouncer transaction mode forbids the DDL and prepared-statement patterns Alembic emits. |
+
+Both should be `postgresql+asyncpg://...` DSNs — the legacy `postgres://` prefix from
+Supabase's copy-paste UI is normalized automatically.
 
 ## MCP Integration
 

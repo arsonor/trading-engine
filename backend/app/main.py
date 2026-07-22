@@ -11,7 +11,7 @@ from sqlalchemy import select
 from app.api.v1.router import api_router
 from app.api.v1.websocket import get_manager
 from app.config import get_settings
-from app.core.database import async_session_maker, close_db, init_db
+from app.core.database import async_session_maker, check_db_connectivity, close_db, init_db
 from app.models import Watchlist as WatchlistModel
 from app.schemas import HealthResponse, HealthStatus
 from app.services.alert_generator import get_alert_generator
@@ -139,13 +139,14 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check() -> HealthResponse:
-    """Health check endpoint."""
+    """Health check endpoint. Reports DB connectivity as a real probe."""
+    db_ok = await check_db_connectivity()
     return HealthResponse(
-        status=HealthStatus.HEALTHY,
+        status=HealthStatus.HEALTHY if db_ok else HealthStatus.UNHEALTHY,
         timestamp=datetime.utcnow(),
         version="1.0.0",
-        database_connected=True,
-        alpaca_connected=True,
+        database_connected=db_ok,
+        alpaca_connected=None,
     )
 
 

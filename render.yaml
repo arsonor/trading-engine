@@ -1,20 +1,24 @@
-# Render Blueprint - Infrastructure as Code
+# Render Blueprint — Trading Engine v2
 # https://render.com/docs/blueprint-spec
-
-databases:
-  - name: trading-engine-db
-    databaseName: trading_engine
-    user: trading_user
-    plan: free
-    region: oregon
+#
+# Topology (v2):
+#   - Web service: always-on FastAPI (REST + client WebSocket)
+#   - Cron job:    pre-market scanner stub (Phase 2 will replace the entrypoint)
+#   - Database:    Supabase Postgres — NOT managed by this blueprint
+#
+# Timezone note: Render cron schedules are UTC. The pre-market window is
+# 04:00–09:25 America/New_York, which is UTC−5 (EST) or UTC−4 (EDT). A
+# UTC-pinned schedule silently shifts by one hour twice a year — the scanner
+# code itself (Phase 2) must convert to ET and gate real work on the ET clock.
+# The schedule below is a generous placeholder for the stub only.
 
 services:
-  # Backend API Service
+  # Backend API + client WebSocket (always-on)
   - type: web
     name: trading-engine-api
     runtime: python
     plan: free
-    region: oregon
+    region: frankfurt
     buildCommand: |
       cd backend && pip install -e .
     startCommand: |
@@ -25,34 +29,55 @@ services:
       - key: APP_ENV
         value: production
       - key: DEBUG
-        value: false
+        value: "false"
+      # Supabase Postgres. Use the *pooled* endpoint (host: aws-*.pooler.supabase.com, port 6543)
+      # for the app so pgBouncer transaction mode handles connection churn. The engine
+      # detects the pooler host and disables asyncpg's prepared-statement cache automatically.
+      # Set this in the Render dashboard (marked sync: false to keep it out of the blueprint).
       - key: DATABASE_URL
-        fromDatabase:
-          name: trading-engine-db
-          property: connectionString
-        # Note: The config.py transforms postgres:// to postgresql+asyncpg:// automatically
+        sync: false
+      # FMP — v2 data provider. Consumed by Phase 1+.
+      - key: FMP_API_KEY
+        sync: false
+      - key: FMP_BASE_URL
+        value: https://financialmodelingprep.com
+      # Legacy Alpaca credentials — kept until the scanner (Phase 2) is proven,
+      # then removed in a deliberate commit.
       - key: ALPACA_API_KEY
-        sync: false  # You'll set this manually in dashboard
+        sync: false
       - key: ALPACA_SECRET_KEY
-        sync: false  # You'll set this manually in dashboard
+        sync: false
       - key: ALPACA_BASE_URL
         value: https://paper-api.alpaca.markets
+      # Point this at the Vercel frontend URL; multiple origins comma-separated.
       - key: CORS_ORIGINS
-        value: '["https://trading-engine-ui.onrender.com"]'
+        sync: false
     healthCheckPath: /health
 
-  # Frontend Static Site
-  - type: web
-    name: trading-engine-ui
-    runtime: static
-    buildCommand: cd frontend && npm ci && npm run build
-    staticPublishPath: frontend/dist
+  # Pre-market scanner cron (stub — Phase 0)
+  # Fires every 5 minutes 09:00–14:30 UTC as a placeholder covering the widest
+  # possible ET pre-market window across DST. The stub just logs and exits;
+  # Phase 2 will replace the entrypoint with the real scanner and gate on ET.
+  - type: cron
+    name: trading-engine-premarket-scan
+    runtime: python
+    plan: free
+    region: frankfurt
+    schedule: "*/5 9-14 * * 1-5"
+    buildCommand: |
+      cd backend && pip install -e .
+    startCommand: |
+      cd backend && python scripts/run_premarket_scan.py
     envVars:
-      - key: VITE_API_URL
-        value: https://trading-engine-api-5iai.onrender.com
-      - key: VITE_WS_URL
-        value: wss://trading-engine-api-5iai.onrender.com
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
+      - key: PYTHON_VERSION
+        value: "3.10.12"
+      - key: APP_ENV
+        value: production
+      # For migrations the cron would need the *direct* Supabase endpoint (port 5432),
+      # not the pooler. Not required for the stub — wire real values in Phase 1+.
+      - key: DATABASE_URL
+        sync: false
+      - key: FMP_API_KEY
+        sync: false
+      - key: FMP_BASE_URL
+        value: https://financialmodelingprep.com
