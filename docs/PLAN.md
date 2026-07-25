@@ -1,193 +1,179 @@
 # Trading Engine — Implementation Plan (v2)
 
-> Companion documents: `docs/CLAUDE.md` (specification) and `docs/PROMPT.md`
-> (ready-to-use Claude Code prompts, one per phase).
+> Companion documents: `docs/CLAUDE.md` (specification), `docs/PROMPT.md` (Claude Code
+> prompts), `docs/PROJECT_REPORT.md` (stakeholder report with the V1→V4 version ladder).
 
 ---
 
 ## Objective
 
-Rebuild the trading engine as an **alerts-only pre-market universe scanner** on FMP data,
-deployed as Render (backend + cron) + Vercel (frontend) + Supabase (PostgreSQL), reachable
-by URL on desktop and mobile.
+Build an **alerts-only pre-market universe scanner** on FMP data, deployed as Render
+(backend + cron) + Vercel (frontend) + Supabase (PostgreSQL), delivered **incrementally
+against FMP subscription tiers**: build everything on the free tier first, upgrade only
+when a real data limitation is hit.
 
 ---
 
-## v1 Status (what already exists)
+## Delivery model: app versions map to FMP tiers
 
-Completed and reusable:
-- FastAPI + async SQLAlchemy backend, Alembic migrations, `uv` tooling
-- React 19 / Vite / Zustand / Tailwind frontend with pages: Dashboard, Alerts, Rules, Settings
-- Client WebSocket channel with live alert broadcast
-- OpenAPI design-first contract (`openapi/spec.yaml`) + generated TS types
-- Test suite (~263 tests) and GitHub Actions CI/CD
-- Deployed on Render (free tier)
-- MCP server with 17 custom tools + 5 resources
+| App version | FMP tier | What it is | Status |
+|---|---|---|---|
+| **V1** | Basic (free) | Complete software, small curated universe, EOD data only. A development environment that proves every calculation — not yet a live scanner. | **← current** |
+| **V2** | Starter ($19/mo annual) | First genuinely working scanner: real-time quotes, full US universe, intraday (regular hours only — no `extended=true`). RVOL approximate. | next |
+| **V3** | Premium ($49/mo annual) | `extended=true` pre-market intraday bars → real pre-market volume, volume profiles, accurate RVOL; 1-min bars; 30y history; backtesting → validated confidence score. | target |
+| **V4** | Ultimate ($99/mo annual) | Bulk delivery, global. Probably unnecessary. | unlikely |
 
-Completed but **being retired** in v2:
-- Alpaca client + stream manager (`alpaca_client.py`, `stream_manager.py`)
-- Watchlist-driven streaming model
-- Per-tick YAML rule engine as the primary trigger
-- Alpaca MCP integration (43 trading tools) — no trading in v2
+**FMP support answers (July 2026) — both former open questions RESOLVED:**
+- Starter's 5-min intraday bars do **NOT** include pre-market. The `extended=true`
+  parameter (which adds pre/after-market intervals) requires **Premium** (US symbols)
+  or Ultimate (global). → Accurate RVOL and pre-market volume profiles are **V3**.
+- Starter's intraday chart access **is** as the comparison table shows: 5-min and
+  coarser intervals, US symbols, regular trading hours only.
+
+**V1 constraints that shape the code** (from FMP docs + pricing page):
+- 250 API calls/day, hard stop (429). A persistent daily budget guard is mandatory.
+- EOD data only; no intraday, no real-time.
+- Most endpoints limited to a fixed sample of ~87 large-cap symbols (AAPL, TSLA, …).
+- Those symbols all FAIL the real Stage-1 float filter (< 75M) — so end-to-end demos with
+  real data require a **demo threshold profile** (loosened float cap) via config.
+- Base URL pattern: `https://financialmodelingprep.com/stable/<endpoint>?apikey=KEY`.
+
+**Efficient V1 call pattern:** `historical-price-eod/full` returns full daily history in
+one call → compute vol_avg_20d, SMA-50/200, 20d high, prior close/high locally. Plus
+`shares-float` = **2 calls per ticker per day** → ~80–100 tickers fit the daily budget.
 
 ---
 
-## Migration Decisions (locked)
+## v1-codebase status (what already exists)
+
+Reusable: FastAPI + async SQLAlchemy + Alembic + `uv`; React 19/Vite/Zustand frontend;
+client WebSocket alert broadcast; OpenAPI contract + generated TS types; ~355 tests + CI;
+deployed infra (Render Frankfurt web + cron stub, Vercel, Supabase) — verified end-to-end.
+
+Being retired: Alpaca client + stream manager; watchlist streaming model; per-tick YAML
+rule engine as primary trigger; Alpaca MCP trading tools.
+
+---
+
+## Locked decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
 | Data provider | **FMP** | Only affordable provider bundling price + volume + **float** + screener + news |
-| Trading | **None** | User trades elsewhere; drops broker dependency entirely |
-| Local DB | **PostgreSQL** | Parity with production; removes SQLite-only bugs |
-| Prod DB | **Supabase** | Free tier persists (does not delete after 30 days like Render free PG) |
-| Backend host | **Render** (web + cron) | Already configured; cron only bills for run time |
-| Frontend host | **Vercel** | Free, always-on, mirrors owner's other project stack |
-| Scan window | **04:00 → 09:25 ET**, every 5 min | Captures full early session, not just 09:00–09:25 |
-| RVOL | **Time-of-day normalized** | More accurate; requires a premarket volume profile |
-| Scheduler | **Render Cron Job** | Cheaper than always-on compute for scheduled work |
+| Delivery | **Tier-staged (V1→V3)** | Spend only when a real limitation is hit |
+| Trading | **None** | Alerts only, permanently |
+| Local DB | **PostgreSQL** | Parity with prod (done in Phase 0) |
+| Prod DB | **Supabase** | Free tier persists |
+| Backend host | **Render** (web + cron) | Deployed; cron stub live |
+| Frontend host | **Vercel** | Deployed |
+| Scan window | **04:00 → 09:25 ET**, every 5 min | Full early session (V2+; V1 has no intraday) |
+| RVOL | **Pluggable**: simple ↔ time-of-day-normalized | Normalized needs `extended=true` intraday — **confirmed Premium-only (V3)**. V2 ships an approximate RVOL, flagged on every alert; interface built in V1 |
+| Scheduler | **Render Cron Job** | Provisioned (stub) |
 
 ---
 
-## Phase Roadmap
+## Phase roadmap (re-sequenced for tier-staged delivery)
 
-### Phase 0 — Infrastructure Migration
-**Goal:** Postgres everywhere; Render/Vercel/Supabase topology wired; cron placeholder.
-**Depends on:** nothing. Provider-independent — safe to start immediately.
-
-- [ ] Postgres for local dev via `docker-compose.dev.yml`; remove SQLite support
-- [ ] Audit + fix SQLite-specific assumptions (types, defaults, batch migrations)
-- [ ] Verify all Alembic migrations run clean against empty Postgres
-- [ ] Consolidate settings in `config.py`; add `FMP_API_KEY` placeholder
-- [ ] Supabase pooled-connection compatibility (pgBouncer / prepared statements)
-- [ ] Rewrite `render.yaml`: always-on web service + **cron job stub**; remove Render PG
-- [ ] Vercel config; API/WS URLs via env only (no hardcoded hosts)
-- [ ] `/health` reports DB connectivity
-- [ ] README "Getting started" rewritten and verified
-
-**Done when:** clean checkout → docker up → migrate → backend + frontend run → existing
-seed/simulate smoke test still produces a visible alert.
+### Phase 0 — Infrastructure Migration — ✅ DONE
+Postgres everywhere; Render (Frankfurt) web + cron stub; Vercel; Supabase; CI trimmed;
+full-stack connectivity verified (API healthy, DB connected).
 
 ---
 
-### Phase 1 — FMP Client & Reference-Data Pipeline
-**Goal:** The nightly backbone. Everything downstream depends on this.
-**Depends on:** Phase 0.
+### Phase 1 (V1) — FMP Client, Budget Guard & Reference Pipeline ← NEXT
+**Tier:** free. **Goal:** the data backbone, built to free-tier reality.
 
-- [ ] FMP API client: auth, retries, backoff, rate-limit awareness, typed responses
-- [ ] **Fixture recorder** — capture real FMP responses to disk for offline tests
-- [ ] Universe sync: tradable US equities → `universe` table
-- [ ] Reference data job → `reference_data`: float, 20d avg volume, prior close,
-      prior high, 20d high, SMA-50, SMA-200
-- [ ] **Premarket volume profile** → `premarket_volume_profile`: cumulative volume in
-      5-min buckets from 04:00 ET, averaged over 20 sessions, per ticker
-- [ ] Alembic migrations for all new tables + indexes for the Stage-1 query
-- [ ] CLI entrypoint: `scripts/refresh_reference_data.py`
-- [ ] Idempotent + resumable (survives partial failure without corrupting the table)
+- [ ] FMP client against `stable/` endpoints; typed responses; retries; clear errors
+- [ ] **Daily API budget guard**: persistent counter, hard ceiling below 250, refusal +
+      clear error when exhausted; every call logged
+- [ ] **Symbol probe**: discover empirically which symbols the free key can access;
+      persist the working set → this becomes the V1 universe
+- [ ] Fixture recorder + replay client (CI never hits live FMP)
+- [ ] Tables: `universe`, `reference_data`, `premarket_volume_profile` (schema now,
+      populated in V2), `scan_runs`, `api_budget`
+- [ ] Reference pipeline: float + EOD-derived metrics (2 calls/ticker), idempotent,
+      resumable, budget-aware
+- [ ] CLI `scripts/refresh_reference_data.py`
+- [ ] **RVOL interface** with `simple` and `normalized` implementations — normalized
+      raises a clear "requires intraday (V2+)" error for now
 
-**Risk:** this phase exposes whether the chosen FMP tier really provides extended-hours
-intraday history. **Validate before building the profile job.**
+### Phase 2 (V1) — Scanner Pipeline (fixture-fed where data is missing)
+- [ ] Stage 1 (SQL, real EOD data) and Stage 3 (resistance math, real EOD data) — fully live
+- [ ] Stage 2 (gap + RVOL) — implemented completely, fed by fixtures/synthetic data in V1
+- [ ] **Threshold profiles**: `production` (real spec) and `demo` (loosened float cap so
+      free-tier mega-caps pass and the pipeline demonstrably fires end-to-end)
+- [ ] Injectable clock, ET/DST handling, DST tests
+- [ ] `scan_runs` observability; golden-case boundary tests
+- [ ] CLI `scripts/run_scan.py --fixture --at ... --profile demo|production`
 
----
+### Phase 3 (V1) — Scoring, Alerts & Dashboard
+- [ ] Confidence score (transparent, config weights, labelled provisional)
+- [ ] v2 alert contract + persistence + WebSocket broadcast
+- [ ] Dashboard rebuild: mobile-first alert cards, scan-status view (failure ≠ zero
+      candidates), threshold settings editor, honest "candidates not predictions" framing
+- [ ] OpenAPI + TS types regenerated
 
-### Phase 2 — The Scanner Pipeline
-**Goal:** The 3-stage filtration engine.
-**Depends on:** Phase 1.
-
-- [ ] Stage 1: SQL candidate query (float < 75M, avg vol > 500K) + price floor
-- [ ] Stage 2: gap% (3–15) and time-of-day-normalized RVOL (>10%) over candidates
-- [ ] Stage 3: nearest resistance + upside% (>= 5.5%) confirmation
-- [ ] Risk filters: price floor, min dollar volume, market-wide tape check
-- [ ] Injectable clock (no direct `datetime.now()` in logic) + explicit ET/DST handling
-- [ ] `scan_runs` persistence: per-stage counts, timing, errors — full observability
-- [ ] Stateless run design: recompute accumulated volume from 04:00 ET each pass
-- [ ] Golden-case boundary tests + fixture-replay tests (no live API in CI)
-- [ ] CLI: `scripts/run_scan.py` with `--dry-run`, `--fixture`, `--at <ET time>`
-
----
-
-### Phase 3 — Scoring, Alerts & Dashboard
-**Goal:** Turn survivors into alerts the end user can read on a phone.
-**Depends on:** Phase 2.
-
-- [ ] Confidence score: documented weighted formula, constants in config, flagged provisional
-- [ ] Extend `alerts` model + schemas to the v2 output contract
-- [ ] Persist alerts, deduplicate within a session, broadcast over existing WebSocket
-- [ ] Redesign alert card: ticker, gap%, RVOL, catalyst, confidence, entry window
-- [ ] Scan-run history view (what ran, how many survived each stage)
-- [ ] Settings page: edit scanner thresholds without redeploy
-- [ ] Mobile-first responsive pass — primary consumption device is a phone
-- [ ] Explicit "candidates, not predictions / not financial advice" framing in UI
-- [ ] Update `openapi/spec.yaml` + regenerate TS types
+**V1 exit criteria:** full pipeline runs end-to-end on real free-tier data in demo
+profile; all calculations fixture-verified; dashboard shows real generated alerts;
+never exceeds the daily API budget.
 
 ---
 
-### Phase 4 — Enrichment
-**Goal:** The confirmation signals from the spec's layer 2 and 3.
-**Depends on:** Phase 3.
+### Phase 4 (V2 — requires FMP Starter) — Go Live
+- [ ] Universe expansion: directory + screener endpoints → real low-float universe
+- [ ] Real-time + pre/after-market quote endpoints → live pre-market gap%
+- [ ] **RVOL approximation** (no pre-market bars on Starter — confirmed): validate
+      empirically what the quote endpoints expose for pre-market volume; implement the
+      best available approximation behind the RvolCalculator interface; **flag every
+      alert's RVOL as approximate** in payload + UI
+- [ ] Wire the cron job to the real scan (every 5 min, 04:00–09:25 ET); upgrade Render
+      backend to Starter (always-on)
+- [ ] News/catalyst tagging; first weeks of live-alert observation (open questions #3–4)
+- [ ] Track in live use whether volume conviction is the weak link — that observation is
+      the explicit V3 upgrade trigger
 
-- [ ] Catalyst detection: FMP news + earnings calendar tagging
-- [ ] Sector / index relative strength
-- [ ] Bid-ask spread filter (slippage guard)
-- [ ] Short interest (slow signal — FINRA lag ~2×/month, label accordingly)
-- [ ] Halt-risk flag (best-effort heuristic; document limitations honestly)
-- [ ] Gap-and-go historical pattern per ticker (has it made 5%+ first-hour moves before)
+### Phase 5 (V2/V3) — Enrichment
+Sector relative strength, bid-ask spread, short interest (slow signal), halt-risk flag,
+gap-and-go history.
 
----
+### Phase 6 (V3 — requires FMP Premium) — Accurate RVOL, Backtesting & Calibration
+`extended=true` pre-market bars → measure real pre-market accumulated volume; build the
+per-ticker pre-market volume profiles; switch RVOL to `normalized`; historical replay
+harness; outcome labelling (+5% within first hour?); per-signal hit rates; fitted
+confidence weights; threshold sensitivity sweep; results published in dashboard.
 
-### Phase 5 — Backtesting & Calibration
-**Goal:** Replace guessed weights with fitted ones. The spec explicitly demands this.
-**Depends on:** Phase 4 + historical intraday data availability.
-
-- [ ] Historical replay harness over past pre-market sessions (extended hours required)
-- [ ] Outcome labelling: did the candidate reach +5% within the first hour?
-- [ ] Per-signal hit-rate analysis (which filters actually predict)
-- [ ] Fit confidence weights against outcomes; report precision/recall honestly
-- [ ] Threshold sensitivity sweep to justify 3%/15%/10%/5.5% (or revise them)
-- [ ] Publish results into the dashboard so the score's basis is visible
-
-> Until Phase 5 completes, **the confidence score is an assumption, not a model.**
-
----
-
-### Phase 6 — Hardening (deferred, revisit before wider use)
-- [ ] Authentication on the dashboard (currently open by explicit decision)
-- [ ] Push / email notification delivery at 09:25 ET
-- [ ] Cost + rate-limit monitoring on FMP usage
-- [ ] Uptime monitoring and scan-failure alerting (a silent failed scan is the worst bug)
-- [ ] Decide fate of the MCP server (retain custom tools, drop Alpaca trading tools)
+### Phase 7 — Hardening (before reliance)
+Auth on dashboard; push/email delivery at 09:25 ET; FMP usage monitoring; scan-failure
+alerting; MCP server decision.
 
 ---
 
-## Sequencing Rules
+## Sequencing rules
 
-1. **Phase 0 first** — it is provider-independent and unblocks everything.
-2. **Do not build Phase 2 before Phase 1's reference tables exist.** The scanner is a
-   thin layer over pre-computed data; building it first inverts the dependency.
-3. **Validate FMP capabilities before Phase 1's profile job.** If extended-hours
-   intraday history is unavailable or too shallow, the RVOL definition must be
-   renegotiated — better to learn this in Phase 1 than Phase 5.
-4. **Never let CI depend on live market data or market hours.** Fixtures always.
-5. One phase per Claude Code session; verify the "done when" before moving on.
+1. Phases 1–3 complete **entirely on the free tier** — no subscription needed until Phase 4.
+2. Build the budget guard **before** any other FMP call path.
+3. Probe accessible symbols before designing around them.
+4. CI never touches live FMP. Fixtures always.
+5. One phase per Claude Code session; verify "done when" before advancing.
+6. FMP support questions #1–2: **answered** (see top of this file). Remaining
+   pre-Starter check: none — subscribe when V1 ships.
 
 ---
 
-## Known Risks
+## Known risks
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| FMP lacks 04:00 ET intraday coverage | Breaks full-early-session requirement | Validate first; fall back to 08:00 start or simpler RVOL |
-| Historical intraday too shallow/costly | Blocks volume profile + backtesting | Check depth before Phase 1; may need a higher tier |
-| Rate limits vs. universe size | Scan can't finish in window | Stage 1 shrinks universe first; batch + cache aggressively |
-| Render cron UTC/DST drift | Scans fire at the wrong hour twice a year | Explicit ET conversion + DST tests |
-| Silent scan failure | User sees no alerts, assumes no candidates | `scan_runs` table + failure alerting + UI "last successful scan" |
-| Over-trusting the confidence score | User treats assumptions as validated | Label provisional; prioritise Phase 5 |
-| Old `backup.sql` restore | Legacy alerts reference dead rule IDs | Do **not** bulk-restore into Supabase |
+| Free-tier symbol sample differs from docs | V1 universe smaller/different than planned | Empirical probe in Phase 1; universe is config, not assumption |
+| 250/day exhausted mid-pipeline | Partial refresh | Budget guard + resumable jobs; 2-calls/ticker design |
+| Starter RVOL approximation too weak in practice | Alert quality suffers at V2 | Flag approximate RVOL on every alert; treat this observation as the V3 upgrade trigger |
+| Render cron UTC/DST drift | Wrong-hour scans | Explicit ET conversion + DST tests (Phase 2) |
+| Silent scan failure | Looks like a quiet market | `scan_runs` + distinct UI states + failure alerting |
+| Demo profile confused for production | Misleading alerts | Profile name stamped on every scan run and alert |
 
 ---
 
-## Legacy Note
+## Legacy notes
 
-`backup.sql` (~34 MB) at repo root is a dump of the old Render PostgreSQL database. Its
-alert rows reference DB-stored rule IDs that no longer exist (rules moved to YAML), and
-its schema predates the v2 alert contract. Do not restore it wholesale. Extract the
-watchlist only, if anything.
+- `backup.sql` moved out of the repo; `*.sql` gitignored; never restore into Supabase.
+- Alpaca env keys remain until the scanner proves out; remove in a dedicated commit.

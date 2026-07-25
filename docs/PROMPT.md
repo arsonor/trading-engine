@@ -1,360 +1,289 @@
-# Claude Code Prompts — Trading Engine v2
+# Claude Code Prompts — Trading Engine v2 (tier-staged delivery)
 
-Ready-to-use prompts, one per phase. **Run them in order, one per session.** Verify each
-phase's "Definition of done" before starting the next.
+Run in order, one per session. Verify each phase's Definition of done before advancing.
+Reference: `docs/CLAUDE.md` (spec), `docs/PLAN.md` (roadmap + version ladder),
+`docs/PROJECT_REPORT.md` (V1→V4 tiers).
 
-Reference: `docs/CLAUDE.md` (spec) and `docs/PLAN.md` (roadmap).
-
-**How to use:** open Claude Code in the repo root and paste the prompt block. Prompts
-assume Claude Code can read `docs/CLAUDE.md` for full context — they intentionally don't
-repeat the whole specification.
+- **Phase 0 — Infrastructure: ✅ DONE** (Postgres everywhere, Render Frankfurt web +
+  cron stub, Vercel, Supabase, CI trimmed, connectivity verified). Prompt removed;
+  see git history if needed.
+- Phases 1–3 build **app V1 on the free FMP tier** — no subscription required.
+- Phase 4+ (V2, Starter tier) prompts get written once V1 ships. The two former FMP
+  open questions are **answered** (FMP support, July 2026): Starter intraday bars are
+  regular-hours only; `extended=true` (pre/after-market bars) requires Premium.
+  → Accurate RVOL + volume profiles are V3; V2 uses a flagged approximation.
 
 ---
 
-## Phase 0 — Infrastructure Migration
+## Phase 1 (V1) — FMP client, API budget guard, reference-data pipeline
 
-**Status:** ready
-**Depends on:** nothing
+**Status:** ready to run
+**Tier:** FMP Basic (free) — 250 calls/day hard cap, EOD data only, ~87 sample symbols
 
 ````
-# Phase 0 — Infrastructure Migration: Postgres everywhere + Render/Vercel/Supabase
+# Phase 1 — FMP client + daily budget guard + nightly reference pipeline (free tier)
 
 ## Context
-Read `docs/CLAUDE.md` first for the full v2 specification.
+Read `docs/CLAUDE.md` (sections 3–5) and `docs/PLAN.md` first. Phase 0 is complete:
+Postgres locally (docker, port 5433), Supabase in prod, Render web + cron stub, Vercel
+frontend, `FMP_API_KEY` already wired into config.
 
-This is `trading-engine`: a FastAPI + async SQLAlchemy backend (managed with `uv`,
-Alembic migrations) and a React 19 / Vite / Zustand frontend. It currently uses SQLite
-locally and deploys as a single Render blueprint (`render.yaml`).
+We are building app V1 against FMP's FREE tier. Hard constraints that must shape the
+design (do not treat these as soft limits):
+- 250 API calls per DAY, hard stop with HTTP 429. No overages.
+- End-of-day data only. No intraday endpoints, no real-time guarantees.
+- Most endpoints only serve a fixed sample of ~87 large-cap symbols (AAPL, TSLA, ...).
+- 500 MB bandwidth / 30 days.
 
-We are repointing the infrastructure ahead of a major feature rebuild (a pre-market
-universe scanner). This phase is INFRASTRUCTURE ONLY.
-
-## Target architecture
-- Local dev: PostgreSQL via the existing `docker-compose.dev.yml` (no more SQLite)
-- Production database: Supabase PostgreSQL
-- Production backend: Render (always-on web service + a separate Cron Job service)
-- Production frontend: Vercel (static build)
+## FMP API facts (from official docs — use these, do not invent endpoints)
+- Base: `https://financialmodelingprep.com/stable/<endpoint>`
+- Auth: `?apikey=KEY` query param (or `apikey` header)
+- Endpoints for this phase:
+  - `historical-price-eod/full?symbol=AAPL` → full daily history: date, open, high,
+    low, close, volume, vwap, change. ONE call yields everything needed to compute
+    volume_avg_20d, high_20d, sma_50, sma_200, prior close/high locally.
+  - `shares-float?symbol=AAPL` → float shares, free float, outstanding shares
+  - `quote?symbol=AAPL` and `batch-quote?symbols=AAPL,MSFT` → quote snapshot
+  - `profile?symbol=AAPL` → company name, exchange, sector, market cap
+  - `stock-list`, `company-screener` → directory/screener (may be restricted on free;
+    probe, don't assume)
+- Efficient pattern: **2 calls per ticker per day** (eod/full + shares-float).
+  Budget 250/day → a universe of ~80–100 tickers with headroom for probes and retries.
 
 ## Scope
 
-1. **Postgres for local development**
-   - Verify/repair `docker-compose.dev.yml` so it starts Postgres 16 with sane defaults
-     and a named volume for persistence.
-   - Remove SQLite as a supported backend. `DATABASE_URL` must be a Postgres async DSN
-     (`postgresql+asyncpg://...`). Fail fast with a clear error if it isn't.
-   - Audit the codebase for SQLite-specific assumptions (column types, defaults, pragmas,
-     connection args, Alembic `render_as_batch`) and convert to Postgres-native equivalents.
+1. **FMP client** (`app/services/fmp/client.py`)
+   - Async httpx client; auth via query param from settings; sane timeouts.
+   - Retries with exponential backoff for transient errors ONLY (5xx, network).
+     NEVER retry a 429 — a daily-cap 429 means stop, not try harder.
+   - Typed pydantic response models for each endpoint used.
+   - Typed errors: BudgetExhausted, RateLimited, SymbolNotAvailable, AuthFailed,
+     TransientError, MalformedResponse.
 
-2. **Migrations**
-   - Confirm every Alembic migration runs cleanly against an empty Postgres database.
-   - Fix any migration that only worked under SQLite.
-   - Verify `uv run alembic upgrade head` succeeds from scratch.
+2. **Daily API budget guard** — build this FIRST; every FMP call goes through it
+   - `api_budget` table: date (UTC), calls_used, updated_at.
+   - Atomic increment per call; configurable ceiling `FMP_DAILY_BUDGET` (default 230,
+     deliberately below 250 to leave manual-testing headroom).
+   - When exhausted: raise BudgetExhausted with a clear message including reset time.
+     Jobs must fail gracefully and record partial progress — never corrupt tables.
+   - CLI: `scripts/fmp_budget.py` showing today's usage.
 
-3. **Configuration**
-   - Consolidate settings in `app/config.py` (pydantic-settings). Required env vars
-     documented and validated at startup: DATABASE_URL, CORS origins, log level,
-     environment name.
-   - Add `FMP_API_KEY` and `FMP_BASE_URL` settings (unused this phase — wire the config only).
-   - Add scanner threshold settings as documented in `docs/CLAUDE.md` section 6, with
-     defaults. They are unused this phase but must be loadable.
-   - Ensure CORS allows the Vercel frontend origin, configurable per environment.
-   - Update `.env.example` to reflect exactly what's needed. `backend/.env` stays the
-     backend's source of truth.
+3. **Symbol probe** (`scripts/probe_fmp_symbols.py`)
+   - The free tier's accessible-symbol sample must be discovered, not assumed.
+   - Probe a candidate list (S&P-100-style megacaps + a handful of known small caps to
+     confirm they are NOT accessible) using batch-quote where possible to conserve budget.
+   - Persist results into `universe` with an `is_accessible_free_tier` flag.
+   - Report: how many symbols are usable; this set IS the V1 universe.
 
-4. **Supabase compatibility**
-   - Ensure the async engine works with Supabase's pooled connection (pgBouncer):
-     appropriate pool settings, and disable prepared-statement caching where required by
-     transaction-mode pooling.
-   - Document in the README which Supabase connection string to use (pooled vs direct)
-     for the app versus for migrations.
+4. **Database migrations** (Alembic, per `docs/CLAUDE.md` section 5)
+   - Tables: `universe`, `reference_data`, `scan_runs`, `api_budget`, and
+     `premarket_volume_profile` (schema only — populated in V3, since building profiles
+     requires `extended=true` pre-market bars, Premium-only per FMP support)
+   - Indexes on `reference_data(static_float, volume_avg_20d)` for the Stage-1 query.
 
-5. **Render + Vercel deployment config**
-   - Rewrite `render.yaml` for: (a) one always-on web service for the API/WebSocket, and
-     (b) one Cron Job service placeholder for the future pre-market scan. The cron
-     entrypoint must be a stub that logs and exits 0 — no scanning logic yet.
-   - Remove any Render-managed database from the blueprint; the database is Supabase now.
-   - IMPORTANT: Render cron schedules are UTC. Add a clearly-commented placeholder
-     schedule plus a README note on US Eastern time and DST handling.
-   - Add Vercel config for the frontend build, with API base URL and WebSocket URL from
-     environment variables. No hardcoded `onrender.com` URLs anywhere in frontend source.
+5. **Fixture recorder + replay** (`tests/fixtures/fmp/`)
+   - Recorder mode captures real responses to JSON on disk (one recording session,
+     budget-aware). Replay client serves them in tests. CI NEVER hits live FMP.
+   - Record at minimum: eod/full and shares-float for 5 accessible symbols, plus one
+     not-available symbol and one malformed/empty case.
 
-6. **Health and verification**
-   - `/health` reports app status plus database connectivity.
-   - Update the README with an accurate "Getting started": start Postgres, run migrations,
-     run backend, run frontend, smoke-test.
+6. **Reference-data pipeline** (`scripts/refresh_reference_data.py`)
+   - For each active universe ticker: fetch eod/full + shares-float (2 calls), compute
+     locally: volume_avg_20d, price_close_yesterday, high_yesterday, high_20d, sma_50,
+     sma_200; upsert into `reference_data` with computed_at.
+   - Budget-aware: checks remaining budget BEFORE starting each ticker; stops cleanly
+     and reports progress when close to the ceiling.
+   - Idempotent and resumable: re-running continues where it stopped (skip tickers
+     already refreshed today unless `--force`).
+   - Flags: `--tickers AAPL,MSFT`, `--dry-run`, `--force`, `--limit N`.
+   - Structured logging: per-ticker result, calls used, wall time.
+
+7. **RVOL interface** (`app/services/scanner/rvol.py`)
+   - `RvolCalculator` protocol with two implementations:
+     - `SimpleRvol`: premarket_volume / volume_avg_20d (usable from V2)
+     - `NormalizedRvol`: time-of-day profile version — in V1 this raises
+       FeatureRequiresIntraday with a message stating it needs `extended=true`
+       pre-market bars, available from FMP Premium (app V3).
+   - Selected via config `RVOL_MODE=simple|normalized`. This seam is the whole point:
+     upgrading tiers later must be a config change, not a rewrite.
 
 ## Constraints
-- Do NOT implement any scanner, FMP client, or scoring logic in this phase.
-- Do NOT modify existing business/rule logic beyond what Postgres requires.
-- Preserve the existing alert WebSocket broadcast mechanism and frontend behaviour.
-- Do NOT restore or import `backup.sql` — it is stale legacy data.
-- Keep changes reviewable; explain any non-obvious decision.
+- Do NOT implement the scanner stages (Phase 2) or touch the dashboard (Phase 3).
+- Do NOT delete Alpaca code yet.
+- Every FMP-touching test uses fixtures. The recorder is the only live-API test path,
+  run manually.
+- Handle missing float gracefully (null-tolerant), and record which symbols lack it.
+- All new settings go through `app/config.py` with documented defaults, and
+  `.env.example` updated.
 
 ## Definition of done
-From a clean checkout, this sequence works:
-1. `docker compose -f docker-compose.dev.yml up -d`
-2. `cd backend && uv sync && uv run alembic upgrade head`
-3. `uv run uvicorn app.main:app --reload --port 8000` → `/health` healthy, DB OK
-4. `cd frontend && npm install && npm run dev` → dashboard loads at localhost:5173
-5. The existing seed/simulate smoke test still produces an alert visible in the dashboard
-6. `render.yaml` and the Vercel config are valid, with no hardcoded secrets or URLs
-7. Existing test suite passes
-
-Report anything you find that would block the scanner work in later phases.
+1. `uv run python scripts/probe_fmp_symbols.py` reports the accessible universe and
+   persists it (share the count and a sample in your final report)
+2. `uv run python scripts/refresh_reference_data.py --tickers AAPL,MSFT --dry-run` works
+3. A real limited run (e.g. `--limit 10`) populates `reference_data` correctly and
+   `scripts/fmp_budget.py` shows the expected call count (~2/ticker + probes)
+4. Re-running the same day consumes ~0 additional calls (idempotence)
+5. Exhausting the budget artificially (set ceiling to 3) fails cleanly with partial
+   progress preserved
+6. All tests pass offline against fixtures; ruff clean
+7. Final report: accessible-symbol count, calls consumed, any endpoint that behaved
+   differently from the docs (screener/stock-list especially), and anything that
+   blocks Phase 2
 ````
 
 ---
 
-## Phase 1 — FMP Client & Reference-Data Pipeline
-
-**Status:** blocked by Phase 0 + FMP capability validation
-**Depends on:** Phase 0
-
-> **Before running this prompt**, confirm with FMP's docs/support:
-> 1. Does the purchased tier include intraday historical bars **with extended hours**?
-> 2. Does premarket intraday data start at **04:00 ET** or only 08:00 ET?
-> 3. How many days of intraday history are available (need ≥ 20 sessions; more for backtesting)?
-> 4. Rate limits on the tier.
->
-> If extended-hours intraday is unavailable or shallower than 20 sessions, **stop and
-> renegotiate the RVOL definition** before building the profile job.
-
-````
-# Phase 1 — FMP client + nightly reference-data pipeline
-
-## Context
-Read `docs/CLAUDE.md` (sections 3, 4, 5) and `docs/PLAN.md` (Phase 1) first.
-
-Phase 0 is complete: Postgres locally, Supabase in prod, Render web + cron stub, Vercel
-frontend. Now build the data backbone the scanner depends on.
-
-## Scope
-
-1. **FMP API client** (`app/services/fmp_client.py`)
-   - Async client with auth, timeouts, retries with exponential backoff, and
-     rate-limit awareness (respect limits; never hammer).
-   - Typed response models (pydantic). Endpoints needed: symbol/universe list,
-     all-shares-float, historical daily bars, intraday bars (extended hours),
-     real-time quote, stock screener.
-   - Clear, typed errors distinguishing: rate-limited, not-found, auth failure,
-     transient network, malformed payload.
-
-2. **Fixture recorder** (test infrastructure — build this early)
-   - A mode that records real FMP responses to `tests/fixtures/fmp/`.
-   - A replay client used by tests. CI must NEVER hit the live FMP API.
-
-3. **New tables + migrations** (per `docs/CLAUDE.md` section 5)
-   - `universe`, `reference_data`, `premarket_volume_profile`, `scan_runs`.
-   - Index `reference_data` to make the Stage-1 query fast
-     (`static_float`, `volume_avg_20d`).
-
-4. **Universe sync job**
-   - Fetch tradable US equities (common stock; exclude ETFs/funds where identifiable)
-     into `universe`. Mark delisted/missing tickers inactive rather than deleting.
-
-5. **Reference data job**
-   - For each active ticker compute and store: `static_float`, `volume_avg_20d`,
-     `price_close_yesterday`, `high_yesterday`, `high_20d`, `sma_50`, `sma_200`.
-   - Batch requests; cache aggressively; stay inside rate limits.
-
-6. **Premarket volume profile job**
-   - For each ticker, build cumulative premarket volume in 5-minute buckets from
-     04:00 ET, averaged over the last 20 sessions → `premarket_volume_profile`.
-   - Store `sessions_sampled` so downstream code knows the profile's reliability.
-   - Skip/flag tickers with insufficient history rather than silently averaging noise.
-
-7. **CLI entrypoint**
-   - `scripts/refresh_reference_data.py` with `--universe-only`, `--reference-only`,
-     `--profile-only`, `--tickers AAPL,MSFT`, `--dry-run`.
-   - Idempotent and resumable: a partial failure must not corrupt existing rows.
-   - Structured logging with progress, counts, and timing.
-
-## Constraints
-- Do NOT implement the scanner stages — Phase 2.
-- Do NOT delete `alpaca_client.py` / `stream_manager.py` yet; leave them untouched as a
-  working fallback until the scanner proves out.
-- All jobs must run standalone from CLI (this is what the Render cron will invoke).
-- Handle missing/null float gracefully — it will be absent for some tickers.
-- Tests use recorded fixtures only.
-
-## Definition of done
-1. `uv run python scripts/refresh_reference_data.py --tickers AAPL,MSFT --dry-run` works
-2. A full run populates all four tables without violating rate limits
-3. Re-running is idempotent (no duplicates, no corruption)
-4. The Stage-1 query (`float < 75M AND avg_volume_20d > 500K`) returns a sane candidate
-   count in well under a second
-5. Tests pass offline against fixtures
-6. Report: actual universe size, Stage-1 survivor count, full-run wall time, API calls
-   consumed, and how many tickers lacked float or sufficient intraday history
-````
-
----
-
-## Phase 2 — Scanner Pipeline
+## Phase 2 (V1) — Scanner pipeline (three stages + threshold profiles)
 
 **Status:** blocked by Phase 1
-**Depends on:** Phase 1
 
 ````
-# Phase 2 — The 3-stage pre-market scanner
+# Phase 2 — 3-stage scanner on free-tier data + fixtures
 
 ## Context
-Read `docs/CLAUDE.md` section 4 (full scanner spec) and `docs/PLAN.md` (Phase 2) first.
-Phase 1 is complete: `universe`, `reference_data`, and `premarket_volume_profile` are
-populated, and the FMP client with fixture replay exists.
+Read `docs/CLAUDE.md` section 4 (full scanner spec) and `docs/PLAN.md`. Phase 1 is done:
+FMP client + budget guard, populated `universe` and `reference_data`, fixture replay,
+pluggable RVOL (simple/normalized stub).
+
+V1 data reality: EOD only, mega-cap universe. Stage 1 and Stage 3 run on REAL data.
+Stage 2 (live gap + premarket RVOL) is implemented COMPLETELY but fed by fixtures /
+synthetic inputs until V2 provides real-time + intraday data.
 
 ## Scope
 
 1. **Scanner service** (`app/services/scanner/`)
-   - Stage 1: SQL candidate query against `reference_data` (float, avg volume, price floor).
-   - Stage 2: for each candidate compute `gap_pct` and time-of-day-normalized `rvol_pct`;
-     apply 3.0 ≤ gap ≤ 15.0 and rvol > 10.0.
-   - Stage 3: compute `nearest_resistance` (lowest of prior high / 20d high / SMA-50 /
-     SMA-200 that is ABOVE current price) and `upside_pct`; require ≥ 5.5.
-   - Risk filters: price floor, minimum dollar volume, market-wide tape check.
-   - All thresholds read from config — never hardcoded.
+   - Stage 1: SQL candidate query on `reference_data` (float, avg volume, price floor).
+   - Stage 2: gap_pct (3.0–15.0) + RVOL (>10%) via the RvolCalculator interface. Input
+     is a `MarketSnapshot` abstraction (price + accumulated volume per ticker) with two
+     providers: `FixtureSnapshotProvider` (V1) and a documented interface a future
+     `FmpLiveSnapshotProvider` (V2) will implement.
+   - Stage 3: nearest_resistance = lowest of {high_yesterday, high_20d, sma_50, sma_200}
+     ABOVE current price; upside_pct >= 5.5.
+   - Risk filters: price floor, min dollar volume, market-tape check (stub returning
+     neutral in V1, interface ready for V2).
 
-2. **Time-of-day-normalized RVOL**
-   - Accumulated premarket volume from 04:00 ET to now, divided by the expected
-     cumulative volume for this ticker at this clock time (from
-     `premarket_volume_profile`), × 100.
-   - Define explicit fallback behaviour when a ticker has no/insufficient profile:
-     skip it, or fall back to the simple full-day-average RVOL and FLAG the alert as
-     using a degraded metric. Document whichever you choose.
+2. **Threshold profiles** — critical for V1 demos
+   - `production`: the real spec (float < 75M, etc.).
+   - `demo`: loosened float cap (e.g. < 20B) so free-tier mega-caps can pass Stage 1
+     and the pipeline visibly fires end-to-end with real reference data.
+   - Profile selected per run; the profile name is stamped into `scan_runs` and onto
+     every alert payload it produces. Demo output must never be mistakable for real.
 
-3. **Clock and timezone handling — treat as correctness-critical**
-   - Inject the current time; no direct `datetime.now()` inside scanner logic.
-   - All market logic in `America/New_York`, converted explicitly. Render cron is UTC.
-   - Schedule generously in UTC and gate real work on a computed ET timestamp, so DST
-     transitions cannot shift the scan by an hour.
-   - Tests must cover both DST transitions.
+3. **Clock + timezone (correctness-critical)**
+   - Injectable clock; zero direct `datetime.now()` in scanner logic.
+   - All market logic in America/New_York; explicit conversion; DST transition tests
+     both directions.
 
-4. **Stateless scan runs**
-   - Each run recomputes accumulated volume from 04:00 ET by summing intraday bars.
-   - No state carried between cron invocations.
+4. **Observability** (`scan_runs`)
+   - started/finished, profile, per-stage survivor counts, API calls used, errors.
+   - "Failed scan" must be distinguishable from "zero candidates".
 
-5. **Observability** (`scan_runs`)
-   - Persist per run: start/end, per-stage survivor counts, API calls used, errors.
-   - A failed or empty scan must be distinguishable from "no candidates today" — this
-     is the single most important failure mode to make visible.
+5. **CLI** `scripts/run_scan.py`
+   - `--fixture`, `--profile demo|production`, `--at "2026-07-28 08:45 ET"`, `--dry-run`,
+     `--verbose`. Output to stdout/logs only — alert persistence is Phase 3.
 
-6. **CLI + cron entrypoint**
-   - `scripts/run_scan.py` with `--dry-run`, `--fixture`, `--at "2026-07-20 08:45 ET"`,
-     `--verbose`.
-   - Wire this as the Render cron command (replacing the Phase 0 stub); every 5 minutes,
-     04:00–09:25 ET.
-
-7. **Tests**
-   - Golden-case boundary tests: gap exactly 3.0 and 15.0, rvol exactly 10.0, upside
-     exactly 5.5 — pin inclusive vs exclusive behaviour deliberately.
-   - Full-pipeline fixture replay producing a deterministic candidate set.
-   - Degraded-path tests: missing profile, missing float, stale reference data, FMP
-     errors mid-scan.
+6. **Tests**
+   - Golden-case boundary tests: gap 3.0/15.0, rvol 10.0, upside 5.5 — pin
+     inclusive/exclusive deliberately and document the choice.
+   - Full-pipeline fixture run → deterministic candidate set.
+   - Degraded paths: missing float, missing profile data, budget exhausted mid-scan.
+   - DST tests.
 
 ## Constraints
-- Alerts are NOT yet persisted or broadcast — Phase 3. Output to logs/stdout for now.
-- No live API calls in tests.
-- The scan must complete well inside 5 minutes for the real candidate count.
-- If Stage 2 candidate volume risks breaching rate limits, batch and document the ceiling.
+- No alert persistence/broadcast yet (Phase 3). No dashboard changes.
+- No live FMP calls in tests; a manual `--dry-run` against live data is the only
+  live path, and it must respect the budget guard.
 
 ## Definition of done
-1. `uv run python scripts/run_scan.py --fixture --at "..."` produces a deterministic set
-2. All three stages have passing boundary tests
-3. DST transition tests pass
-4. `scan_runs` records a complete audit trail per run
-5. A dry run against live FMP at an arbitrary time completes within rate limits, and you
-   report: candidates per stage, wall time, and API calls consumed
+1. Fixture run at a fixed `--at` produces a deterministic, documented candidate set
+2. Demo-profile run against REAL reference data completes and (given loosened
+   thresholds + fixture snapshots) produces at least one Stage-3 survivor
+3. Boundary + DST + degraded-path tests pass; ruff clean
+4. `scan_runs` shows a complete audit trail including profile name
+5. Report: survivor counts per stage in both profiles, and anything blocking Phase 3
 ````
 
 ---
 
-## Phase 3 — Scoring, Alerts & Dashboard
+## Phase 3 (V1) — Scoring, alerts & dashboard
 
 **Status:** blocked by Phase 2
-**Depends on:** Phase 2
 
 ````
-# Phase 3 — Confidence scoring, alert delivery, dashboard rebuild
+# Phase 3 — Confidence scoring, alert delivery, dashboard rebuild (V1)
 
 ## Context
-Read `docs/CLAUDE.md` sections 1, 4.4 and `docs/PLAN.md` (Phase 3) first.
-Phase 2 is complete: the scanner produces qualified candidates.
+Read `docs/CLAUDE.md` sections 1, 4.4, and `docs/PLAN.md`. Phases 1–2 are done: the
+scanner produces qualified candidates (real Stage 1/3 data; fixture-fed Stage 2;
+demo/production profiles).
 
 ## Scope
 
 1. **Confidence score**
-   - Transparent weighted formula over available signals (gap position within the
-     3–15% band, rvol magnitude, upside headroom, liquidity, profile reliability).
-   - Weights as named constants in config with a documented rationale.
-   - Every score carries a breakdown of its contributing factors — the user must be able
-     to see WHY, not just a number.
-   - Mark the score PROVISIONAL in both API and UI until Phase 5 backtesting.
+   - Transparent weighted formula (gap position in band, rvol magnitude, upside
+     headroom, liquidity, data-quality/profile reliability). Weights as named config
+     constants with rationale comments.
+   - Every score carries a factor breakdown. API + UI label it PROVISIONAL
+     (unvalidated until V3 backtesting).
 
 2. **Alert model + persistence**
-   - Extend `alerts` to the v2 contract in `docs/CLAUDE.md` 4.4, with `scan_run_id` FK.
-   - Alembic migration. Deduplicate: one alert per ticker per session, updated in place
-     as later scans refine it, rather than spamming a new row every 5 minutes.
-   - Broadcast via the existing client WebSocket channel.
+   - Extend `alerts` to the v2 contract (`docs/CLAUDE.md` 4.4) + `scan_run_id` FK +
+     `profile` field. Alembic migration.
+   - Dedup: one alert per ticker per session, updated in place by later scans.
+   - Broadcast over the existing WebSocket channel.
 
 3. **API + contract**
-   - Endpoints to list/filter alerts for the current session, fetch a single alert with
-     its score breakdown, and list recent scan runs.
-   - Update `openapi/spec.yaml` and regenerate frontend TS types.
+   - Endpoints: list/filter session alerts; single alert with score breakdown; recent
+     scan runs. Update `openapi/spec.yaml`; regenerate TS types.
 
-4. **Dashboard rebuild (mobile-first — a phone is the primary device)**
-   - Alert card: ticker, gap%, RVOL, catalyst, confidence + breakdown, suggested entry
-     window, entry reference price, resistance and upside.
-   - Session view: today's candidates, sorted by confidence, updating live.
-   - Scan-run status: last successful scan time, per-stage counts, and a clear failure
-     state. "No candidates" must never look like "scanner broken", and vice versa.
-   - Settings: edit scanner thresholds without a redeploy.
-   - Retire or repurpose v1 pages that no longer apply (watchlist-era Rules page).
+4. **Dashboard rebuild (mobile-first — phone is the primary device)**
+   - Alert card: ticker, gap%, RVOL, catalyst (nullable), confidence + breakdown,
+     entry window, entry price, resistance, upside. Demo-profile alerts visibly badged.
+   - Session view sorted by confidence, live-updating.
+   - Scan-status panel: last successful scan, per-stage counts, explicit failure state.
+     "No candidates" and "scanner broken" must look DIFFERENT.
+   - Settings: edit thresholds + profile without redeploy.
+   - Retire/repurpose watchlist-era pages that no longer apply.
+   - Honest framing: candidates not predictions; not financial advice; provisional score.
 
-5. **Honest framing (non-negotiable)**
-   - UI states plainly: these are CANDIDATES meeting structural criteria, not predictions.
-   - Confidence is labelled provisional/unvalidated.
-   - A visible "not financial advice / decision-support only" note.
+5. **Cleanup**
+   - Wire the Render cron stub to `run_scan.py --profile production` (it will produce
+     zero candidates on free tier — that is correct and must display as such).
 
 ## Constraints
-- Do NOT add trade execution — ever.
-- Preserve the existing WebSocket transport; extend the payload, don't replace the channel.
-- Keep the frontend readable on a phone screen without horizontal scrolling.
+- No trade execution, ever. Preserve the WebSocket transport (extend payloads only).
+- Readable on a 390px viewport without horizontal scroll.
 
 ## Definition of done
-1. A fixture scan produces alerts persisted with full v2 fields and score breakdowns
-2. Alerts appear live in the dashboard via WebSocket
-3. Dashboard is usable on a 390px-wide viewport
-4. Threshold changes in Settings take effect on the next scan without redeploy
-5. Scan failure vs. zero candidates are visually distinct
-6. OpenAPI spec and generated types are in sync; tests pass
+1. Fixture scan persists alerts with full v2 fields + breakdowns; they appear live in
+   the dashboard
+2. Demo vs production profiles visually distinct end-to-end
+3. Threshold/profile changes in Settings take effect next scan without redeploy
+4. Scan failure vs zero candidates are distinct in the UI
+5. OpenAPI + TS types in sync; tests pass; usable on a phone
+6. This completes app V1 — report anything to verify before the Starter subscription
+   (feeds the two open FMP questions in PLAN.md)
 ````
 
 ---
 
-## Phases 4–6
+## Phase 4+ (V2 — FMP Starter) — not yet written
 
-Not yet written as prompts — their design depends on what Phases 1–3 reveal (especially
-FMP's real data depth). See `docs/PLAN.md` for scope:
-
-- **Phase 4 — Enrichment:** catalyst/news, sector relative strength, bid-ask spread,
-  short interest, halt risk, gap-and-go history.
-- **Phase 5 — Backtesting & calibration:** replace guessed confidence weights with
-  fitted ones. The spec explicitly requires this before the score can be trusted.
-- **Phase 6 — Hardening:** authentication, push notifications, cost/rate monitoring,
-  scan-failure alerting, MCP server decision.
-
-Write the Phase 4 prompt only after Phase 3 ships and the FMP data depth question
-(open item #3 in `docs/CLAUDE.md`) is settled.
+Written after V1 ships. Both former FMP open questions are answered (see PLAN.md top):
+no pre-market intraday on Starter (`extended=true` = Premium), and intraday access
+otherwise as the comparison table shows. V2 scope therefore centres on: universe
+expansion, live pre-market gap% via the pre/after-market quote endpoints, an explicitly
+flagged RVOL approximation behind the RvolCalculator interface, cron go-live, and
+observing whether volume conviction justifies the V3 (Premium) upgrade. Scope in
+`docs/PLAN.md` Phase 4.
 
 ---
 
-## Working Notes
+## Working notes
 
-- **One phase per session.** Long multi-phase sessions lose context and produce
-  half-migrated code.
-- **Verify "Definition of done" before advancing.** Each phase assumes the previous one
-  actually works, not that it was merely attempted.
-- **Never let CI touch the live FMP API.** Fixtures always — cost and flakiness both.
-- **`backup.sql` is stale.** Legacy alerts reference dead rule IDs. Don't restore it.
-- **Alpaca credentials still exist** in `.env`. Leave the v1 path working as a fallback
-  smoke test until the scanner is proven, then remove it deliberately in its own commit.
+- One phase per session; verify Definition of done before advancing.
+- The budget guard is the first thing built and the last thing bypassed — never exempt
+  a "quick test" from it.
+- CI never touches live FMP.
+- Demo-profile output must always be visibly labelled — in logs, DB, and UI.
+- Alpaca code is removed only after V2 goes live, in its own commit.

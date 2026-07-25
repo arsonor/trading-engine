@@ -82,3 +82,7 @@ frontend/build/
 *.tmp
 
 tmpclaude-*
+
+BUILD_PDF.md
+report.css
+PROJECT_REPORT.md
