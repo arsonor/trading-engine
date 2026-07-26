@@ -1,0 +1,15 @@
+{
+  "endpoint": "shares-float",
+  "params": {
+    "symbol": "__NOFLOAT__"
+  },
+  "status": 200,
+  "recorded_at": "2026-07-25T17:57:29.661200+00:00",
+  "note": "Synthetic: shares-float row with no float figures (null-tolerant path).",
+  "payload": [
+    {
+      "symbol": "__NOFLOAT__",
+      "date": "2026-07-24"
+    }
+  ]
+}

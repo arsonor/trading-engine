@@ -70,7 +70,16 @@ async def init_db() -> None:
     This function stays as a no-op hook so the lifespan wiring is unchanged; it also
     imports models so Base.metadata is populated for tests that call create_all.
     """
-    from app.models import Alert, Rule, Watchlist  # noqa: F401
+    from app.models import (  # noqa: F401
+        Alert,
+        ApiBudget,
+        PremarketVolumeProfile,
+        ReferenceData,
+        Rule,
+        ScanRun,
+        Universe,
+        Watchlist,
+    )
 
 
 async def check_db_connectivity() -> bool:

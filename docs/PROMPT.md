@@ -17,8 +17,21 @@ Reference: `docs/CLAUDE.md` (spec), `docs/PLAN.md` (roadmap + version ladder),
 
 ## Phase 1 (V1) — FMP client, API budget guard, reference-data pipeline
 
-**Status:** ready to run
-**Tier:** FMP Basic (free) — 250 calls/day hard cap, EOD data only, ~87 sample symbols
+**Status:** ✅ DONE (25 July 2026)
+**Tier:** FMP Basic (free) — 250 calls/day hard cap, EOD data only, 43 accessible symbols
+
+> **What the live free tier actually does** — measured, and it changed the design:
+> `batch-quote`, `stock-list` and `company-screener` are all **402 Restricted Endpoint**,
+> so the symbol probe falls back to one `quote` call per symbol. Restricted *symbols* also
+> return **402**, with a **plain-text** body, and both restriction messages contain
+> "not available under your current subscription" — only `"Restricted Endpoint:"` vs
+> `"Premium Query Parameter: 'Special Endpoint"` separates "fail the path" from "skip the
+> ticker". Full table in `docs/PLAN.md`.
+>
+> Delivered: `app/services/fmp/` (client, budget guard, fixtures, typed errors),
+> `app/services/reference/` (metrics, pipeline, probe), `app/services/scanner/rvol.py`,
+> five new tables, and CLIs `probe_fmp_symbols.py` / `refresh_reference_data.py` /
+> `fmp_budget.py` / `record_fmp_fixtures.py`. Prompt kept below for reference.
 
 ````
 # Phase 1 — FMP client + daily budget guard + nightly reference pipeline (free tier)
@@ -135,7 +148,12 @@ design (do not treat these as soft limits):
 
 ## Phase 2 (V1) — Scanner pipeline (three stages + threshold profiles)
 
-**Status:** blocked by Phase 1
+**Status:** ready to run
+
+> Phase 1 hands over: 43-symbol `universe`, populated `reference_data` (real EOD metrics
+> + billions-sized floats), the budget guard every FMP path must keep going through, the
+> fixture replay client, and `RvolCalculator`. The demo threshold profile is **required**,
+> not a nicety — every accessible symbol's float is ~1000x the 75M production cap.
 
 ````
 # Phase 2 — 3-stage scanner on free-tier data + fixtures

@@ -17,6 +17,7 @@ dependencies = [
     "alpaca-py>=0.43.2",
     "asyncpg>=0.31.0",
     "fastapi>=0.128.0",
+    "httpx>=0.28.1",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
     "python-dotenv>=1.2.1",
@@ -54,6 +55,14 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# N818 wants an "Error" suffix on exception names. The FMP/scanner error taxonomy is
+# named by docs/PROMPT.md (BudgetExhausted, RateLimited, SymbolNotAvailable, ...) and
+# those names are part of the phase contract, so the spec wins over the convention.
+"app/services/fmp/errors.py" = ["N818"]
+"app/services/fmp/fixtures.py" = ["N818"]
+"app/services/scanner/errors.py" = ["N818"]
 
 [tool.coverage.run]
 source = ["app"]

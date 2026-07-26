@@ -15,7 +15,12 @@ from app.core.database import Base
 
 # Import all models to register them with Base.metadata
 from app.models.alert import Alert  # noqa: F401
+from app.models.api_budget import ApiBudget  # noqa: F401
+from app.models.premarket_volume_profile import PremarketVolumeProfile  # noqa: F401
+from app.models.reference_data import ReferenceData  # noqa: F401
 from app.models.rule import Rule  # noqa: F401
+from app.models.scan_run import ScanRun  # noqa: F401
+from app.models.universe import Universe  # noqa: F401
 from app.models.watchlist import Watchlist  # noqa: F401
 
 # this is the Alembic Config object, which provides

@@ -1,0 +1,16 @@
+{
+  "endpoint": "historical-price-eod/full",
+  "params": {
+    "symbol": "__MALFORMED__"
+  },
+  "status": 200,
+  "recorded_at": "2026-07-25T17:57:29.576685+00:00",
+  "note": "Synthetic: row missing required fields with a non-numeric high.",
+  "payload": [
+    {
+      "date": "2026-07-24",
+      "open": 10.0,
+      "high": "not-a-number"
+    }
+  ]
+}

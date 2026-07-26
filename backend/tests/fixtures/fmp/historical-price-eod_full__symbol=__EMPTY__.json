@@ -1,0 +1,10 @@
+{
+  "endpoint": "historical-price-eod/full",
+  "params": {
+    "symbol": "__EMPTY__"
+  },
+  "status": 200,
+  "recorded_at": "2026-07-25T17:57:29.495682+00:00",
+  "note": "Synthetic: endpoint returns 200 with an empty list (no data for symbol).",
+  "payload": []
+}

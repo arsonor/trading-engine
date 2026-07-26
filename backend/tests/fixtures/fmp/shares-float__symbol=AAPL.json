@@ -1,0 +1,19 @@
+{
+  "endpoint": "shares-float",
+  "params": {
+    "symbol": "AAPL"
+  },
+  "status": 200,
+  "recorded_at": "2026-07-25T17:57:27.526688+00:00",
+  "note": "",
+  "payload": [
+    {
+      "symbol": "AAPL",
+      "date": "2026-07-25 00:09:06",
+      "freeFloat": 99.83000000136171,
+      "floatShares": 14662387495,
+      "outstandingShares": 14687356000,
+      "source": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000013/aapl-20260328.htm"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "endpoint": "shares-float",
+  "params": {
+    "symbol": "AMD"
+  },
+  "status": 200,
+  "recorded_at": "2026-07-25T17:57:29.249498+00:00",
+  "note": "",
+  "payload": [
+    {
+      "symbol": "AMD",
+      "date": "2026-07-25 13:43:21",
+      "freeFloat": 99.47203900404759,
+      "floatShares": 1621991068,
+      "outstandingShares": 1630600000,
+      "source": "https://www.sec.gov/Archives/edgar/data/2488/000000248826000076/amd-20260328.htm"
+    }
+  ]
+}

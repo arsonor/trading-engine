@@ -1,8 +1,9 @@
 """Pytest configuration and fixtures for testing."""
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import AsyncGenerator
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -10,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.database import Base, get_db
 from app.main import app
 from app.models import Alert, Rule, Watchlist
-
+from app.services.fmp.client import EP_EOD_FULL, EP_SHARES_FLOAT
+from app.services.fmp.fixtures import FixtureFmpClient, FixtureStore
 
 # Test database URL (in-memory SQLite)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -71,6 +73,78 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
         yield ac
 
     app.dependency_overrides.clear()
+
+
+# ============== FMP Fixture Replay ==============
+#
+# Tests never touch live FMP. These build a synthetic fixture store on disk so the replay
+# client — which shares every line of parsing and validation with the live client — can
+# serve deterministic responses.
+
+FIXTURE_LATEST_DATE = date(2026, 7, 24)
+FIXTURE_BAR_COUNT = 260
+FIXTURE_SYMBOLS = {
+    # symbol -> (starting close, float shares, outstanding shares)
+    "AAPL": (100.0, 15_000_000_000, 15_400_000_000),
+    "MSFT": (300.0, 7_400_000_000, 7_500_000_000),
+    # A deliberately low-float name so Stage-1-style queries have something to select.
+    "SMLC": (12.0, 40_000_000, 55_000_000),
+    # Present in EOD but with no float figures at all — the null-tolerant path.
+    "NOFLT": (25.0, None, None),
+}
+
+
+def make_eod_rows(close_start: float, count: int = FIXTURE_BAR_COUNT) -> list[dict]:
+    """Daily bars, newest first: close rises 0.5/session going forward, high = close + 1."""
+    rows = []
+    for i in range(count):
+        close = close_start + (count - 1 - i) * 0.5
+        rows.append(
+            {
+                "date": (FIXTURE_LATEST_DATE - timedelta(days=i)).isoformat(),
+                "open": round(close - 0.25, 4),
+                "high": round(close + 1.0, 4),
+                "low": round(close - 1.0, 4),
+                "close": round(close, 4),
+                "volume": 1_000_000,
+            }
+        )
+    return rows
+
+
+@pytest.fixture
+def fmp_fixture_store(tmp_path) -> FixtureStore:
+    """A fixture store populated with deterministic synthetic FMP recordings."""
+    store = FixtureStore(tmp_path / "fmp")
+
+    for symbol, (close_start, float_shares, outstanding) in FIXTURE_SYMBOLS.items():
+        store.save(EP_EOD_FULL, {"symbol": symbol}, 200, make_eod_rows(close_start))
+        row: dict = {"symbol": symbol, "date": FIXTURE_LATEST_DATE.isoformat()}
+        if float_shares is not None:
+            row["floatShares"] = float_shares
+            row["outstandingShares"] = outstanding
+        store.save(EP_SHARES_FLOAT, {"symbol": symbol}, 200, [row])
+
+    # A symbol the free tier refuses, recorded exactly as FMP reports it.
+    restricted = {"Error Message": "This endpoint is limited to the following symbols: AAPL, MSFT"}
+    for endpoint in (EP_EOD_FULL, EP_SHARES_FLOAT):
+        store.save(endpoint, {"symbol": "SNDL"}, 403, restricted)
+
+    # Degenerate responses that the pipeline has to survive.
+    store.save(EP_EOD_FULL, {"symbol": "EMPTY"}, 200, [])
+    store.save(
+        EP_EOD_FULL,
+        {"symbol": "BROKEN"},
+        200,
+        [{"date": "2026-07-24", "open": 10.0, "high": "not-a-number"}],
+    )
+    return store
+
+
+@pytest.fixture
+def fixture_fmp_client(fmp_fixture_store) -> FixtureFmpClient:
+    """Replay client backed by the synthetic store. Makes no network calls."""
+    return FixtureFmpClient(store=fmp_fixture_store)
 
 
 # ============== Sample Data Fixtures ==============

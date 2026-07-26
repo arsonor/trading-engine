@@ -1,0 +1,19 @@
+{
+  "endpoint": "shares-float",
+  "params": {
+    "symbol": "TSLA"
+  },
+  "status": 200,
+  "recorded_at": "2026-07-25T17:57:28.840868+00:00",
+  "note": "",
+  "payload": [
+    {
+      "symbol": "TSLA",
+      "date": "2026-07-25 17:42:10",
+      "freeFloat": 69.96034679906224,
+      "floatShares": 2763117028,
+      "outstandingShares": 3949547358,
+      "source": "https://www.sec.gov/Archives/edgar/data/1318605/000162828026049270/tsla-20260630.htm"
+    }
+  ]
+}

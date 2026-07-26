@@ -192,6 +192,16 @@ CORS_ORIGINS=http://localhost:5173
 SCANNER_TIMEZONE=America/New_York
 SCANNER_ENABLED=true
 
+# FMP client + budget guard (free tier is 250 calls/day with a hard 429)
+FMP_DAILY_BUDGET=230
+FMP_TIMEOUT_SECONDS=20
+FMP_MAX_RETRIES=3
+FMP_RETRY_BACKOFF_SECONDS=1.0
+FMP_FIXTURES_DIR=tests/fixtures/fmp
+
+# RVOL implementation: simple | normalized (normalized needs FMP Premium — app V3)
+RVOL_MODE=simple
+
 # Scanner thresholds (tunable without redeploy)
 SCAN_FLOAT_MAX=75000000
 SCAN_AVG_VOLUME_MIN=500000
@@ -234,6 +244,17 @@ npm run dev                                          # http://localhost:5173
 cd backend
 uv run python scripts/seed_test_alerts.py            # sample alerts into the dashboard
 uv run python scripts/run_scan.py --dry-run --fixture # scanner against recorded fixtures
+uv run python scripts/refresh_reference_data.py --fixture --force --tickers AAPL
+```
+
+### FMP data pipeline (spends the daily API budget)
+```bash
+cd backend
+uv run python scripts/fmp_budget.py                  # today's usage, ceiling, reset time
+uv run python scripts/probe_fmp_symbols.py           # discover the accessible universe
+uv run python scripts/probe_fmp_symbols.py --show-universe   # read it back, 0 calls
+uv run python scripts/refresh_reference_data.py --limit 10   # 2 calls per ticker
+uv run python scripts/record_fmp_fixtures.py         # re-record test fixtures (11 calls)
 ```
 
 ### Tests
@@ -277,8 +298,10 @@ Market-hours dependency makes naive testing impossible. Rules:
 
 ## 10. Open Items to Validate
 
-1. **Which FMP tier** bundles screener + all-shares-float + intraday extended-hours
-   history + news. Confirm before committing to a plan.
+1. ~~**Which FMP tier** bundles screener + all-shares-float + intraday extended-hours
+   history + news.~~ **RESOLVED** — see `docs/PLAN.md`. Free serves EOD + float + quote +
+   profile for 43 symbols; screener/stock-list/batch-quote need Starter; extended-hours
+   intraday (`extended=true`) needs Premium.
 2. **Premarket volume coverage**: does FMP's intraday data cover from 04:00 ET, or only
    from 08:00? This determines whether the full-early-session requirement is achievable
    as specified.

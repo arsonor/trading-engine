@@ -70,9 +70,38 @@ class Settings(BaseSettings):
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
     alpaca_data_feed: str = "iex"
 
-    # FMP — v2 data provider. Wired here; consumed by Phase 1+.
+    # FMP — v2 data provider.
     fmp_api_key: str = ""
     fmp_base_url: str = "https://financialmodelingprep.com"
+
+    # FMP client behaviour (Phase 1).
+    # The free (Basic) tier allows 250 calls/day with a hard 429 stop. The default
+    # ceiling is deliberately below that so manual testing cannot exhaust the real cap.
+    fmp_daily_budget: int = Field(
+        default=230,
+        ge=1,
+        description="Hard daily ceiling on FMP calls, enforced by the budget guard.",
+    )
+    fmp_timeout_seconds: float = 20.0
+    # Retries apply to transient failures ONLY (5xx / network). A 429 is never retried:
+    # on the free tier it means the daily cap is gone, and retrying makes it worse.
+    fmp_max_retries: int = 3
+    fmp_retry_backoff_seconds: float = 1.0
+    # Directory holding recorded FMP responses used by tests and `--fixture` runs.
+    fmp_fixtures_dir: str = "tests/fixtures/fmp"
+
+    # RVOL implementation selector. `normalized` needs `extended=true` pre-market
+    # intraday bars (FMP Premium / app V3) and raises FeatureRequiresIntraday in V1.
+    rvol_mode: str = "simple"
+
+    @field_validator("rvol_mode", mode="after")
+    @classmethod
+    def validate_rvol_mode(cls, v: str) -> str:
+        allowed = {"simple", "normalized"}
+        value = v.strip().lower()
+        if value not in allowed:
+            raise ValueError(f"RVOL_MODE must be one of {sorted(allowed)}, got {v!r}")
+        return value
 
     # Scanner thresholds (tunable without redeploy). Consumed by Phase 2+.
     scanner_timezone: str = "America/New_York"

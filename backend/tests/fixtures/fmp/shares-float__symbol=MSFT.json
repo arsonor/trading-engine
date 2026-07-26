@@ -1,0 +1,19 @@
+{
+  "endpoint": "shares-float",
+  "params": {
+    "symbol": "MSFT"
+  },
+  "status": 200,
+  "recorded_at": "2026-07-25T17:57:28.049924+00:00",
+  "note": "",
+  "payload": [
+    {
+      "symbol": "MSFT",
+      "date": "2026-07-23 22:09:35",
+      "freeFloat": 99.85106322601142,
+      "floatShares": 7417366336,
+      "outstandingShares": 7428430000,
+      "source": "https://www.sec.gov/Archives/edgar/data/789019/000119312526191507/msft-20260331.htm"
+    }
+  ]
+}

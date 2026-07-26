@@ -1,0 +1,19 @@
+{
+  "endpoint": "shares-float",
+  "params": {
+    "symbol": "NVDA"
+  },
+  "status": 200,
+  "recorded_at": "2026-07-25T17:57:28.441672+00:00",
+  "note": "",
+  "payload": [
+    {
+      "symbol": "NVDA",
+      "date": "2026-07-25 12:19:25",
+      "freeFloat": 95.88978985178152,
+      "floatShares": 23225466000,
+      "outstandingShares": 24221000000,
+      "source": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000052/nvda-20260426.htm"
+    }
+  ]
+}

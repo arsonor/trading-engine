@@ -1,0 +1,12 @@
+{
+  "endpoint": "historical-price-eod/full",
+  "params": {
+    "symbol": "SNDL"
+  },
+  "status": 402,
+  "recorded_at": "2026-07-25T17:57:29.434533+00:00",
+  "note": "",
+  "payload": {
+    "Error Message": "Premium Query Parameter: 'Special Endpoint : This value set for 'symbol' is not available under your current subscription please visit our subscription page to upgrade your plan at https://financialmodelingprep.com/"
+  }
+}
