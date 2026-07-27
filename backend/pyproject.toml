@@ -23,6 +23,9 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "pyyaml>=6.0.3",
     "sqlalchemy>=2.0.45",
+    # Explicit, not transitive: the scanner's correctness depends on resolving
+    # America/New_York, and Windows ships no system tz database for zoneinfo.
+    "tzdata>=2025.2",
     "uvicorn[standard]>=0.40.0",
     "websockets>=15.0.1",
     "mcp[cli]>=1.2.0",
@@ -63,6 +66,7 @@ ignore = ["E501"]
 "app/services/fmp/errors.py" = ["N818"]
 "app/services/fmp/fixtures.py" = ["N818"]
 "app/services/scanner/errors.py" = ["N818"]
+"app/services/scanner/snapshot.py" = ["N818"]
 
 [tool.coverage.run]
 source = ["app"]

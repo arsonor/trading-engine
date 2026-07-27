@@ -130,16 +130,34 @@ full-stack connectivity verified (API healthy, DB connected).
 data at exactly 2 calls each; same-day re-run cost 0 calls; a mid-run budget stop left
 completed tickers intact and skipped the rest; 464 tests green offline; ruff clean.
 
-### Phase 2 (V1) — Scanner Pipeline (fixture-fed where data is missing) ← NEXT
-- [ ] Stage 1 (SQL, real EOD data) and Stage 3 (resistance math, real EOD data) — fully live
-- [ ] Stage 2 (gap + RVOL) — implemented completely, fed by fixtures/synthetic data in V1
-- [ ] **Threshold profiles**: `production` (real spec) and `demo` (loosened float cap so
-      free-tier mega-caps pass and the pipeline demonstrably fires end-to-end)
-- [ ] Injectable clock, ET/DST handling, DST tests
-- [ ] `scan_runs` observability; golden-case boundary tests
-- [ ] CLI `scripts/run_scan.py --fixture --at ... --profile demo|production`
+### Phase 2 (V1) — Scanner Pipeline (fixture-fed where data is missing) — ✅ DONE
+- [x] Stage 1 (SQL on `reference_data`) and Stage 3 (resistance math) — fully live on real EOD data
+- [x] Stage 2 (gap + RVOL) — complete, fed by a snapshot scenario behind `SnapshotProvider`;
+      `FmpLiveSnapshotProvider` documented and stubbed for V2
+- [x] **Threshold profiles**: `production` and `demo` (loosens ONLY the float cap, so demo
+      exercises the same logic); `is_demo` stamped on runs, candidates and payloads
+- [x] Injectable clock, explicit ET conversion, DST tests both directions
+- [x] `scan_runs` observability with a four-state taxonomy; golden-case boundary tests
+- [x] CLI `scripts/run_scan.py --fixture --at ... --profile demo|production`
+- [x] Risk filters (live-price floor, dollar volume) + neutral market-tape stub
 
-### Phase 3 (V1) — Scoring, Alerts & Dashboard
+**Verified:** golden fixture run pins the full funnel (11 → 7 → 4 → 2, candidates
+`LOWF, EDGE`); demo profile on real reference data yields 3 Stage-3 survivors
+(ADBE 15.75%, BA 7.95%, C 6.05% upside); production yields 0 and reports it as a
+*successful scan of a quiet market*; 553 tests green; ruff clean.
+
+**Decisions made during the phase:**
+- **Percentages are compared at 6dp.** `105 * 1.055 - 105` computes an upside of
+  5.499999999999996, which on a raw float compare rejects a candidate whose card reads
+  "5.50%" against a documented 5.5% bar. Rounding first makes the displayed number and
+  the decision agree.
+- **Stage 3 runs on every pass, not only at 09:25.** It is pure arithmetic over data
+  already in memory and the upside figure is useful earlier; `is_final_pass` marks which
+  run is authoritative, and Phase 3 decides what to persist and push from that.
+- **`tzdata` is now an explicit dependency.** It was transitive (via pandas), and market
+  -time correctness should not rest on another package's dependency graph.
+
+### Phase 3 (V1) — Scoring, Alerts & Dashboard ← NEXT
 - [ ] Confidence score (transparent, config weights, labelled provisional)
 - [ ] v2 alert contract + persistence + WebSocket broadcast
 - [ ] Dashboard rebuild: mobile-first alert cards, scan-status view (failure ≠ zero

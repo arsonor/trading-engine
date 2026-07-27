@@ -113,6 +113,19 @@ class Settings(BaseSettings):
     scan_rvol_min: float = 10.0
     scan_upside_min: float = 5.5
     scan_price_floor: float = 2.0
+    # Liquidity floor in dollars (avg 20d volume x prior close). Guards against names
+    # that clear the share-count filter but are still untradeable in size.
+    scan_dollar_volume_min: float = 1_000_000.0
+
+    # Demo profile: loosens ONLY the float cap, so the free tier's mega-caps can reach
+    # Stage 1 and the pipeline can be seen firing end to end on real reference data.
+    # Every other threshold stays at its production value — the demo must exercise the
+    # real logic, not a different one.
+    scan_demo_float_max: int = 20_000_000_000
+    # Default threshold profile for scans that do not name one.
+    scan_profile: str = "production"
+    # Snapshot scenario feeding Stage 2 in V1 (no live pre-market data on the free tier).
+    scan_snapshot_fixture: str = "tests/fixtures/snapshots/demo_session.json"
 
     # CORS — Vercel frontend origin(s) go here in production, comma-separated or JSON array.
     # NoDecode disables pydantic-settings' JSON pre-parse so a plain comma list works.

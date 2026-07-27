@@ -1,0 +1,52 @@
+{
+  "name": "demo_session",
+  "description": "Authored pre-market scenario for DEMO runs against real free-tier reference data. Values are RELATIVE (gap_pct / premarket_volume_ratio) so the scenario stays meaningful after a nightly reference refresh: 'gaps up 7%' remains a 7% gap tomorrow, while a hardcoded price would silently drift out of the band. Every ticker here exercises a different branch of the funnel - see 'expectation' on each entry. NOT market data: these are constructed inputs standing in for the live pre-market feed V1 cannot access.",
+  "as_of": "2026-07-28T08:45:00-04:00",
+  "snapshots": {
+    "ADBE": {
+      "gap_pct": 7.0,
+      "premarket_volume_ratio": 0.25,
+      "expectation": "SURVIVOR - gaps into the space between high_20d and sma_200, leaving real headroom"
+    },
+    "BA": {
+      "gap_pct": 5.0,
+      "premarket_volume_ratio": 0.40,
+      "expectation": "SURVIVOR - clears sma_50/sma_200, nearest resistance is the distant high_20d"
+    },
+    "C": {
+      "gap_pct": 3.5,
+      "premarket_volume_ratio": 0.18,
+      "expectation": "SURVIVOR - modest gap, upside just over the 5.5% bar"
+    },
+    "AMZN": {
+      "gap_pct": 3.5,
+      "premarket_volume_ratio": 0.30,
+      "expectation": "REJECT at stage 3 - passes gap and rvol but sma_50 sits too close overhead"
+    },
+    "COST": {
+      "gap_pct": 3.2,
+      "premarket_volume_ratio": 0.22,
+      "expectation": "REJECT at stage 3 - gaps to just under a cluster of resistance, ~0.5% headroom"
+    },
+    "AAPL": {
+      "gap_pct": 5.0,
+      "premarket_volume_ratio": 0.35,
+      "expectation": "REJECT at stage 3 - gaps above every known level, so headroom is unmeasurable"
+    },
+    "CSCO": {
+      "gap_pct": 1.5,
+      "premarket_volume_ratio": 0.30,
+      "expectation": "REJECT at stage 2 - gap below the 3.0% floor"
+    },
+    "AMD": {
+      "gap_pct": 18.0,
+      "premarket_volume_ratio": 0.50,
+      "expectation": "REJECT at stage 2 - gap above the 15.0% ceiling (news-driven, not a clean setup)"
+    },
+    "BAC": {
+      "gap_pct": 4.0,
+      "premarket_volume_ratio": 0.05,
+      "expectation": "REJECT at stage 2 - gap is fine but only 5% relative volume, no conviction"
+    }
+  }
+}

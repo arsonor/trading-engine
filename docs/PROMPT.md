@@ -148,12 +148,18 @@ design (do not treat these as soft limits):
 
 ## Phase 2 (V1) — Scanner pipeline (three stages + threshold profiles)
 
-**Status:** ready to run
+**Status:** ✅ DONE (27 July 2026)
 
-> Phase 1 hands over: 43-symbol `universe`, populated `reference_data` (real EOD metrics
-> + billions-sized floats), the budget guard every FMP path must keep going through, the
-> fixture replay client, and `RvolCalculator`. The demo threshold profile is **required**,
-> not a nicety — every accessible symbol's float is ~1000x the 75M production cap.
+> Delivered: `app/services/scanner/` — `clock.py` (injectable clock, ET/DST),
+> `profiles.py` (production/demo), `snapshot.py` (`MarketSnapshot` + fixture provider +
+> documented V2 live stub), `stages.py`, `risk.py`, `pipeline.py` (+ `scan_runs`), plus
+> `scripts/run_scan.py` and two committed snapshot scenarios.
+>
+> Funnel on real free-tier reference data: **demo** 10 → 10 → 6 → 3 candidates
+> (ADBE/BA/C); **production** 10 → 0, correctly reported as a successful scan of a quiet
+> market rather than a failure. Boundary conventions are pinned in
+> `tests/unit/test_scanner_stages.py`; percentages compare at 6dp so the displayed number
+> and the pass/fail decision always agree.
 
 ````
 # Phase 2 — 3-stage scanner on free-tier data + fixtures
@@ -225,7 +231,16 @@ synthetic inputs until V2 provides real-time + intraday data.
 
 ## Phase 3 (V1) — Scoring, alerts & dashboard
 
-**Status:** blocked by Phase 2
+**Status:** ready to run
+
+> Phase 2 hands over: `Scanner.run()` returning a `ScanResult` whose `candidates` already
+> carry every field the section 4.4 alert contract needs except `catalyst` and
+> `confidence_score` (`Candidate.as_dict()` is the starting shape). `scan_runs` already
+> records the four-state taxonomy the scan-status panel must render — `completed`,
+> `failed`, `skipped`, `running` — so "no candidates" and "scanner broken" are already
+> distinct in the data. Demo runs are stamped `is_demo` at every level; the UI badge is
+> the last link in that chain. RVOL carries `is_approximate` + `rvol_detail` and the
+> dashboard must surface both.
 
 ````
 # Phase 3 — Confidence scoring, alert delivery, dashboard rebuild (V1)

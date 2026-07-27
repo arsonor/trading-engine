@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures for testing."""
 
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import AsyncGenerator
 
 import pytest
@@ -10,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.database import Base, get_db
 from app.main import app
-from app.models import Alert, Rule, Watchlist
+from app.models import Alert, ReferenceData, Rule, Universe, Watchlist
 from app.services.fmp.client import EP_EOD_FULL, EP_SHARES_FLOAT
 from app.services.fmp.fixtures import FixtureFmpClient, FixtureStore
+from app.services.scanner.snapshot import FixtureSnapshotProvider
 
 # Test database URL (in-memory SQLite)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -145,6 +147,78 @@ def fmp_fixture_store(tmp_path) -> FixtureStore:
 def fixture_fmp_client(fmp_fixture_store) -> FixtureFmpClient:
     """Replay client backed by the synthetic store. Makes no network calls."""
     return FixtureFmpClient(store=fmp_fixture_store)
+
+
+# ============== Scanner Golden Reference Data ==============
+#
+# Synthetic reference data whose every derived figure is an exact, hand-checkable number.
+# Pairs with tests/fixtures/snapshots/golden_session.json — see that file for the
+# expectation attached to each ticker, and test_scanner_pipeline.py for the full funnel.
+#
+# ticker  float   avg_vol    close_y  high_y  high_20d  sma_50  sma_200   what it proves
+# LOWF     40M    1,000,000   100.00  101.00   120.000   105.0    90.0    clean survivor
+# EDGE     40M    1,000,000   100.00  101.00   108.665    99.0    95.0    all three boundaries at once
+# BRKO     40M    1,000,000   100.00  101.00   104.000    99.0    95.0    gapped above every level
+# NEAR     40M    1,000,000   100.00  101.00   108.000    99.0    95.0    resistance too close
+# SLOW     40M    1,000,000   100.00  101.00   120.000    99.0    95.0    rvol exactly at threshold
+# FLAT     40M    1,000,000   100.00  101.00   120.000    99.0    95.0    gap under the floor
+# BLOW     40M    1,000,000   100.00  101.00   130.000    99.0    95.0    gap over the ceiling
+# BIGF    900M    1,000,000   100.00  101.00   120.000    99.0    95.0    float fails Stage 1
+# THIN     40M      400,000   100.00  101.00   120.000    99.0    95.0    avg volume fails Stage 1
+# NOFL     None   1,000,000   100.00  101.00   120.000    99.0    95.0    null float fails Stage 1
+# PENN     40M    1,000,000     1.50    1.55     2.000     1.6     1.4    price floor fails Stage 1
+
+GOLDEN_REFERENCE_ROWS = [
+    # (ticker, float, avg_vol, close_y, high_y, high_20d, sma_50, sma_200)
+    ("LOWF", 40_000_000, 1_000_000.0, 100.0, 101.0, 120.0, 105.0, 90.0),
+    ("EDGE", 40_000_000, 1_000_000.0, 100.0, 101.0, 108.665, 99.0, 95.0),
+    ("BRKO", 40_000_000, 1_000_000.0, 100.0, 101.0, 104.0, 99.0, 95.0),
+    ("NEAR", 40_000_000, 1_000_000.0, 100.0, 101.0, 108.0, 99.0, 95.0),
+    ("SLOW", 40_000_000, 1_000_000.0, 100.0, 101.0, 120.0, 99.0, 95.0),
+    ("FLAT", 40_000_000, 1_000_000.0, 100.0, 101.0, 120.0, 99.0, 95.0),
+    ("BLOW", 40_000_000, 1_000_000.0, 100.0, 101.0, 130.0, 99.0, 95.0),
+    ("BIGF", 900_000_000, 1_000_000.0, 100.0, 101.0, 120.0, 99.0, 95.0),
+    ("THIN", 40_000_000, 400_000.0, 100.0, 101.0, 120.0, 99.0, 95.0),
+    ("NOFL", None, 1_000_000.0, 100.0, 101.0, 120.0, 99.0, 95.0),
+    ("PENN", 40_000_000, 1_000_000.0, 1.5, 1.55, 2.0, 1.6, 1.4),
+]
+
+GOLDEN_SNAPSHOT_FILE = Path(__file__).parent / "fixtures" / "snapshots" / "golden_session.json"
+
+
+@pytest_asyncio.fixture
+async def golden_reference_data(test_session_factory):
+    """Seed `universe` + `reference_data` with the golden fixture set."""
+    async with test_session_factory() as session:
+        for ticker, float_shares, avg_vol, close_y, high_y, high20, sma50, sma200 in (
+            GOLDEN_REFERENCE_ROWS
+        ):
+            session.add(
+                Universe(ticker=ticker, is_active=True, is_accessible_free_tier=True)
+            )
+            session.add(
+                ReferenceData(
+                    ticker=ticker,
+                    static_float=float_shares,
+                    volume_avg_20d=avg_vol,
+                    price_close_yesterday=close_y,
+                    high_yesterday=high_y,
+                    high_20d=high20,
+                    sma_50=sma50,
+                    sma_200=sma200,
+                    bars_used=260,
+                    data_source="fixture",
+                    computed_at=datetime.utcnow(),
+                )
+            )
+        await session.commit()
+    return GOLDEN_REFERENCE_ROWS
+
+
+@pytest.fixture
+def golden_snapshot_provider() -> FixtureSnapshotProvider:
+    """Snapshot provider backed by the committed golden scenario."""
+    return FixtureSnapshotProvider(GOLDEN_SNAPSHOT_FILE)
 
 
 # ============== Sample Data Fixtures ==============

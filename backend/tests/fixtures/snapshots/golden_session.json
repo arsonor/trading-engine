@@ -1,0 +1,47 @@
+{
+  "name": "golden_session",
+  "description": "Deterministic scenario for the full-pipeline regression test. Prices and volumes are ABSOLUTE (not relative) so every derived figure is an exact, hand-checkable number - see tests/integration/test_scanner_pipeline.py for the expected funnel. Pairs with the synthetic reference data seeded by the `golden_reference_data` fixture; do not point this at real reference_data.",
+  "as_of": "2026-07-28T09:25:00-04:00",
+  "snapshots": {
+    "LOWF": {
+      "price": 105.0,
+      "premarket_volume": 250000,
+      "expectation": "SURVIVOR - gap 5.00%, rvol 25.00%, nearest resistance high_20d 120.00, upside 14.29%"
+    },
+    "EDGE": {
+      "price": 103.0,
+      "premarket_volume": 100001,
+      "expectation": "SURVIVOR - sits on three boundaries at once: gap exactly 3.0, rvol just over 10.0, upside exactly 5.5 (all inclusive-pass)"
+    },
+    "BRKO": {
+      "price": 105.0,
+      "premarket_volume": 250000,
+      "expectation": "REJECT stage 3 - price is above high_yesterday, high_20d, sma_50 and sma_200, so headroom is unmeasurable"
+    },
+    "NEAR": {
+      "price": 105.0,
+      "premarket_volume": 250000,
+      "expectation": "REJECT stage 3 - nearest resistance 108.00 gives 2.86% upside, under the 5.5% bar"
+    },
+    "SLOW": {
+      "price": 105.0,
+      "premarket_volume": 100000,
+      "expectation": "REJECT stage 2 - rvol exactly 10.00%, and the threshold is strictly greater than"
+    },
+    "FLAT": {
+      "price": 101.0,
+      "premarket_volume": 250000,
+      "expectation": "REJECT stage 2 - gap 1.00% is below the 3.0% floor"
+    },
+    "BLOW": {
+      "price": 120.0,
+      "premarket_volume": 250000,
+      "expectation": "REJECT stage 2 - gap 20.00% is above the 15.0% ceiling"
+    },
+    "BIGF": {
+      "price": 105.0,
+      "premarket_volume": 250000,
+      "expectation": "never reaches stage 2 - float 900M fails the Stage 1 SQL filter"
+    }
+  }
+}

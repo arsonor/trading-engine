@@ -18,6 +18,9 @@ class ScanRunStatus:
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    # Woke up outside the 04:00-09:25 ET window and did no work. Distinct from both
+    # "completed with zero candidates" and "failed".
+    SKIPPED = "skipped"
 
 
 class ScanRun(Base):

@@ -210,6 +210,12 @@ SCAN_GAP_MAX=15.0
 SCAN_RVOL_MIN=10.0
 SCAN_UPSIDE_MIN=5.5
 SCAN_PRICE_FLOOR=2.0
+SCAN_DOLLAR_VOLUME_MIN=1000000
+
+# Threshold profile: production | demo (demo loosens ONLY the float cap)
+SCAN_PROFILE=production
+SCAN_DEMO_FLOAT_MAX=20000000000
+SCAN_SNAPSHOT_FIXTURE=tests/fixtures/snapshots/demo_session.json
 
 # Frontend (Vercel env)
 VITE_API_URL=http://localhost:8000
@@ -243,8 +249,12 @@ npm run dev                                          # http://localhost:5173
 ```bash
 cd backend
 uv run python scripts/seed_test_alerts.py            # sample alerts into the dashboard
-uv run python scripts/run_scan.py --dry-run --fixture # scanner against recorded fixtures
 uv run python scripts/refresh_reference_data.py --fixture --force --tickers AAPL
+
+# Scanner (no API calls — Stage 2 is fed by a snapshot scenario)
+uv run python scripts/run_scan.py --fixture --profile demo --at "2026-07-28 08:45 ET"
+uv run python scripts/run_scan.py --fixture --profile production --at "2026-07-28 09:25"
+uv run python scripts/run_scan.py --fixture --profile demo --verbose   # per-ticker rejections
 ```
 
 ### FMP data pipeline (spends the daily API budget)
