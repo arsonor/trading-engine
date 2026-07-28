@@ -2,8 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import Layout from './components/common/Layout';
 import DashboardPage from './pages/DashboardPage';
-import AlertsPage from './pages/AlertsPage';
-import RulesPage from './pages/RulesPage';
+import ScansPage from './pages/ScansPage';
 import SettingsPage from './pages/SettingsPage';
 import { useAppStore } from './store';
 import './App.css';
@@ -12,10 +11,7 @@ function App() {
   const { checkHealth } = useAppStore();
 
   useEffect(() => {
-    // Check health on mount
     checkHealth();
-
-    // Check health periodically
     const interval = setInterval(checkHealth, 30000);
     return () => clearInterval(interval);
   }, [checkHealth]);
@@ -26,9 +22,13 @@ function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="alerts" element={<AlertsPage />} />
-          <Route path="rules" element={<RulesPage />} />
+          <Route path="scans" element={<ScansPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          {/* Watchlist-era routes are retired: the per-tick rule engine is no longer the
+              trigger path. The /rules API stays until Alpaca is removed in its own commit. */}
+          <Route path="alerts" element={<Navigate to="/dashboard" replace />} />
+          <Route path="rules" element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>

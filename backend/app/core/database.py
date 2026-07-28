@@ -7,35 +7,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import get_settings
+from app.core.db_connect import engine_kwargs
 
 settings = get_settings()
 
-
-def _build_engine_kwargs(database_url: str) -> dict:
-    """Build kwargs for create_async_engine.
-
-    Supabase's pooled endpoint (port 6543) runs pgBouncer in transaction mode, which
-    forbids prepared statements. asyncpg caches statements by default, so we disable
-    the cache when we detect the pooler host. Direct connections (port 5432) are fine.
-    """
-    kwargs: dict = {
-        "echo": settings.debug,
-        "future": True,
-        "pool_pre_ping": True,
-    }
-
-    is_pooler = ":6543" in database_url or "pooler.supabase" in database_url
-    if is_pooler:
-        kwargs["connect_args"] = {
-            # Disable asyncpg's prepared-statement cache for pgBouncer transaction mode.
-            "statement_cache_size": 0,
-            "prepared_statement_cache_size": 0,
-        }
-
-    return kwargs
-
-
-engine = create_async_engine(settings.database_url, **_build_engine_kwargs(settings.database_url))
+# pgBouncer handling lives in `app/core/db_connect.py` so Alembic uses the identical
+# rule. It previously lived here, which is exactly how `alembic/env.py` ended up with a
+# connection that had none of it.
+engine = create_async_engine(
+    settings.database_url,
+    **engine_kwargs(settings.database_url, echo=settings.debug),
+)
 
 async_session_maker = async_sessionmaker(
     engine,
@@ -76,6 +58,7 @@ async def init_db() -> None:
         PremarketVolumeProfile,
         ReferenceData,
         Rule,
+        ScannerSettings,
         ScanRun,
         Universe,
         Watchlist,

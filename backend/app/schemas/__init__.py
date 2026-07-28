@@ -12,6 +12,16 @@ from app.schemas.alert import (
 from app.schemas.common import ErrorResponse, HealthResponse, HealthStatus
 from app.schemas.market_data import Bar, MarketData, Timeframe
 from app.schemas.rule import Rule, RuleCreate, RuleType, RuleUpdate
+from app.schemas.scanner import (
+    ScannerAlert,
+    ScannerAlertListResponse,
+    ScannerStatus,
+    ScanRunOut,
+    ScoreBreakdownOut,
+    ScoreFactorOut,
+    ThresholdSettings,
+    ThresholdSettingsUpdate,
+)
 from app.schemas.watchlist import WatchlistCreate, WatchlistItem
 
 __all__ = [
@@ -36,6 +46,15 @@ __all__ = [
     "RuleCreate",
     "RuleType",
     "RuleUpdate",
+    # Scanner (v2)
+    "ScanRunOut",
+    "ScannerAlert",
+    "ScannerAlertListResponse",
+    "ScannerStatus",
+    "ScoreBreakdownOut",
+    "ScoreFactorOut",
+    "ThresholdSettings",
+    "ThresholdSettingsUpdate",
     # Watchlist
     "WatchlistCreate",
     "WatchlistItem",

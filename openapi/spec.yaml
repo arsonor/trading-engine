@@ -519,6 +519,218 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  # ===========================================================================
+  # v2 pre-market scanner
+  # ===========================================================================
+  /scanner/alerts:
+    get:
+      summary: List scanner alerts for a trading session
+      description: |
+        Alerts for one pre-market session, ordered by confidence (highest first).
+        Defaults to the most recent session with alerts.
+
+        One alert per ticker per session: scans run every 5 minutes and update the
+        same row in place rather than appending a new alert each pass.
+      operationId: listScannerAlerts
+      tags:
+        - Scanner
+      parameters:
+        - name: session_date
+          in: query
+          description: ET trading session. Defaults to the latest session with alerts.
+          schema:
+            type: string
+            format: date
+        - name: profile
+          in: query
+          description: Filter by threshold profile (production | demo)
+          schema:
+            type: string
+        - name: unread_only
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Session alerts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScannerAlertListResponse'
+
+  /scanner/alerts/{alert_id}:
+    get:
+      summary: Get one scanner alert with its full score breakdown
+      operationId: getScannerAlert
+      tags:
+        - Scanner
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Alert detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScannerAlert'
+        '404':
+          description: Alert not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /scanner/alerts/{alert_id}/read:
+    post:
+      summary: Mark a scanner alert as read
+      operationId: markScannerAlertRead
+      tags:
+        - Scanner
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Updated alert
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScannerAlert'
+        '404':
+          description: Alert not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /scanner/scan-runs:
+    get:
+      summary: Recent scan runs
+      operationId: listScanRuns
+      tags:
+        - Scanner
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Scan runs, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ScanRun'
+
+  /scanner/status:
+    get:
+      summary: Scanner health and last-run state
+      description: |
+        Distinguishes a scan that found nothing from a scan that broke. These must
+        never be rendered the same way: a quiet market is a working scanner, a failed
+        scan is an outage.
+      operationId: getScannerStatus
+      tags:
+        - Scanner
+      responses:
+        '200':
+          description: Scanner status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScannerStatus'
+
+  /scanner/settings:
+    get:
+      summary: Effective scanner thresholds
+      description: Environment defaults with any stored overrides applied.
+      operationId: getScannerSettings
+      tags:
+        - Scanner
+      responses:
+        '200':
+          description: Effective thresholds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThresholdSettings'
+    put:
+      summary: Update scanner thresholds
+      description: |
+        Persists threshold/profile edits. They take effect on the next scan with no
+        redeploy. Invalid combinations are rejected rather than silently producing
+        zero candidates forever.
+      operationId: updateScannerSettings
+      tags:
+        - Scanner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThresholdSettingsUpdate'
+      responses:
+        '200':
+          description: Updated thresholds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThresholdSettings'
+        '422':
+          description: Invalid threshold combination
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: Reset thresholds to environment defaults
+      operationId: resetScannerSettings
+      tags:
+        - Scanner
+      responses:
+        '200':
+          description: Thresholds after reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThresholdSettings'
+
+  /scanner/settings/fields:
+    get:
+      summary: Which thresholds the Settings screen may edit
+      operationId: listOverridableFields
+      tags:
+        - Scanner
+      responses:
+        '200':
+          description: Overridable field names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
 components:
   schemas:
     HealthResponse:
@@ -1093,3 +1305,365 @@ components:
                   type: string
                 message:
                   type: string
+
+    # =========================================================================
+    # v2 pre-market scanner
+    # =========================================================================
+    ScoreFactor:
+      type: object
+      description: One component of a confidence score, with its arithmetic exposed.
+      required:
+        - name
+        - normalized
+        - weight
+        - contribution
+        - detail
+      properties:
+        name:
+          type: string
+          example: upside_headroom
+        raw_value:
+          type: number
+          nullable: true
+        normalized:
+          type: number
+          description: 0-1 score for this factor
+        weight:
+          type: number
+        contribution:
+          type: number
+          description: normalized * weight
+        detail:
+          type: string
+          description: Human-readable justification, shown in the UI breakdown.
+        is_fallback:
+          type: boolean
+          default: false
+          description: True when this factor used a fallback because inputs were missing.
+
+    ScoreBreakdown:
+      type: object
+      description: >
+        The full justification for a confidence score. is_provisional is always true in
+        V1/V2 - the weights are reasoned assumptions, not backtested parameters. Clients
+        MUST surface that; a 0-1 number reads as authoritative whether or not it has
+        earned it.
+      required:
+        - score
+        - is_provisional
+      properties:
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        is_provisional:
+          type: boolean
+          default: true
+        profile:
+          type: string
+        uses_fallback:
+          type: boolean
+          default: false
+        factors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScoreFactor'
+        notes:
+          type: array
+          items:
+            type: string
+
+    ScannerAlert:
+      type: object
+      description: >
+        A pre-market scanner alert (docs/CLAUDE.md section 4.4). nearest_resistance and
+        upside_pct are nullable BY DESIGN. Stage 3 currently rejects tickers trading
+        above all four resistance levels, so today they are always populated - but that
+        is a deferred strategy decision which may be reversed. Clients must render a
+        "no overhead resistance" state rather than assuming a number is present.
+      required:
+        - id
+        - ticker
+      properties:
+        id:
+          type: integer
+        ticker:
+          type: string
+          example: ADBE
+        session_date:
+          type: string
+          format: date
+          nullable: true
+        scan_timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        scan_run_id:
+          type: integer
+          nullable: true
+        gap_pct:
+          type: number
+          nullable: true
+        rvol_pct:
+          type: number
+          nullable: true
+        rvol_mode:
+          type: string
+          nullable: true
+        rvol_is_approximate:
+          type: boolean
+          default: false
+          description: >
+            True when RVOL compares partial pre-market volume against a full-day average
+            instead of a time-of-day profile. Must be surfaced in the UI.
+        catalyst:
+          type: string
+          nullable: true
+          description: News/earnings tag. Always null in V1 - catalyst tagging is Phase 4.
+        confidence_score:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 1
+        score_breakdown:
+          $ref: '#/components/schemas/ScoreBreakdown'
+        suggested_entry_window:
+          type: string
+          nullable: true
+        entry_reference_price:
+          type: number
+          nullable: true
+        nearest_resistance:
+          type: number
+          nullable: true
+          description: Lowest level above the current price. NULL when there is none.
+        resistance_source:
+          type: string
+          nullable: true
+        upside_pct:
+          type: number
+          nullable: true
+          description: Percent to nearest resistance. NULL when headroom is unmeasured.
+        profile:
+          type: string
+          nullable: true
+        is_demo:
+          type: boolean
+          default: false
+          description: Loosened thresholds - illustrative only, never a real signal.
+        is_final_pass:
+          type: boolean
+          default: false
+          description: True when produced by the authoritative 09:25 ET confirmation run.
+        is_read:
+          type: boolean
+          default: false
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ScannerAlertListResponse:
+      type: object
+      required:
+        - items
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScannerAlert'
+        total:
+          type: integer
+        session_date:
+          type: string
+          format: date
+          nullable: true
+        has_demo_alerts:
+          type: boolean
+          default: false
+
+    ScanRun:
+      type: object
+      required:
+        - id
+        - status
+        - started_at
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+          enum: [completed, failed, skipped, running]
+          description: Never conflate these - failed is an outage, completed is not.
+        profile:
+          type: string
+          nullable: true
+        is_demo:
+          type: boolean
+          default: false
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        api_calls_used:
+          type: integer
+          default: 0
+        error:
+          type: string
+          nullable: true
+        stage_counts:
+          type: object
+          nullable: true
+          additionalProperties: true
+
+    ScannerStatus:
+      type: object
+      description: >
+        Everything the scan-status panel needs to distinguish a quiet market from a
+        broken scanner. state is the field that carries that distinction.
+      required:
+        - is_healthy
+        - state
+      properties:
+        last_run:
+          $ref: '#/components/schemas/ScanRun'
+        last_successful_run:
+          $ref: '#/components/schemas/ScanRun'
+        is_healthy:
+          type: boolean
+        state:
+          type: string
+          enum:
+            - never_run
+            - ok_with_candidates
+            - ok_no_candidates
+            - failed
+            - skipped
+            - unknown
+        detail:
+          type: string
+        session_date:
+          type: string
+          format: date
+          nullable: true
+        alert_count:
+          type: integer
+          default: 0
+        recent_runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScanRun'
+
+    ThresholdSettings:
+      type: object
+      required:
+        - profile
+        - float_max
+        - avg_volume_min
+        - gap_min
+        - gap_max
+        - rvol_min
+        - upside_min
+        - price_floor
+        - dollar_volume_min
+      properties:
+        profile:
+          type: string
+        is_demo:
+          type: boolean
+          default: false
+        float_max:
+          type: integer
+        avg_volume_min:
+          type: number
+        gap_min:
+          type: number
+        gap_max:
+          type: number
+        rvol_min:
+          type: number
+        upside_min:
+          type: number
+        price_floor:
+          type: number
+        dollar_volume_min:
+          type: number
+        overrides:
+          type: object
+          additionalProperties: true
+          description: Keys the user pinned; everything else comes from the environment.
+        description:
+          type: string
+
+    ThresholdSettingsUpdate:
+      type: object
+      description: All fields optional; only supplied keys are pinned.
+      properties:
+        profile:
+          type: string
+          enum: [production, demo]
+        float_max:
+          type: integer
+          minimum: 0
+        avg_volume_min:
+          type: number
+          minimum: 0
+        gap_min:
+          type: number
+          minimum: 0
+        gap_max:
+          type: number
+          minimum: 0
+        rvol_min:
+          type: number
+          minimum: 0
+        upside_min:
+          type: number
+          minimum: 0
+        price_floor:
+          type: number
+          minimum: 0
+        dollar_volume_min:
+          type: number
+          minimum: 0
+
+    WebSocketScanAlertsMessage:
+      allOf:
+        - $ref: '#/components/schemas/WebSocketServerMessage'
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - scan_alerts
+            data:
+              type: object
+              properties:
+                session_date:
+                  type: string
+                  format: date
+                scan_run_id:
+                  type: integer
+                  nullable: true
+                profile:
+                  type: string
+                is_demo:
+                  type: boolean
+                is_final_pass:
+                  type: boolean
+                scan_timestamp:
+                  type: string
+                  format: date-time
+                alerts:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ScannerAlert'
+

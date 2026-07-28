@@ -11,6 +11,31 @@
 # UTC-pinned schedule silently shifts by one hour twice a year — the scanner
 # code itself (Phase 2) must convert to ET and gate real work on the ET clock.
 # The schedule below is a generous placeholder for the stub only.
+#
+# ---------------------------------------------------------------------------
+# Supabase endpoints — which service uses which port
+# ---------------------------------------------------------------------------
+#   Transaction pooler   aws-<region>.pooler.supabase.com:6543  -> DATABASE_URL
+#       App runtime and the cron job. Many short queries multiplexed over few
+#       server connections; pgBouncer returns the server connection to the pool
+#       after every transaction.
+#
+#   Session pooler       aws-<region>.pooler.supabase.com:5432  -> MIGRATION_DATABASE_URL
+#       `alembic upgrade head`. The server connection is held for the whole
+#       client session, which is what DDL and Alembic's version bookkeeping
+#       assume. This is the endpoint Supabase documents for migrations.
+#
+# Both endpoints are made pgBouncer-safe in code by `app/core/db_connect.py`
+# (statement caches off + UUID prepared-statement names), so migrations work
+# against 6543 too — 5432 is simply the correct endpoint for DDL.
+#
+# HISTORY — do not "simplify" this back: the comment here used to claim "the
+# engine detects the pooler host and disables the prepared-statement cache
+# automatically". That was true of the APP engine and false of Alembic, which
+# built its own engine via async_engine_from_config and applied none of it:
+#   asyncpg.exceptions.DuplicatePreparedStatementError:
+#   prepared statement "__asyncpg_stmt_1__" already exists
+# Both paths now import the same helper. Two copies of that rule will drift.
 
 services:
   # Backend API + client WebSocket (always-on)
@@ -21,6 +46,12 @@ services:
     region: frankfurt
     buildCommand: |
       cd backend && pip install -e .
+    # Migrations run on every container start. This is a deliberate trade-off, not an
+    # oversight — see "Migration strategy" in README.md. Two mitigations make it safe:
+    # migrations take a Postgres advisory lock (alembic/env.py) so concurrent starts
+    # serialize rather than race, and they target the session pooler.
+    # If this service ever scales past one instance, or boot latency starts to matter,
+    # move this to a pre-deploy step and drop it from startCommand.
     startCommand: |
       cd backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -30,11 +61,16 @@ services:
         value: production
       - key: DEBUG
         value: "false"
-      # Supabase Postgres. Use the *pooled* endpoint (host: aws-*.pooler.supabase.com, port 6543)
-      # for the app so pgBouncer transaction mode handles connection churn. The engine
-      # detects the pooler host and disables asyncpg's prepared-statement cache automatically.
-      # Set this in the Render dashboard (marked sync: false to keep it out of the blueprint).
+      # App runtime: TRANSACTION pooler, port 6543.
+      #   postgresql+asyncpg://postgres.<ref>:<pw>@aws-<region>.pooler.supabase.com:6543/postgres
+      # Set in the Render dashboard (sync: false keeps credentials out of the blueprint).
       - key: DATABASE_URL
+        sync: false
+      # Migrations: SESSION pooler, port 5432 — same host, different port.
+      #   postgresql+asyncpg://postgres.<ref>:<pw>@aws-<region>.pooler.supabase.com:5432/postgres
+      # Optional: if unset, Alembic falls back to DATABASE_URL, which also works but is
+      # not the endpoint Supabase intends for DDL.
+      - key: MIGRATION_DATABASE_URL
         sync: false
       # FMP — v2 data provider. Consumed by Phase 1+.
       - key: FMP_API_KEY
@@ -54,10 +90,21 @@ services:
         sync: false
     healthCheckPath: /health
 
-  # Pre-market scanner cron (stub — Phase 0)
-  # Fires every 5 minutes 09:00–14:30 UTC as a placeholder covering the widest
-  # possible ET pre-market window across DST. The stub just logs and exits;
-  # Phase 2 will replace the entrypoint with the real scanner and gate on ET.
+  # Pre-market scanner cron (wired to the real scanner — Phase 3)
+  #
+  # The schedule is deliberately GENEROUS in UTC: 09:00–14:30 UTC covers the widest
+  # possible 04:00–09:25 ET window across both DST offsets. The scanner then gates the
+  # actual work on a computed ET timestamp and records `skipped` for wake-ups outside
+  # the window. Tightening this schedule to "the right" UTC hours would reintroduce the
+  # twice-yearly one-hour drift that the ET gate exists to eliminate.
+  #
+  # `--profile production` on the free FMP tier produces ZERO candidates: every
+  # accessible symbol is a mega-cap whose float is ~1000x the 75M cap. That is correct
+  # behaviour, is recorded as a *successful* scan of a quiet market, and the dashboard
+  # displays it as such. It is not a misconfiguration.
+  #
+  # `--fixture` is still required because V1 has no live pre-market data source. It is
+  # dropped at V2 (FMP Starter), when FmpLiveSnapshotProvider replaces the scenario file.
   - type: cron
     name: trading-engine-premarket-scan
     runtime: python
@@ -67,17 +114,25 @@ services:
     buildCommand: |
       cd backend && pip install -e .
     startCommand: |
-      cd backend && python scripts/run_premarket_scan.py
+      cd backend && python scripts/run_scan.py --fixture --profile production
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.12"
       - key: APP_ENV
         value: production
-      # For migrations the cron would need the *direct* Supabase endpoint (port 5432),
-      # not the pooler. Not required for the stub — wire real values in Phase 1+.
+      # The cron writes alerts and scan_runs, so it needs the same Postgres the API uses:
+      # the TRANSACTION pooler (port 6543). The cron does NOT run migrations, so it needs
+      # no MIGRATION_DATABASE_URL.
       - key: DATABASE_URL
         sync: false
       - key: FMP_API_KEY
         sync: false
       - key: FMP_BASE_URL
         value: https://financialmodelingprep.com
+      # Keep the cron's budget accounting identical to the API's.
+      - key: FMP_DAILY_BUDGET
+        value: "230"
+      - key: RVOL_MODE
+        value: simple
+      - key: SCAN_PROFILE
+        value: production

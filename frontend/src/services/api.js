@@ -33,7 +33,21 @@ api.interceptors.response.use(
   }
 );
 
-// Alerts API
+// Scanner API (v2) — the pre-market scanner.
+export const scannerApi = {
+  // Session alerts, strongest confidence first. Omit sessionDate for the latest session.
+  listAlerts: (params = {}) => api.get('/scanner/alerts', { params }),
+  getAlert: (id) => api.get(`/scanner/alerts/${id}`),
+  markRead: (id) => api.post(`/scanner/alerts/${id}/read`),
+  // Distinguishes a quiet market from a broken scanner — see `state`.
+  getStatus: () => api.get('/scanner/status'),
+  listScanRuns: (params = {}) => api.get('/scanner/scan-runs', { params }),
+  getSettings: () => api.get('/scanner/settings'),
+  updateSettings: (data) => api.put('/scanner/settings', data),
+  resetSettings: () => api.delete('/scanner/settings'),
+};
+
+// Alerts API (v1 rule engine — retained until Alpaca is removed)
 export const alertsApi = {
   list: (params = {}) => api.get('/alerts', { params }),
   get: (id) => api.get(`/alerts/${id}`),

@@ -20,11 +20,13 @@ from _bootstrap import configure_logging
 
 from app.config import get_settings
 from app.models.scan_run import ScanRunStatus
+from app.services.alerts import ScannerAlertService
 from app.services.scanner.candidate import STAGE_2, STAGE_3, STAGE_RISK
 from app.services.scanner.clock import FixedClock, SystemClock, describe, parse_scan_time
 from app.services.scanner.pipeline import Scanner, ScanResult
-from app.services.scanner.profiles import available_profiles, get_profile
+from app.services.scanner.profiles import available_profiles
 from app.services.scanner.rvol import get_rvol_calculator
+from app.services.scanner.settings_store import ScannerSettingsStore
 from app.services.scanner.snapshot import FixtureSnapshotProvider
 
 DEMO_BANNER = "!" * 78
@@ -133,8 +135,11 @@ def _print_result(result: ScanResult, verbose: bool) -> None:
 
 
 async def main(args: argparse.Namespace) -> int:
+    # Resolve through the settings store, not get_profile(), so the layering holds:
+    # env defaults -> stored overrides (edited in Settings) -> explicit --profile.
+    # Calling get_profile() here would silently ignore every saved threshold edit.
     try:
-        profile = get_profile(args.profile)
+        profile = await ScannerSettingsStore().resolve_profile(args.profile)
     except ValueError as exc:
         print(f"Error: {exc}")
         return 1
@@ -180,6 +185,17 @@ async def main(args: argparse.Namespace) -> int:
     )
     _print_result(result, args.verbose)
 
+    # Persist + broadcast unless this is a dry run or --no-persist was passed.
+    if not args.dry_run and not args.no_persist and result.succeeded:
+        report = await ScannerAlertService().persist_scan_result(result)
+        print()
+        print("Alert delivery")
+        print("-" * 78)
+        print(f"  Created          : {len(report.created)}  {', '.join(report.created) or '-'}")
+        print(f"  Updated in place : {len(report.updated)}  {', '.join(report.updated) or '-'}")
+        print(f"  Broadcast        : {report.broadcast} alert(s) on the 'alerts' channel")
+        print(f"  Session          : {report.session_date}")
+
     if result.status == ScanRunStatus.FAILED:
         return 2
     return 0
@@ -199,7 +215,12 @@ if __name__ == "__main__":
     parser.add_argument("--at", help='Scan moment in ET, e.g. "2026-07-28 08:45 ET"')
     parser.add_argument("--tickers", help="Restrict the scan to these tickers")
     parser.add_argument(
-        "--dry-run", action="store_true", help="Do not write a scan_runs row"
+        "--dry-run", action="store_true", help="Do not write a scan_runs row or persist alerts"
+    )
+    parser.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="Run and record the scan, but do not persist or broadcast alerts",
     )
     parser.add_argument(
         "--ignore-window",

@@ -231,16 +231,19 @@ synthetic inputs until V2 provides real-time + intraday data.
 
 ## Phase 3 (V1) — Scoring, alerts & dashboard
 
-**Status:** ready to run
+**Status:** ✅ DONE (28 July 2026) — **this completes app V1.**
 
-> Phase 2 hands over: `Scanner.run()` returning a `ScanResult` whose `candidates` already
-> carry every field the section 4.4 alert contract needs except `catalyst` and
-> `confidence_score` (`Candidate.as_dict()` is the starting shape). `scan_runs` already
-> records the four-state taxonomy the scan-status panel must render — `completed`,
-> `failed`, `skipped`, `running` — so "no candidates" and "scanner broken" are already
-> distinct in the data. Demo runs are stamped `is_demo` at every level; the UI badge is
-> the last link in that chain. RVOL carries `is_approximate` + `rvol_detail` and the
-> dashboard must surface both.
+> Delivered: `app/services/scanner/scoring.py` (5-factor provisional score with a
+> null-safe upside fallback), `app/services/scanner/settings_store.py` (redeploy-free
+> threshold edits), `app/services/alerts/` (dedup + broadcast), `app/api/v1/scanner.py`
+> (7 endpoints), the extended `alerts` table + `scanner_settings`, and a rebuilt
+> mobile-first dashboard (`Candidates` / `Scans` / `Settings`). Watchlist-era pages are
+> retired; the `/rules` API stays until Alpaca is removed.
+>
+> Verified in a browser: demo scan → 3 candidates with breakdowns, live over WebSocket
+> with no reload; a forced failure renders as a red "SCANNER FAILING" panel that is
+> visually unmistakable from the grey "quiet market" state; no horizontal scroll at 390px.
+> 618 backend + 74 frontend tests green.
 
 ````
 # Phase 3 — Confidence scoring, alert delivery, dashboard rebuild (V1)

@@ -1,120 +1,124 @@
+/**
+ * App shell.
+ *
+ * Mobile-first: the nav is a bottom tab bar on phones (thumb-reachable, the primary
+ * device per the spec) and moves inline on wider screens. Nothing here may exceed the
+ * viewport width at 390px.
+ *
+ * The Rules page is gone from the nav: the per-tick YAML rule engine is no longer the
+ * trigger path. Its API and route survive until Alpaca is removed in its own commit.
+ */
+
 import { Outlet, NavLink } from 'react-router-dom';
 import { useEffect } from 'react';
-import { useAppStore, useAlertsStore } from '../../store';
+import { useAppStore, useScannerStore } from '../../store';
 import useWebSocket from '../../hooks/useWebSocket';
 
 const navItems = [
-  { path: '/dashboard', label: 'Dashboard', icon: '📊' },
-  { path: '/alerts', label: 'Alerts', icon: '🔔' },
-  { path: '/rules', label: 'Rules', icon: '⚙️' },
-  { path: '/settings', label: 'Settings', icon: '🔧' },
+  { path: '/dashboard', label: 'Candidates', icon: '◎' },
+  { path: '/scans', label: 'Scans', icon: '◷' },
+  { path: '/settings', label: 'Settings', icon: '⚙' },
 ];
 
 function Layout() {
   const { healthStatus, setConnected } = useAppStore();
-  const { addAlert, fetchStats } = useAlertsStore();
+  const { applyScanBroadcast, fetchStatus } = useScannerStore();
   const { isConnected, lastMessage, subscribe } = useWebSocket();
 
-  // Update connection state
   useEffect(() => {
     setConnected(isConnected);
   }, [isConnected, setConnected]);
 
-  // Subscribe to alerts when connected
   useEffect(() => {
-    if (isConnected) {
-      subscribe('alerts');
-    }
+    if (isConnected) subscribe('alerts');
   }, [isConnected, subscribe]);
 
-  // Handle incoming WebSocket messages
+  // A scan push replaces the session's alert list and refreshes status — the scan that
+  // produced the alerts also changed whether the scanner is considered healthy.
   useEffect(() => {
-    if (lastMessage?.type === 'alert') {
-      addAlert(lastMessage.data);
-      fetchStats();
+    if (lastMessage?.type === 'scan_alerts') {
+      applyScanBroadcast(lastMessage.data);
+      fetchStatus();
     }
-  }, [lastMessage, addAlert, fetchStats]);
+  }, [lastMessage, applyScanBroadcast, fetchStatus]);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">
-                Trading Alert Engine
-              </h1>
-            </div>
-
-            {/* Connection Status */}
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2">
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    isConnected ? 'bg-green-500' : 'bg-red-500'
-                  }`}
-                />
-                <span className="text-sm text-gray-600">
-                  {isConnected ? 'Connected' : 'Disconnected'}
-                </span>
-              </div>
-
-              {healthStatus && (
-                <div className="flex items-center space-x-2">
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      healthStatus.status === 'healthy'
-                        ? 'bg-green-500'
-                        : healthStatus.status === 'degraded'
-                        ? 'bg-yellow-500'
-                        : 'bg-red-500'
-                    }`}
-                  />
-                  <span className="text-sm text-gray-600">
-                    API: {healthStatus.status}
-                  </span>
-                </div>
-              )}
-            </div>
+    <div className="min-h-screen bg-slate-50 pb-16 sm:pb-0">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 px-3 py-2">
+          <h1 className="truncate text-sm font-bold text-slate-900">Pre-market Scanner</h1>
+          <div className="flex shrink-0 items-center gap-2">
+            <span
+              className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-slate-300'}`}
+              title={isConnected ? 'Live updates connected' : 'Live updates disconnected'}
+            />
+            <span
+              className={`h-2 w-2 rounded-full ${
+                healthStatus?.status === 'healthy'
+                  ? 'bg-emerald-500'
+                  : healthStatus?.status === 'degraded'
+                    ? 'bg-amber-500'
+                    : 'bg-red-500'
+              }`}
+              title={`API: ${healthStatus?.status ?? 'unknown'}`}
+            />
           </div>
         </div>
+
+        {/* Wide screens: inline nav */}
+        <nav className="mx-auto hidden max-w-3xl gap-1 px-3 sm:flex">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              className={({ isActive }) =>
+                `border-b-2 px-3 py-2 text-sm font-medium ${
+                  isActive
+                    ? 'border-primary-500 text-primary-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`
+              }
+            >
+              <span className="mr-1" aria-hidden="true">
+                {item.icon}
+              </span>
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
       </header>
 
-      {/* Navigation */}
-      <nav className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex space-x-8">
-            {navItems.map((item) => (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                className={({ isActive }) =>
-                  `py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                    isActive
-                      ? 'border-primary-500 text-primary-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }`
-                }
-              >
-                <span className="mr-2">{item.icon}</span>
-                {item.label}
-              </NavLink>
-            ))}
-          </div>
-        </div>
-      </nav>
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="mx-auto max-w-3xl px-3 py-4">
         <Outlet />
       </main>
 
-      {/* Footer */}
-      <footer className="bg-white border-t border-gray-200 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <p className="text-center text-sm text-gray-500">
-            Trading Alert Engine v1.0.0 - Powered by Alpaca Markets
+      {/* Phones: bottom tab bar */}
+      <nav className="fixed inset-x-0 bottom-0 z-10 border-t border-slate-200 bg-white sm:hidden">
+        <div className="flex">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              className={({ isActive }) =>
+                `flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-medium ${
+                  isActive ? 'text-primary-600' : 'text-slate-500'
+                }`
+              }
+            >
+              <span className="text-base" aria-hidden="true">
+                {item.icon}
+              </span>
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
+      </nav>
+
+      <footer className="border-t border-slate-200 bg-white">
+        <div className="mx-auto max-w-3xl px-3 py-3">
+          <p className="text-center text-[11px] leading-snug text-slate-400">
+            Alerts only — this tool never places trades. Candidates are not predictions and
+            this is not financial advice.
           </p>
         </div>
       </footer>

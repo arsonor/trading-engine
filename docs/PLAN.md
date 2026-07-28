@@ -157,20 +157,52 @@ completed tickers intact and skipped the rest; 464 tests green offline; ruff cle
 - **`tzdata` is now an explicit dependency.** It was transitive (via pandas), and market
   -time correctness should not rest on another package's dependency graph.
 
-### Phase 3 (V1) — Scoring, Alerts & Dashboard ← NEXT
-- [ ] Confidence score (transparent, config weights, labelled provisional)
-- [ ] v2 alert contract + persistence + WebSocket broadcast
-- [ ] Dashboard rebuild: mobile-first alert cards, scan-status view (failure ≠ zero
-      candidates), threshold settings editor, honest "candidates not predictions" framing
-- [ ] OpenAPI + TS types regenerated
+### Phase 3 (V1) — Scoring, Alerts & Dashboard — ✅ DONE
+- [x] Confidence score: 5 weighted factors, config constants, per-factor breakdown,
+      labelled PROVISIONAL everywhere. Null `upside_pct` degrades to a neutral fallback
+- [x] v2 alert contract + persistence with per-session dedup + WebSocket broadcast
+- [x] `scanner_settings` table: threshold/profile edits apply to the next scan, no redeploy
+- [x] Dashboard rebuild: mobile-first alert cards with score breakdown and demo badges,
+      scan-status panel where failure ≠ zero candidates, threshold editor, honest framing
+- [x] OpenAPI + TS types regenerated (7 new paths, 8 new schemas)
+- [x] Render cron wired to `run_scan.py --fixture --profile production`
 
-**V1 exit criteria:** full pipeline runs end-to-end on real free-tier data in demo
-profile; all calculations fixture-verified; dashboard shows real generated alerts;
-never exceeds the daily API budget.
+**V1 exit criteria — all met:** the pipeline runs end-to-end on real free-tier reference
+data in demo profile (10 → 10 → 6 → 3 candidates, ADBE/BA/C); every calculation is
+fixture-verified; the dashboard shows real generated alerts, live over WebSocket; the
+daily API budget is never exceeded (the scanner makes zero FMP calls — Stage 2 is
+fixture-fed and Stages 1/3 read pre-computed reference data).
+
+**Decisions and findings:**
+- **`alerts` was extended, not replaced.** v1 columns are retained but nullable, so the
+  rule-engine path and its ~100 tests keep working until Alpaca is removed. The DB column
+  stays `symbol`; the API exposes `ticker` per the 4.4 contract, mapped in
+  `app/schemas/scanner.py`.
+- **Thresholds live in a dedicated `scanner_settings` table**, not in `rules` as section 5
+  suggested. `rules.config_yaml` is free text belonging to a retired subsystem; typed
+  columns keep the values validated and independent of the rule engine's removal.
+- **Migration needed hand-editing.** Three NOT NULL additions to a populated `alerts`
+  table required `server_default`, and autogenerate emitted an unnamed FK that made
+  `downgrade` uncompilable. Both would have failed against Supabase.
+- **A zero-candidate scan must still broadcast.** Gating the push on "did we persist
+  anything" left a dashboard showing an earlier failure stuck on "SCANNER FAILING" until
+  the next 60s poll. Failure-to-healthy is the most important transition to deliver.
+- **Confidence scores are deliberately low in V1.** Demo profile + approximate RVOL +
+  fixture snapshots zero out the data-quality factor by design.
 
 ---
 
-### Phase 4 (V2 — requires FMP Starter) — Go Live
+### Phase 4 (V2 — requires FMP Starter) — Go Live ← NEXT
+
+**Verify before subscribing** (from the V1 build):
+1. That the pre/after-market quote endpoints expose a usable pre-market **volume** figure
+   at all — the RVOL approximation depends on it, and FMP's docs do not say. If they do
+   not, V2 ships gap% without RVOL conviction, which weakens Stage 2 considerably.
+2. That `batch-quote` really is unrestricted on Starter (it is 402 on free). Universe
+   expansion and the cheap symbol probe both assume it.
+3. Whether `company-screener` returns float, or only market cap. Stage 1 needs float, and
+   the free tier could not be probed for this.
+
 - [ ] Universe expansion: directory + screener endpoints → real low-float universe
 - [ ] Real-time + pre/after-market quote endpoints → live pre-market gap%
 - [ ] **RVOL approximation** (no pre-market bars on Starter — confirmed): validate

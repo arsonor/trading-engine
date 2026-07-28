@@ -244,6 +244,147 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/scanner/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List scanner alerts for a trading session
+         * @description Alerts for one pre-market session, ordered by confidence (highest first).
+         *     Defaults to the most recent session with alerts.
+         *
+         *     One alert per ticker per session: scans run every 5 minutes and update the
+         *     same row in place rather than appending a new alert each pass.
+         */
+        get: operations["listScannerAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scanner/alerts/{alert_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one scanner alert with its full score breakdown */
+        get: operations["getScannerAlert"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scanner/alerts/{alert_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a scanner alert as read */
+        post: operations["markScannerAlertRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scanner/scan-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent scan runs */
+        get: operations["listScanRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scanner/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scanner health and last-run state
+         * @description Distinguishes a scan that found nothing from a scan that broke. These must
+         *     never be rendered the same way: a quiet market is a working scanner, a failed
+         *     scan is an outage.
+         */
+        get: operations["getScannerStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scanner/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Effective scanner thresholds
+         * @description Environment defaults with any stored overrides applied.
+         */
+        get: operations["getScannerSettings"];
+        /**
+         * Update scanner thresholds
+         * @description Persists threshold/profile edits. They take effect on the next scan with no
+         *     redeploy. Invalid combinations are rejected rather than silently producing
+         *     zero candidates forever.
+         */
+        put: operations["updateScannerSettings"];
+        post?: never;
+        /** Reset thresholds to environment defaults */
+        delete: operations["resetScannerSettings"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scanner/settings/fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Which thresholds the Settings screen may edit */
+        get: operations["listOverridableFields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -613,6 +754,171 @@ export interface components {
             data?: {
                 code?: string;
                 message?: string;
+            };
+        };
+        /** @description One component of a confidence score, with its arithmetic exposed. */
+        ScoreFactor: {
+            /** @example upside_headroom */
+            name: string;
+            raw_value?: number | null;
+            /** @description 0-1 score for this factor */
+            normalized: number;
+            weight: number;
+            /** @description normalized * weight */
+            contribution: number;
+            /** @description Human-readable justification, shown in the UI breakdown. */
+            detail: string;
+            /**
+             * @description True when this factor used a fallback because inputs were missing.
+             * @default false
+             */
+            is_fallback: boolean;
+        };
+        /** @description The full justification for a confidence score. is_provisional is always true in V1/V2 - the weights are reasoned assumptions, not backtested parameters. Clients MUST surface that; a 0-1 number reads as authoritative whether or not it has earned it. */
+        ScoreBreakdown: {
+            score: number;
+            /** @default true */
+            is_provisional: boolean;
+            profile?: string;
+            /** @default false */
+            uses_fallback: boolean;
+            factors?: components["schemas"]["ScoreFactor"][];
+            notes?: string[];
+        };
+        /** @description A pre-market scanner alert (docs/CLAUDE.md section 4.4). nearest_resistance and upside_pct are nullable BY DESIGN. Stage 3 currently rejects tickers trading above all four resistance levels, so today they are always populated - but that is a deferred strategy decision which may be reversed. Clients must render a "no overhead resistance" state rather than assuming a number is present. */
+        ScannerAlert: {
+            id: number;
+            /** @example ADBE */
+            ticker: string;
+            /** Format: date */
+            session_date?: string | null;
+            /** Format: date-time */
+            scan_timestamp?: string | null;
+            scan_run_id?: number | null;
+            gap_pct?: number | null;
+            rvol_pct?: number | null;
+            rvol_mode?: string | null;
+            /**
+             * @description True when RVOL compares partial pre-market volume against a full-day average instead of a time-of-day profile. Must be surfaced in the UI.
+             * @default false
+             */
+            rvol_is_approximate: boolean;
+            /** @description News/earnings tag. Always null in V1 - catalyst tagging is Phase 4. */
+            catalyst?: string | null;
+            confidence_score?: number | null;
+            score_breakdown?: components["schemas"]["ScoreBreakdown"];
+            suggested_entry_window?: string | null;
+            entry_reference_price?: number | null;
+            /** @description Lowest level above the current price. NULL when there is none. */
+            nearest_resistance?: number | null;
+            resistance_source?: string | null;
+            /** @description Percent to nearest resistance. NULL when headroom is unmeasured. */
+            upside_pct?: number | null;
+            profile?: string | null;
+            /**
+             * @description Loosened thresholds - illustrative only, never a real signal.
+             * @default false
+             */
+            is_demo: boolean;
+            /**
+             * @description True when produced by the authoritative 09:25 ET confirmation run.
+             * @default false
+             */
+            is_final_pass: boolean;
+            /** @default false */
+            is_read: boolean;
+            /** Format: date-time */
+            created_at?: string | null;
+            /** Format: date-time */
+            updated_at?: string | null;
+        };
+        ScannerAlertListResponse: {
+            items: components["schemas"]["ScannerAlert"][];
+            total: number;
+            /** Format: date */
+            session_date?: string | null;
+            /** @default false */
+            has_demo_alerts: boolean;
+        };
+        ScanRun: {
+            id: number;
+            /**
+             * @description Never conflate these - failed is an outage, completed is not.
+             * @enum {string}
+             */
+            status: "completed" | "failed" | "skipped" | "running";
+            profile?: string | null;
+            /** @default false */
+            is_demo: boolean;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** @default 0 */
+            api_calls_used: number;
+            error?: string | null;
+            stage_counts?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** @description Everything the scan-status panel needs to distinguish a quiet market from a broken scanner. state is the field that carries that distinction. */
+        ScannerStatus: {
+            last_run?: components["schemas"]["ScanRun"];
+            last_successful_run?: components["schemas"]["ScanRun"];
+            is_healthy: boolean;
+            /** @enum {string} */
+            state: "never_run" | "ok_with_candidates" | "ok_no_candidates" | "failed" | "skipped" | "unknown";
+            detail?: string;
+            /** Format: date */
+            session_date?: string | null;
+            /** @default 0 */
+            alert_count: number;
+            recent_runs?: components["schemas"]["ScanRun"][];
+        };
+        ThresholdSettings: {
+            profile: string;
+            /** @default false */
+            is_demo: boolean;
+            float_max: number;
+            avg_volume_min: number;
+            gap_min: number;
+            gap_max: number;
+            rvol_min: number;
+            upside_min: number;
+            price_floor: number;
+            dollar_volume_min: number;
+            /** @description Keys the user pinned; everything else comes from the environment. */
+            overrides?: {
+                [key: string]: unknown;
+            };
+            description?: string;
+        };
+        /** @description All fields optional; only supplied keys are pinned. */
+        ThresholdSettingsUpdate: {
+            /** @enum {string} */
+            profile?: "production" | "demo";
+            float_max?: number;
+            avg_volume_min?: number;
+            gap_min?: number;
+            gap_max?: number;
+            rvol_min?: number;
+            upside_min?: number;
+            price_floor?: number;
+            dollar_volume_min?: number;
+        };
+        WebSocketScanAlertsMessage: components["schemas"]["WebSocketServerMessage"] & {
+            /** @enum {string} */
+            type?: "scan_alerts";
+            data?: {
+                /** Format: date */
+                session_date?: string;
+                scan_run_id?: number | null;
+                profile?: string;
+                is_demo?: boolean;
+                is_final_pass?: boolean;
+                /** Format: date-time */
+                scan_timestamp?: string;
+                alerts?: components["schemas"]["ScannerAlert"][];
             };
         };
     };
@@ -1129,6 +1435,230 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listScannerAlerts: {
+        parameters: {
+            query?: {
+                /** @description ET trading session. Defaults to the latest session with alerts. */
+                session_date?: string;
+                /** @description Filter by threshold profile (production | demo) */
+                profile?: string;
+                unread_only?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session alerts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScannerAlertListResponse"];
+                };
+            };
+        };
+    };
+    getScannerAlert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alert detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScannerAlert"];
+                };
+            };
+            /** @description Alert not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    markScannerAlertRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated alert */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScannerAlert"];
+                };
+            };
+            /** @description Alert not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listScanRuns: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scan runs, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanRun"][];
+                };
+            };
+        };
+    };
+    getScannerStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scanner status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScannerStatus"];
+                };
+            };
+        };
+    };
+    getScannerSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective thresholds */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThresholdSettings"];
+                };
+            };
+        };
+    };
+    updateScannerSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThresholdSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated thresholds */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThresholdSettings"];
+                };
+            };
+            /** @description Invalid threshold combination */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resetScannerSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thresholds after reset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThresholdSettings"];
+                };
+            };
+        };
+    };
+    listOverridableFields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Overridable field names */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
         };

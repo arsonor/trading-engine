@@ -297,15 +297,88 @@ uv run python scripts/seed_test_alerts.py    # sample alerts visible in the dash
 
 ### Production database (Supabase)
 
-Supabase exposes two endpoints per project:
+Supabase exposes three endpoints per project. The project uses **two URLs**:
 
-| Endpoint | Host / port | Use it for |
-|---|---|---|
-| Pooled  | `aws-<region>.pooler.supabase.com:6543` (pgBouncer, transaction mode) | The **app runtime** (`DATABASE_URL` on the Render web service). The engine detects the pooler host and disables asyncpg's prepared-statement cache automatically. |
-| Direct  | `db.<project>.supabase.co:5432` | **Migrations** (`alembic upgrade head`). pgBouncer transaction mode forbids the DDL and prepared-statement patterns Alembic emits. |
+| Setting | Endpoint | Host / port | pgBouncer mode |
+|---|---|---|---|
+| `DATABASE_URL` | Transaction pooler | `aws-<region>.pooler.supabase.com:6543` | transaction |
+| `MIGRATION_DATABASE_URL` | Session pooler | `aws-<region>.pooler.supabase.com:5432` | session |
+| *(unused)* | Direct | `db.<project>.supabase.co:5432` | none |
 
-Both should be `postgresql+asyncpg://...` DSNs — the legacy `postgres://` prefix from
+Same host, different port. `MIGRATION_DATABASE_URL` is **optional** — when unset,
+Alembic falls back to `DATABASE_URL`.
+
+**Why two.** The app runtime issues many short queries, which suits transaction pooling:
+pgBouncer hands the server connection back after every transaction. Migrations want the
+opposite — DDL, advisory locks and Alembic's version bookkeeping all assume the server
+connection stays put for the session, which is what session mode gives you.
+
+**The pgBouncer problem, and where it bit.** In transaction mode two different client
+connections can be multiplexed onto the *same* server connection. asyncpg names its
+prepared statements with a per-connection counter (`__asyncpg_stmt_1__`, `_2_`, …), so
+two clients both starting at 1 collide:
+
+```
+asyncpg.exceptions.DuplicatePreparedStatementError:
+prepared statement "__asyncpg_stmt_1__" already exists
+```
+
+Three settings are needed together, and each fixes a different half:
+
+| Setting | Fixes |
+|---|---|
+| `statement_cache_size=0` | asyncpg caching a statement that goes stale when pgBouncer reassigns the server connection |
+| `prepared_statement_cache_size=0` | the same, one layer up in SQLAlchemy |
+| `prepared_statement_name_func` | the **name collision** — UUID names instead of a shared counter |
+
+All three live in [`backend/app/core/db_connect.py`](backend/app/core/db_connect.py) and
+are applied to **both** the app engine and Alembic. They used to live only in
+`app/core/database.py`; `alembic/env.py` built its own engine via
+`async_engine_from_config` and inherited none of them, which is exactly how migrations
+failed on Render while the app itself was fine. If you touch this, change it in the one
+shared helper — two copies will drift.
+
+All DSNs should be `postgresql+asyncpg://...` — the legacy `postgres://` prefix from
 Supabase's copy-paste UI is normalized automatically.
+
+### Migration strategy
+
+`alembic upgrade head` runs from the web service's `startCommand`, so it executes on
+every container start. That is a deliberate trade-off:
+
+**Why it is currently acceptable**
+- The service runs a single free-tier instance, so there is no concurrent-start race today.
+- Migrations take a Postgres advisory lock (`pg_advisory_xact_lock`, see
+  `backend/alembic/env.py`), so if two instances ever do start together they serialize:
+  the second waits, then finds nothing to apply.
+- It keeps deploys to one step, which matters when the alternative is remembering to run
+  a manual command.
+
+**What it costs**
+- App boot is coupled to DDL. A bad migration means the service does not start at all,
+  rather than a failed deploy step leaving the previous version serving.
+- Every cold start pays the migration check — small, but on the free tier cold starts are
+  frequent.
+- It does not scale. The advisory lock prevents corruption, not the delay: with N
+  instances, N−1 wait on the lock before booting.
+
+**Move it out when any of these become true:** the web service scales past one instance,
+migrations grow long enough that boot latency matters, or you want a failed migration to
+stop a deploy rather than a running service. Render's pre-deploy command is the
+destination (it requires a paid instance type — verify availability for your plan):
+
+```yaml
+preDeployCommand: cd backend && alembic upgrade head
+startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+Until then, run migrations manually against the session pooler if you prefer:
+
+```bash
+cd backend
+MIGRATION_DATABASE_URL="postgresql+asyncpg://...pooler.supabase.com:5432/postgres" \
+  uv run alembic upgrade head
+```
 
 ## MCP Integration
 

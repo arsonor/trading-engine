@@ -1,5 +1,5 @@
 /**
- * Tests for Layout component
+ * Tests for the app shell.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -7,19 +7,17 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Layout from '../../components/common/Layout';
 
-// Mock the stores
 vi.mock('../../store', () => ({
   useAppStore: vi.fn(() => ({
     healthStatus: null,
     setConnected: vi.fn(),
   })),
-  useAlertsStore: vi.fn(() => ({
-    addAlert: vi.fn(),
-    fetchStats: vi.fn(),
+  useScannerStore: vi.fn(() => ({
+    applyScanBroadcast: vi.fn(),
+    fetchStatus: vi.fn(),
   })),
 }));
 
-// Mock the WebSocket hook
 vi.mock('../../hooks/useWebSocket', () => ({
   default: vi.fn(() => ({
     isConnected: false,
@@ -33,55 +31,78 @@ describe('Layout', () => {
     vi.clearAllMocks();
   });
 
-  it('renders the header with title', () => {
+  it('renders the header title', () => {
+    render(
+      <MemoryRouter>
+        <Layout />
+      </MemoryRouter>
+    );
+    expect(screen.getByText('Pre-market Scanner')).toBeInTheDocument();
+  });
+
+  it('renders the v2 navigation and not the retired watchlist-era pages', () => {
     render(
       <MemoryRouter>
         <Layout />
       </MemoryRouter>
     );
 
-    expect(screen.getByText('Trading Alert Engine')).toBeInTheDocument();
+    // Each item appears twice: inline nav (wide) and bottom tab bar (phone).
+    expect(screen.getAllByText('Candidates').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Scans').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Settings').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Rules')).not.toBeInTheDocument();
   });
 
-  it('renders all navigation items', () => {
+  it('navigation links point at the v2 routes', () => {
     render(
       <MemoryRouter>
         <Layout />
       </MemoryRouter>
     );
 
-    expect(screen.getByText('Dashboard')).toBeInTheDocument();
-    expect(screen.getByText('Alerts')).toBeInTheDocument();
-    expect(screen.getByText('Rules')).toBeInTheDocument();
-    expect(screen.getByText('Settings')).toBeInTheDocument();
+    expect(screen.getAllByText('Candidates')[0].closest('a')).toHaveAttribute(
+      'href',
+      '/dashboard'
+    );
+    expect(screen.getAllByText('Scans')[0].closest('a')).toHaveAttribute('href', '/scans');
+    expect(screen.getAllByText('Settings')[0].closest('a')).toHaveAttribute('href', '/settings');
   });
 
-  it('renders the footer', () => {
+  it('states in the footer that the tool never trades and is not advice', () => {
+    render(
+      <MemoryRouter>
+        <Layout />
+      </MemoryRouter>
+    );
+    expect(screen.getByText(/never places trades/i)).toBeInTheDocument();
+    expect(screen.getByText(/not financial advice/i)).toBeInTheDocument();
+  });
+
+  it('subscribes to the alerts channel once connected', async () => {
+    const subscribe = vi.fn();
+    const { default: useWebSocket } = await import('../../hooks/useWebSocket');
+    useWebSocket.mockReturnValue({ isConnected: true, lastMessage: null, subscribe });
+
     render(
       <MemoryRouter>
         <Layout />
       </MemoryRouter>
     );
 
-    expect(screen.getByText(/Trading Alert Engine v1.0.0/)).toBeInTheDocument();
-    expect(screen.getByText(/Powered by Alpaca Markets/)).toBeInTheDocument();
+    expect(subscribe).toHaveBeenCalledWith('alerts');
   });
 
-  it('shows disconnected status when not connected', () => {
-    render(
-      <MemoryRouter>
-        <Layout />
-      </MemoryRouter>
-    );
+  it('applies a scan_alerts broadcast to the store', async () => {
+    const applyScanBroadcast = vi.fn();
+    const fetchStatus = vi.fn();
+    const { useScannerStore } = await import('../../store');
+    useScannerStore.mockReturnValue({ applyScanBroadcast, fetchStatus });
 
-    expect(screen.getByText('Disconnected')).toBeInTheDocument();
-  });
-
-  it('shows connected status when WebSocket is connected', async () => {
     const { default: useWebSocket } = await import('../../hooks/useWebSocket');
     useWebSocket.mockReturnValue({
       isConnected: true,
-      lastMessage: null,
+      lastMessage: { type: 'scan_alerts', data: { alerts: [], session_date: '2026-07-28' } },
       subscribe: vi.fn(),
     });
 
@@ -91,40 +112,7 @@ describe('Layout', () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByText('Connected')).toBeInTheDocument();
-  });
-
-  it('shows API health status when available', async () => {
-    const { useAppStore } = await import('../../store');
-    useAppStore.mockReturnValue({
-      healthStatus: { status: 'healthy' },
-      setConnected: vi.fn(),
-    });
-
-    render(
-      <MemoryRouter>
-        <Layout />
-      </MemoryRouter>
-    );
-
-    expect(screen.getByText('API: healthy')).toBeInTheDocument();
-  });
-
-  it('navigation links have correct paths', () => {
-    render(
-      <MemoryRouter>
-        <Layout />
-      </MemoryRouter>
-    );
-
-    const dashboardLink = screen.getByText('Dashboard').closest('a');
-    const alertsLink = screen.getByText('Alerts').closest('a');
-    const rulesLink = screen.getByText('Rules').closest('a');
-    const settingsLink = screen.getByText('Settings').closest('a');
-
-    expect(dashboardLink).toHaveAttribute('href', '/dashboard');
-    expect(alertsLink).toHaveAttribute('href', '/alerts');
-    expect(rulesLink).toHaveAttribute('href', '/rules');
-    expect(settingsLink).toHaveAttribute('href', '/settings');
+    expect(applyScanBroadcast).toHaveBeenCalled();
+    expect(fetchStatus).toHaveBeenCalled();
   });
 });

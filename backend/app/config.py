@@ -52,6 +52,23 @@ class Settings(BaseSettings):
         description="Async Postgres DSN. SQLite is not supported.",
     )
 
+    # Optional separate DSN for `alembic upgrade head`. When unset, migrations use
+    # DATABASE_URL.
+    #
+    # On Supabase these should differ. The app runtime wants the TRANSACTION pooler
+    # (port 6543) because it multiplexes many short-lived queries across few server
+    # connections. Migrations want the SESSION pooler (port 5432), where the server
+    # connection is held for the whole session: DDL, advisory locks and Alembic's
+    # version-table bookkeeping all assume session continuity.
+    #
+    # Migrations are made pgBouncer-safe regardless (see app/core/db_connect.py), so
+    # pointing this at 6543 works too — it is just not the endpoint Supabase intends
+    # for DDL.
+    migration_database_url: str = Field(
+        default="",
+        description="DSN for Alembic. Falls back to DATABASE_URL when empty.",
+    )
+
     @field_validator("database_url", mode="after")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
@@ -63,6 +80,25 @@ class Settings(BaseSettings):
                 "which are auto-normalized). SQLite is no longer supported (v2)."
             )
         return v
+
+    @field_validator("migration_database_url", mode="after")
+    @classmethod
+    def validate_migration_database_url(cls, v: str) -> str:
+        """Same normalization as DATABASE_URL, but empty is allowed (means 'fall back')."""
+        if not v.strip():
+            return ""
+        v = _normalize_database_url(v)
+        if not v.startswith("postgresql+asyncpg://"):
+            raise ValueError(
+                "MIGRATION_DATABASE_URL must be a Postgres async DSN "
+                "('postgresql+asyncpg://...' or a form that auto-normalizes to it)."
+            )
+        return v
+
+    @property
+    def effective_migration_url(self) -> str:
+        """DSN Alembic should use: MIGRATION_DATABASE_URL if set, else DATABASE_URL."""
+        return self.migration_database_url or self.database_url
 
     # Alpaca API — v1 legacy. Kept until the scanner (Phase 2) is proven; not used by v2 code.
     alpaca_api_key: str = ""
@@ -126,6 +162,41 @@ class Settings(BaseSettings):
     scan_profile: str = "production"
     # Snapshot scenario feeding Stage 2 in V1 (no live pre-market data on the free tier).
     scan_snapshot_fixture: str = "tests/fixtures/snapshots/demo_session.json"
+
+    # --- Confidence score weights (must sum to 1.0; validated at startup) ---------
+    # PROVISIONAL. These are reasoned assumptions, not fitted parameters — nothing has
+    # been backtested yet (app V3, Phase 6). The API and UI label every score as such.
+    score_weight_gap: float = 0.20
+    score_weight_rvol: float = 0.30
+    score_weight_upside: float = 0.25
+    score_weight_liquidity: float = 0.15
+    score_weight_data_quality: float = 0.10
+
+    # Where in the gap band the setup is considered strongest, as a fraction of the band.
+    # 0.25 of a 3-15% band = ~6%: past the noise floor, with most of the move still ahead.
+    score_gap_peak_position: float = 0.25
+    # RVOL saturates at this multiple of the threshold (10 x 10% = 100% of average).
+    score_rvol_saturation_multiple: float = 10.0
+    # Upside saturates at this multiple of the threshold (3 x 5.5% = 16.5%).
+    score_upside_saturation_multiple: float = 3.0
+    # Liquidity saturates at this multiple of the dollar-volume floor.
+    score_liquidity_saturation_multiple: float = 100.0
+
+    # Score assigned to the headroom factor when upside_pct is NULL. Neutral by design:
+    # a ticker with no overhead resistance has UNMEASURED headroom, which is neither the
+    # worst case (0.0) nor a proven good one (1.0). See docs/CLAUDE.md 4.3 "Breakout
+    # convention" — that rejection is a deferred strategy decision, and this fallback is
+    # what lets it be reversed without touching the scoring signature.
+    score_null_upside_fallback: float = 0.5
+
+    # Data-quality penalties, subtracted from a 1.0 baseline and clamped at 0.
+    score_penalty_demo_profile: float = 0.5
+    score_penalty_approximate_rvol: float = 0.25
+    score_penalty_fixture_snapshot: float = 0.25
+    score_penalty_stale_reference: float = 0.25
+    score_penalty_null_upside: float = 0.15
+    # Reference data older than this many days is considered stale.
+    score_reference_max_age_days: int = 4
 
     # CORS — Vercel frontend origin(s) go here in production, comma-separated or JSON array.
     # NoDecode disables pydantic-settings' JSON pre-parse so a plain comma list works.
