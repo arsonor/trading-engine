@@ -380,6 +380,36 @@ MIGRATION_DATABASE_URL="postgresql+asyncpg://...pooler.supabase.com:5432/postgre
   uv run alembic upgrade head
 ```
 
+### Rolling back
+
+**Take a backup first.** `alembic downgrade` from the v2 alert contract preserves every
+row, but it is not lossless — and re-upgrading does not bring the lost values back.
+
+**What is preserved.** No rows are deleted. Scanner alerts are converted into valid v1
+rows: `entry_price` is backfilled from `entry_reference_price` (the same quantity under
+two names), and `setup_type` is set to `gap_up` for scanner-origin rows — accurate,
+because every v2 candidate cleared Stage 2's `3.0 <= gap_pct <= 15.0` requirement.
+
+**What is destroyed, irreversibly.** The v2 columns are dropped, taking their contents
+with them: `gap_pct`, `rvol_pct`, `rvol_mode`, `rvol_is_approximate`, `catalyst`,
+`entry_reference_price`, `nearest_resistance`, `resistance_source`, `upside_pct`,
+`suggested_entry_window`, `scan_timestamp`, `is_final_pass`, `score_breakdown_json`,
+`session_date`, `profile` and `scan_run_id` — plus the entire `scanner_settings` table
+(your threshold overrides). Upgrading again restores the *columns*, empty. Every
+confidence score and its breakdown is gone.
+
+**When it refuses.** If a row has no `entry_price`, no `entry_reference_price` and no
+`session_date`, it cannot be expressed in v1 and the downgrade aborts with the offending
+row IDs rather than guessing. Nothing is changed — the migration transaction rolls back.
+Give those rows values or delete them, then re-run.
+
+Going further back (`downgrade base`) drops the tables outright, so all data goes with
+them. The full reasoning lives in the downgrade docstring of
+`backend/alembic/versions/0ca0181ab014_*.py`, and the behaviour is pinned by
+`backend/tests/integration/test_migration_round_trip.py`.
+
+take a pg_dump before running any downgrade
+
 ## MCP Integration
 
 The Trading Engine includes MCP (Model Context Protocol) integration, allowing AI assistants like Claude to interact with the system using natural language.

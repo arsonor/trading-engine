@@ -7,9 +7,9 @@ Create Date: 2026-07-28 13:49:10.337257
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '0ca0181ab014'
@@ -77,8 +77,128 @@ def upgrade() -> None:
     # ### end Alembic commands ###
 
 
+# v1's vocabulary for what a scanner alert is. Every v2 candidate cleared Stage 2, which
+# requires a positive gap of 3-15%, so "gap_up" is the accurate v1 setup_type for all of
+# them rather than a placeholder. See the downgrade docstring.
+SCANNER_SETUP_TYPE = 'gap_up'
+
+
+def _backfill_v1_required_columns(bind) -> None:
+    """Populate the two columns the v1 schema requires NOT NULL, then verify.
+
+    Runs inside the migration's transaction, so a failure here rolls the whole
+    downgrade back rather than leaving a half-converted table.
+    """
+    # entry_price <- entry_reference_price. Same quantity under two names: v1 recorded
+    # "the price when the alert fired", v2 records "the pre-market price this candidate
+    # is referenced against". For a scanner alert those are the same number.
+    bind.execute(
+        sa.text(
+            "UPDATE alerts SET entry_price = entry_reference_price "
+            "WHERE entry_price IS NULL AND entry_reference_price IS NOT NULL"
+        )
+    )
+
+    # setup_type for scanner-origin rows. `session_date IS NOT NULL` is the marker:
+    # only the v2 scanner sets it, the v1 rule engine never did.
+    bind.execute(
+        sa.text(
+            "UPDATE alerts SET setup_type = :setup_type "
+            "WHERE setup_type IS NULL AND session_date IS NOT NULL"
+        ),
+        {"setup_type": SCANNER_SETUP_TYPE},
+    )
+
+    # Anything still null cannot be converted without inventing a value. Fail loudly
+    # with the specific rows, rather than letting Postgres raise a bare
+    # NotNullViolationError that says nothing about which rows or what to do.
+    unconvertible = bind.execute(
+        sa.text(
+            "SELECT id, symbol, "
+            "  (entry_price IS NULL) AS missing_entry_price, "
+            "  (setup_type IS NULL) AS missing_setup_type "
+            "FROM alerts WHERE entry_price IS NULL OR setup_type IS NULL "
+            "ORDER BY id LIMIT 20"
+        )
+    ).fetchall()
+
+    if not unconvertible:
+        return
+
+    total = bind.execute(
+        sa.text("SELECT count(*) FROM alerts WHERE entry_price IS NULL OR setup_type IS NULL")
+    ).scalar_one()
+
+    sample = ", ".join(
+        f"id={row.id} ({row.symbol}"
+        + (", no entry_price" if row.missing_entry_price else "")
+        + (", no setup_type" if row.missing_setup_type else "")
+        + ")"
+        for row in unconvertible
+    )
+    raise RuntimeError(
+        f"Downgrade aborted: {total} alert row(s) cannot be represented in the v1 schema.\n"
+        f"  Sample: {sample}\n"
+        f"\n"
+        f"The v1 schema requires alerts.entry_price and alerts.setup_type NOT NULL. "
+        f"This downgrade backfills entry_price from entry_reference_price and sets "
+        f"setup_type='{SCANNER_SETUP_TYPE}' for scanner rows, but these rows have "
+        f"neither a price to copy nor a recognisable origin.\n"
+        f"\n"
+        f"Nothing has been changed — the migration transaction is rolled back. Inspect with:\n"
+        f"  SELECT id, symbol, session_date, entry_price, entry_reference_price, setup_type\n"
+        f"  FROM alerts WHERE entry_price IS NULL OR setup_type IS NULL;\n"
+        f"\n"
+        f"Then either give those rows values, or delete them, and re-run the downgrade."
+    )
+
+
 def downgrade() -> None:
-    """Downgrade schema."""
+    """Downgrade schema — v2 alert contract back to the v1 shape.
+
+    ## What rolling back means for v2 data
+
+    The v1 schema requires `entry_price` and `setup_type` NOT NULL. Scanner alerts have
+    neither: v2 records `entry_reference_price` instead of `entry_price`, and has no
+    concept of `setup_type` at all. Restoring those constraints naively is what made
+    this downgrade fail on every populated database.
+
+    **Decision: backfill, do not delete and do not relax.**
+
+    * `entry_price` <- `entry_reference_price`. These are the same quantity under two
+      names — the price the alert is anchored to — so copying preserves meaning exactly
+      rather than approximating it.
+    * `setup_type` <- `'gap_up'` for scanner-origin rows (identified by a non-null
+      `session_date`, which only the v2 scanner sets). Every v2 candidate passed Stage 2,
+      which requires `3.0 <= gap_pct <= 15.0` — a positive gap. `gap_up` is therefore a
+      true statement about all of them in v1's vocabulary, not a filler value.
+    * Any row that survives both backfills raises and rolls the whole downgrade back.
+      Guessing would be worse than stopping.
+
+    Rejected alternatives:
+
+    * *Leave the columns nullable.* A downgrade that does not restore the original
+      schema is not a downgrade — the next upgrade would then run against a shape
+      neither revision describes.
+    * *Delete scanner-origin rows.* Destructive, and unnecessary: the two backfills
+      above preserve every row's meaning. Deletion would only be justified if v2 data
+      could not be expressed in v1 at all.
+
+    ## Data that IS lost, unavoidably
+
+    Dropping the v2 columns discards `gap_pct`, `rvol_pct`, `rvol_mode`,
+    `rvol_is_approximate`, `catalyst`, `entry_reference_price`, `nearest_resistance`,
+    `resistance_source`, `upside_pct`, `suggested_entry_window`, `scan_timestamp`,
+    `is_final_pass`, `score_breakdown_json`, `session_date`, `profile`, `scan_run_id`
+    and `updated_at`, plus the whole `scanner_settings` table. That is inherent to
+    removing the columns that hold them, and it is irreversible: re-upgrading restores
+    the columns empty. Take a backup before downgrading a database you care about.
+    This is documented in README.md under "Rolling back".
+    """
+    bind = op.get_bind()
+    # Must run BEFORE the NOT NULL constraints are restored.
+    _backfill_v1_required_columns(bind)
+
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_constraint('fk_alerts_scan_run_id', 'alerts', type_='foreignkey')
     op.drop_constraint('uq_alerts_symbol_session', 'alerts', type_='unique')

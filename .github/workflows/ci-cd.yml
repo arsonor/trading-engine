@@ -21,6 +21,30 @@ jobs:
       run:
         working-directory: backend
 
+    # Postgres is required by the migration round-trip tests. Those tests skip when no
+    # database is reachable, and a skipped migration test is exactly how the broken
+    # downgrade shipped: it round-tripped fine on an empty database and failed on every
+    # populated one. Without this service they would silently never run in CI.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trading_engine
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # The round-trip tests derive their scratch database name from this DSN and
+      # create/drop throwaway databases beside it.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/trading_engine
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -41,9 +65,15 @@ jobs:
       - name: Run linter
         run: uv run ruff check app/
 
+      # --timeout is per-test. The migration round-trip tests shell out to the alembic
+      # CLI several times each, so they carry their own longer marker; the raised
+      # default here covers the subprocess overhead on a cold runner.
+      # The round-trip tests FAIL rather than skip when CI is set and Postgres is
+      # unreachable — a silently skipped migration test is how the broken downgrade
+      # shipped in the first place. See tests/integration/test_migration_round_trip.py.
       - name: Run tests
-        run: uv run pytest -v --timeout=30
-        timeout-minutes: 2
+        run: uv run pytest -v --timeout=60
+        timeout-minutes: 6
 
   # Frontend Tests
   frontend-tests:
