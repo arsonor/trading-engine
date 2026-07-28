@@ -258,6 +258,15 @@ demo/production profiles).
      constants with rationale comments.
    - Every score carries a factor breakdown. API + UI label it PROVISIONAL
      (unvalidated until V3 backtesting).
+   - **`upside_pct` and `nearest_resistance` MUST be treated as nullable throughout.**
+     Today every candidate reaching this point has a float upside, because Stage 3
+     rejects tickers trading above all four resistance levels. That rejection is a
+     deferred strategy decision (see `docs/CLAUDE.md` 4.3 "Breakout convention" and open
+     question #8) that may be reversed after live V2 use. If scoring, the schema, or the
+     UI assume a non-null upside, reversing it later becomes a cross-cutting refactor
+     instead of a one-branch change. So: score must degrade gracefully with a null upside
+     (documented fallback weight), the API schema must mark the field optional, and the
+     alert card must render a sensible "no overhead resistance" state.
 
 2. **Alert model + persistence**
    - Extend `alerts` to the v2 contract (`docs/CLAUDE.md` 4.4) + `scan_run_id` FK +

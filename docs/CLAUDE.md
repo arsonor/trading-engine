@@ -128,8 +128,26 @@ upside_pct         = (nearest_resistance - price_premarket_current) / price_prem
 - `3.0 <= gap_pct <= 15.0`
 - `rvol_pct > 10.0`
 
-**Stage 3 — Room-to-run (final confirmation, 09:25 ET)**
+**Stage 3 — Room-to-run (computed every pass; 09:25 is the authoritative run)**
 - `upside_pct >= 5.5` (5% target + 0.5% slippage/fee buffer)
+
+> **Breakout convention — decided, revisit later.** A ticker trading *above all four*
+> resistance levels is **rejected** ("headroom unmeasurable"). With no ceiling above it,
+> upside cannot be computed, and the conservative reading is to skip rather than invent an
+> unbounded value.
+>
+> This is a **strategy choice by the end user, not a technical constraint.** Such a stock is
+> arguably in "blue-sky" breakout territory with no overhead supply — which some would treat
+> as the *strongest* gap-and-go setup, not the weakest. Deliberately deferred until live V2
+> experience shows how often it occurs and how those names behave. See open question #8 in
+> `PROJECT_REPORT.md`.
+>
+> **Keep this cheap to reverse.** `Candidate.upside_pct` and `nearest_resistance` are
+> nullable by design. The alternative behaviours (alert with upside marked unbounded, or
+> assign a synthetic extension target) must stay a change to the Stage-3 branch plus a
+> config flag — never a change to the alert schema, the scoring signature, or the UI
+> contract. Therefore **all downstream code (scoring, API, dashboard) must tolerate a null
+> `upside_pct` / `nearest_resistance` from the start.**
 
 **Risk filters (block the alert regardless of the above)**
 - Minimum price floor (configurable; default $2 — sub-$2 names hit 5% on noise)
@@ -151,8 +169,10 @@ Every alert carries: `ticker`, `gap_pct`, `rvol_pct`, `catalyst` (nullable),
 
 Scans run **every 5 minutes from 04:00 to 09:25 ET**. Each run is **stateless**: it
 recomputes accumulated premarket volume by summing intraday bars from 04:00 ET to now,
-rather than carrying state between runs. The 09:25 run is the final confirmation pass and
-is the one that applies Stage 3 and pushes the definitive alert set.
+rather than carrying state between runs. All three stages run on every pass — Stage 3 is
+pure arithmetic over data already in memory, so the upside figure is available throughout
+the session. The **09:25 run is the authoritative pass** (`is_final_pass`), and it is the
+one that pushes the definitive alert set.
 
 > **Render cron is UTC.** ET/DST conversion must be explicit in code. A UTC-pinned
 > schedule silently drifts by one hour twice a year — for a market-timed scanner this is
