@@ -12,8 +12,8 @@ Two things in here are load-bearing beyond ordinary serialisation:
    `rvol_is_approximate` are part of the payload, not presentation. A client that renders
    the number without them is rendering a lie, and the schema should make that hard.
 
-Naming: the DB column is `symbol` (retained from v1); the API exposes `ticker` per the
-section 4.4 contract. `from_model` is where that mapping lives.
+Naming: storage and API agree on `ticker`. The `symbol` -> `ticker` mapping layer that
+existed while the v1 tables still used `symbol` was removed in Phase 3.5.
 """
 
 from datetime import date, datetime
@@ -92,11 +92,16 @@ class ScannerAlert(BaseModel):
 
     @classmethod
     def from_model(cls, alert) -> "ScannerAlert":
-        """Map the ORM row to the contract, including symbol -> ticker."""
+        """Build the contract from an ORM row.
+
+        Still explicit rather than `model_validate`: `score_breakdown` is a nested model
+        parsed from a JSON column and `is_demo` is a derived property, neither of which
+        `from_attributes` handles for free.
+        """
         breakdown = alert.score_breakdown_json
         return cls(
             id=alert.id,
-            ticker=alert.symbol,
+            ticker=alert.ticker,
             session_date=alert.session_date,
             scan_timestamp=alert.scan_timestamp,
             scan_run_id=alert.scan_run_id,

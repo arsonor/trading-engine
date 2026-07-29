@@ -1,7 +1,8 @@
 """Scanner API — session alerts, scan status and tunable thresholds.
 
-Mounted under `/api/v1/scanner` so the v1 rule-engine `/alerts` routes keep working
-untouched until Alpaca is removed in its own commit.
+Mounted under `/api/v1/scanner`. The prefix originally kept these routes clear of the
+v1 rule-engine `/alerts` routes; those are gone as of Phase 3.5, but the prefix stays
+because the frontend and the published contract both use it.
 
 The `/status` endpoint carries the distinction this whole phase turns on: a scan that
 found nothing and a scan that broke are different `state` values with different copy, so
@@ -66,7 +67,7 @@ async def list_scanner_alerts(
     if unread_only:
         stmt = stmt.where(Alert.is_read.is_(False))
 
-    stmt = stmt.order_by(Alert.confidence_score.desc().nullslast(), Alert.symbol).limit(limit)
+    stmt = stmt.order_by(Alert.confidence_score.desc().nullslast(), Alert.ticker).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     items = [ScannerAlert.from_model(row) for row in rows]
 

@@ -5,8 +5,8 @@
  * device per the spec) and moves inline on wider screens. Nothing here may exceed the
  * viewport width at 390px.
  *
- * The Rules page is gone from the nav: the per-tick YAML rule engine is no longer the
- * trigger path. Its API and route survive until Alpaca is removed in its own commit.
+ * The Rules page is gone: the per-tick YAML rule engine is no longer the trigger path,
+ * and its API was removed in Phase 3.5.
  */
 
 import { Outlet, NavLink } from 'react-router-dom';

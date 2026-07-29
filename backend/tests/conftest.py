@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.database import Base, get_db
 from app.main import app
-from app.models import Alert, ReferenceData, Rule, Universe, Watchlist
+from app.models import ReferenceData, Universe, Watchlist
 from app.services.fmp.client import EP_EOD_FULL, EP_SHARES_FLOAT
 from app.services.fmp.fixtures import FixtureFmpClient, FixtureStore
 from app.services.scanner.snapshot import FixtureSnapshotProvider
@@ -222,106 +222,8 @@ def golden_snapshot_provider() -> FixtureSnapshotProvider:
 
 
 # ============== Sample Data Fixtures ==============
-
-
-@pytest_asyncio.fixture
-async def sample_rule(db_session: AsyncSession) -> Rule:
-    """Create a sample rule for testing."""
-    rule = Rule(
-        name="Test Breakout Rule",
-        description="Test rule for breakout detection",
-        rule_type="price",  # Valid RuleType enum value
-        config_yaml="""
-conditions:
-  - field: price
-    operator: ">"
-    value: resistance_level
-  - field: volume_ratio
-    operator: ">="
-    value: 1.5
-filters:
-  min_price: 5.0
-  max_price: 500.0
-targets:
-  stop_loss_percent: -3.0
-  target_rr_ratio: 2.0
-confidence:
-  base_score: 0.7
-""",
-        is_active=True,
-        priority=10,
-    )
-    db_session.add(rule)
-    await db_session.commit()
-    await db_session.refresh(rule)
-    return rule
-
-
-@pytest_asyncio.fixture
-async def sample_rule_inactive(db_session: AsyncSession) -> Rule:
-    """Create an inactive sample rule."""
-    rule = Rule(
-        name="Inactive Rule",
-        description="This rule is disabled",
-        rule_type="volume",  # Valid RuleType enum value
-        config_yaml="conditions: []",
-        is_active=False,
-        priority=5,
-    )
-    db_session.add(rule)
-    await db_session.commit()
-    await db_session.refresh(rule)
-    return rule
-
-
-@pytest_asyncio.fixture
-async def sample_alert(db_session: AsyncSession, sample_rule: Rule) -> Alert:
-    """Create a sample alert for testing."""
-    alert = Alert(
-        rule_id=sample_rule.id,
-        symbol="AAPL",
-        timestamp=datetime.utcnow(),
-        setup_type="breakout",
-        entry_price=150.50,
-        stop_loss=145.99,
-        target_price=160.00,
-        confidence_score=0.85,
-        market_data_json={"price": 150.50, "volume": 1000000},
-        is_read=False,
-    )
-    db_session.add(alert)
-    await db_session.commit()
-    await db_session.refresh(alert)
-    return alert
-
-
-@pytest_asyncio.fixture
-async def multiple_alerts(db_session: AsyncSession, sample_rule: Rule) -> list[Alert]:
-    """Create multiple alerts for pagination testing."""
-    alerts = []
-    symbols = ["AAPL", "GOOGL", "MSFT", "TSLA", "NVDA"]
-    # Valid SetupType enum values: breakout, volume_spike, gap_up, gap_down, momentum
-    setup_types = ["breakout", "momentum", "volume_spike", "breakout", "momentum"]
-
-    for i, (symbol, setup_type) in enumerate(zip(symbols, setup_types)):
-        alert = Alert(
-            rule_id=sample_rule.id,
-            symbol=symbol,
-            timestamp=datetime.utcnow(),
-            setup_type=setup_type,
-            entry_price=100.0 + i * 10,
-            stop_loss=95.0 + i * 10,
-            target_price=110.0 + i * 10,
-            confidence_score=0.7 + i * 0.05,
-            is_read=i % 2 == 0,  # Alternate read status
-        )
-        db_session.add(alert)
-        alerts.append(alert)
-
-    await db_session.commit()
-    for alert in alerts:
-        await db_session.refresh(alert)
-    return alerts
+#
+# The v1 rule/alert fixtures were removed in Phase 3.5 with the columns they set.
 
 
 @pytest_asyncio.fixture

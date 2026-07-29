@@ -5,7 +5,7 @@ a ticker that qualifies all morning would otherwise generate ~66 alerts. Instead
 per (ticker, session) is updated in place as the picture changes, and the 09:25 pass is
 the authoritative one. The user sees a short list that evolves, not a feed that repeats.
 
-The upsert is keyed on `(symbol, session_date)`, matching the unique constraint, so two
+The upsert is keyed on `(ticker, session_date)`, matching the unique constraint, so two
 scans racing on the same ticker cannot produce duplicates.
 
 Broadcast reuses the existing WebSocket `alerts` channel with an extended payload — the
@@ -101,7 +101,7 @@ class ScannerAlertService:
         score = compute_confidence(candidate, result.profile, result.as_of_et)
 
         return {
-            "symbol": candidate.ticker,
+            "ticker": candidate.ticker,
             "session_date": result.as_of_et.date(),
             "timestamp": result.as_of_et.replace(tzinfo=None),
             "scan_timestamp": result.as_of_et.replace(tzinfo=None),
@@ -131,7 +131,7 @@ class ScannerAlertService:
         async with self._session_factory() as session:
             existing = await session.scalar(
                 select(Alert).where(
-                    Alert.symbol == payload["symbol"],
+                    Alert.ticker == payload["ticker"],
                     Alert.session_date == payload["session_date"],
                 )
             )
@@ -156,7 +156,7 @@ class ScannerAlertService:
         async with self._session_factory() as session:
             existing = await session.scalar(
                 select(Alert).where(
-                    Alert.symbol == payload["symbol"],
+                    Alert.ticker == payload["ticker"],
                     Alert.session_date == payload["session_date"],
                 )
             )

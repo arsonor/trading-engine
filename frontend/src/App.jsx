@@ -25,7 +25,7 @@ function App() {
           <Route path="scans" element={<ScansPage />} />
           <Route path="settings" element={<SettingsPage />} />
           {/* Watchlist-era routes are retired: the per-tick rule engine is no longer the
-              trigger path. The /rules API stays until Alpaca is removed in its own commit. */}
+              trigger path; the /rules API and its page went with it in Phase 3.5. */}
           <Route path="alerts" element={<Navigate to="/dashboard" replace />} />
           <Route path="rules" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

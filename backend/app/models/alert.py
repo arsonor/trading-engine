@@ -1,13 +1,12 @@
-"""Alert database model.
+"""Alert database model — the v2 scanner contract.
 
-This table is *extended* rather than replaced, per `docs/CLAUDE.md` section 5. The v1
-columns (`setup_type`, `entry_price`, `stop_loss`, `target_price`, `rule_id`) are kept so
-the v1 rule-engine path and its tests keep working until Alpaca is removed in its own
-commit; they are nullable now, because a v2 scanner alert has no honest value for them.
+The retained v1 columns (`rule_id`, `setup_type`, `entry_price`, `stop_loss`,
+`target_price`, `market_data_json`) and the FK to `rules` were removed in Phase 3.5,
+along with the rule engine that populated them.
 
-Column naming: v2 tables use `ticker`, retained v1 tables use `symbol`. This table keeps
-`symbol` as the storage column (it is the ticker) and the API exposes it as `ticker` to
-match the section 4.4 alert contract. The mapping lives in `app/schemas/scanner.py`.
+`ticker` is the storage column name as well as the API field name. It was `symbol` while
+the v1 tables still used that convention; the storage/API mapping layer that bridged the
+two is gone.
 
 **`upside_pct` and `nearest_resistance` are nullable by design.** Stage 3 currently
 rejects tickers trading above all four resistance levels, so today they are always
@@ -29,23 +28,22 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
 
 class Alert(Base):
-    """Trading alert — v2 scanner contract plus retained v1 columns."""
+    """A pre-market scanner alert (`docs/CLAUDE.md` section 4.4)."""
 
     __tablename__ = "alerts"
     __table_args__ = (
         # Dedup: one alert per ticker per session, updated in place by later scans.
-        # Partial index so v1 rule-engine alerts (session_date NULL) are unaffected.
-        UniqueConstraint("symbol", "session_date", name="uq_alerts_symbol_session"),
+        UniqueConstraint("ticker", "session_date", name="uq_alerts_ticker_session"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -54,7 +52,6 @@ class Alert(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
-    # --- v2 scanner contract (docs/CLAUDE.md 4.4) --------------------------------
     scan_run_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("scan_runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -80,18 +77,6 @@ class Alert(Base):
     is_final_pass: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     score_breakdown_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # --- retained v1 columns (nullable; rule-engine path only) --------------------
-    rule_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("rules.id", ondelete="SET NULL"), nullable=True
-    )
-    setup_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    entry_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
-    target_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    market_data_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-
-    rule: Mapped["Rule"] = relationship("Rule", back_populates="alerts")
-
     @property
     def is_demo(self) -> bool:
         """Whether this alert came from a loosened demo profile."""
@@ -99,10 +84,6 @@ class Alert(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<Alert(id={self.id}, symbol={self.symbol}, profile={self.profile}, "
+            f"<Alert(id={self.id}, ticker={self.ticker}, profile={self.profile}, "
             f"score={self.confidence_score})>"
         )
-
-
-# Import Rule here to avoid circular imports
-from app.models.rule import Rule  # noqa: E402, F401

@@ -189,13 +189,34 @@ one that pushes the definitive alert set.
    high_yesterday, high_20d, sma_50, sma_200, computed_at
 3. `premarket_volume_profile` — ticker (FK), bucket_minute (minutes from 04:00),
    avg_cumulative_volume, sessions_sampled, computed_at
-4. `scan_runs` — id, started_at, finished_at, stage_counts_json, status, error
-5. `alerts` — **extended**: ticker, gap_pct, rvol_pct, catalyst, confidence_score,
-   entry_reference_price, nearest_resistance, upside_pct, suggested_entry_window,
-   scan_run_id (FK), is_read, created_at
+4. `scan_runs` — id, started_at, finished_at, stage_counts_json, status, profile,
+   api_calls_used, error
+5. `scanner_settings` — singleton row holding the user's threshold/profile overrides
+   (id, profile, overrides_json, updated_at)
+6. `alerts` — ticker, session_date, scan_timestamp, scan_run_id (FK), profile, gap_pct,
+   rvol_pct, rvol_mode, rvol_is_approximate, catalyst, entry_reference_price,
+   nearest_resistance, resistance_source, upside_pct, suggested_entry_window,
+   confidence_score, score_breakdown_json, is_final_pass, is_read, created_at, updated_at
 
-**Retained**: `rules` (now holds tunable scanner thresholds rather than per-tick
-conditions), `watchlist` (demoted to an optional user favourites list).
+**Retained**: `watchlist` — an optional user favourites list. It has no UI in v2 (the
+watchlist-era pages were retired in Phase 3) but the table and its API remain.
+
+> **`rules` was dropped in Phase 3.5.** This section previously said `rules` would hold
+> tunable scanner thresholds. Phase 3 built `scanner_settings` for exactly that — typed
+> columns, validated on write, with an env-default fallback — which left `rules` holding
+> free-text `config_yaml` for the retired per-tick engine and read by nothing. It was
+> dropped along with the rule engine, its API, its schemas and the `alerts.rule_id` FK.
+>
+> **`alerts` no longer carries any v1 columns.** `rule_id`, `setup_type`, `entry_price`,
+> `stop_loss`, `target_price` and `market_data_json` were dropped, and the storage column
+> `symbol` was renamed to `ticker` so storage and the section 4.4 contract agree. The
+> mapping layer in `app/schemas/scanner.py` is gone.
+>
+> That migration deletes v1-origin alert rows (`session_date IS NULL`) rather than
+> keeping them: every column that gave them meaning is dropped by the same migration,
+> and both read paths filter on `session_date`, so they would be unreachable husks. The
+> reasoning and the rollback semantics are in the docstring of
+> `backend/alembic/versions/c653a931ecaf_*.py` and in README.md under "Rolling back".
 
 ---
 

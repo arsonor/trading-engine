@@ -30,7 +30,7 @@ async def scanner_alert(db_session):
     await db_session.refresh(run)
 
     alert = Alert(
-        symbol="LOWF",
+        ticker="LOWF",
         session_date=SESSION,
         timestamp=datetime(2026, 7, 28, 13, 25),
         scan_timestamp=datetime(2026, 7, 28, 13, 25),
@@ -84,7 +84,7 @@ async def test_list_alerts_returns_the_v2_contract(client: AsyncClient, scanner_
     assert body["total"] == 1
 
     item = body["items"][0]
-    # The DB column is `symbol`; the contract says `ticker`.
+    # Storage and contract now agree on `ticker`; the mapping layer is gone.
     assert item["ticker"] == "LOWF"
     assert "symbol" not in item
     assert item["gap_pct"] == 5.0
@@ -118,7 +118,7 @@ async def test_empty_state_is_not_an_error(client: AsyncClient):
 async def test_demo_alerts_are_flagged_on_the_list(client: AsyncClient, db_session):
     db_session.add(
         Alert(
-            symbol="ADBE",
+            ticker="ADBE",
             session_date=SESSION,
             timestamp=datetime(2026, 7, 28, 13, 25),
             profile="demo",
@@ -136,7 +136,7 @@ async def test_null_upside_serialises_as_null_not_zero(client: AsyncClient, db_s
     """The breakout case must survive the API boundary intact."""
     db_session.add(
         Alert(
-            symbol="BRKO",
+            ticker="BRKO",
             session_date=SESSION,
             timestamp=datetime(2026, 7, 28, 13, 25),
             profile="production",

@@ -312,6 +312,105 @@ demo/production profiles).
 
 ---
 
+## Phase 3.5 (V1 cleanup) — Remove Alpaca and the v1 schema vestiges
+
+**Status:** ✅ DONE (29 July 2026) — delivered as three commits: MCP removal,
+Alpaca removal, schema migration.
+**Depends on:** Phase 3 (V1 shipped)
+**Why now:** this is DDL on a populated table. Today it holds a handful of rows and has
+zero users; from V2 onward the end user checks the dashboard every morning and every
+migration carries a real rollback cost. The round-trip migration test infrastructure is
+also freshly built and in CI. Doing this before Phase 4 means the live FMP work starts
+on an unambiguous schema.
+
+````
+# Phase 3.5 — Remove Alpaca + v1 schema vestiges
+
+## Context
+Read `docs/CLAUDE.md` and `docs/PLAN.md` first. App V1 has shipped: FMP client, budget
+guard, 3-stage scanner, confidence scoring, alerts and dashboard all work. The v1 Alpaca
+watchlist/rule-engine path is now dead weight — the deployed dashboard reports
+`Alpaca API — Disconnected`, and the real smoke tests are `seed_test_alerts.py` and the
+fixture-driven scan.
+
+This phase removes v1. It is deliberately sequenced BEFORE the V2 (FMP Starter) work so
+the schema is clean when the live snapshot provider is written, and because a schema
+migration is cheapest now while nobody depends on the app.
+
+## Scope — tier 1: dead code and credentials (low risk)
+
+1. Delete `app/services/alpaca_client.py` and `app/services/stream_manager.py`, plus any
+   module existing solely to support them.
+2. Remove Alpaca settings from `app/config.py` and `.env.example`, and the Alpaca env
+   vars from `render.yaml` (both the web service and the cron job).
+3. Delete tests that only exercise the Alpaca client / stream manager. Do NOT delete
+   tests that touch alerts — those are covered in tier 2.
+4. Audit the MCP server (`app/mcp/`, `run_mcp.py`) for Alpaca-dependent tools and remove
+   them. Report what remains and whether the MCP server still has a coherent purpose in
+   v2 — do not delete the whole server without flagging it first.
+5. Remove Alpaca references from the README and any docs describing it as a live
+   fallback.
+
+## Scope — tier 2: schema cleanup (needs the round-trip test)
+
+6. **Drop the retained v1 columns from `alerts`**: `rule_id`, `setup_type`,
+   `entry_price`, `stop_loss`, `target_price`, `market_data_json`, plus the FK to
+   `rules`.
+
+7. **Rename `alerts.symbol` → `alerts.ticker`** and delete the storage/API mapping layer
+   in `app/schemas/scanner.py`. Dependents that must move with it: the index on `symbol`
+   and the `uq_alerts_symbol_session` unique constraint (rename to match).
+
+8. **Decide the fate of the `rules` table — do not assume.**
+   `docs/CLAUDE.md` §5 says `rules` would hold tunable scanner thresholds, but Phase 3
+   created `scanner_settings` for exactly that, leaving `rules` orphaned. Establish
+   whether anything still reads or writes it, then either drop it (with its model,
+   repository, schemas, API routes and the retired YAML rule-engine code) or state
+   clearly what it is still for. Either way, justify the choice and update
+   `docs/CLAUDE.md` §5 to match reality.
+
+9. **Decide and document what happens to existing v1-origin alert rows** (those with
+   `session_date IS NULL`). Options: delete them, or keep them with null v2 fields.
+   They are seeded test data locally, but the deployed database may hold others. The
+   choice must be explicit in the migration docstring — not an accident of whichever DDL
+   you happen to write.
+
+10. **The migration must be reversible**, with the same discipline as the last hotfix:
+    the downgrade restores the v1 columns as NULLABLE (v2 rows have no honest values for
+    them), and the docstring states plainly that dropped v1 column data is not
+    recoverable by re-upgrading.
+
+## Constraints
+- **No behavioural change to the v2 scanner.** Stages, scoring, thresholds, alert
+  contract and dashboard behaviour must be identical before and after.
+- The round-trip migration test must cover this migration **with realistic data
+  present** — both v1-origin and v2-origin alert rows. An empty-database round trip
+  proves nothing; that is precisely how the last downgrade bug shipped.
+- Do NOT run anything against the production Supabase instance.
+- The API contract stays as specified in `docs/CLAUDE.md` §4.4 — the field is already
+  exposed as `ticker`, so this rename must be invisible to the frontend.
+- Tier 1 and tier 2 may be separate commits if that eases review; they have very
+  different risk profiles.
+
+## Definition of done
+1. No Alpaca code, settings, env vars, credentials or documentation references remain
+   anywhere in the repo
+2. `alerts` has no v1 columns; the storage column is `ticker`; the mapping layer is gone
+3. The `rules` decision is made, implemented, justified, and `docs/CLAUDE.md` §5 updated
+4. Round-trip test passes on a database seeded with BOTH v1-origin and v2-origin rows
+5. Downgrade succeeds on that same populated database, and the data-loss note is in the
+   migration docstring
+6. The v2 scanner produces identical results before and after: run
+   `scripts/run_scan.py --fixture --profile demo --at "<fixed time>"` on both sides and
+   compare
+7. Dashboard still works end to end (candidates, scan status, settings, demo badging)
+8. Tests pass; ruff and eslint clean
+9. Report: what the MCP audit found, what you decided about `rules` and why, and how
+   many v1-origin alert rows the migration affects
+````
+
+---
+
 ## Phase 4+ (V2 — FMP Starter) — not yet written
 
 Written after V1 ships. Both former FMP open questions are answered (see PLAN.md top):
@@ -331,4 +430,6 @@ observing whether volume conviction justifies the V3 (Premium) upgrade. Scope in
   a "quick test" from it.
 - CI never touches live FMP.
 - Demo-profile output must always be visibly labelled — in logs, DB, and UI.
-- Alpaca code is removed only after V2 goes live, in its own commit.
+- **Alpaca code is removed in Phase 3.5**, between V1 shipping and the V2 (Starter)
+  work — not "after V2 goes live". The schema migration is cheapest while the app has
+  no users, and Phase 4 should start on a clean schema.

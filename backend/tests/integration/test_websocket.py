@@ -1,10 +1,9 @@
 """Integration tests for WebSocket functionality."""
 
-import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 from app.api.v1.websocket import ConnectionManager, get_manager
 from app.main import app
@@ -176,7 +175,7 @@ class TestConnectionManager:
         ws2.send_json = AsyncMock()
 
         conn_id1 = await manager.connect(ws1)
-        conn_id2 = await manager.connect(ws2)
+        await manager.connect(ws2)  # connected but never subscribed
 
         # Only subscribe first client
         await manager.subscribe(conn_id1, "alerts")

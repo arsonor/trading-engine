@@ -68,7 +68,7 @@ async def test_scan_persists_alerts_with_the_full_v2_contract(
     assert sorted(report.created) == ["EDGE", "LOWF"]
 
     async with test_session_factory() as session:
-        alert = await session.scalar(select(Alert).where(Alert.symbol == "LOWF"))
+        alert = await session.scalar(select(Alert).where(Alert.ticker == "LOWF"))
 
     assert alert.session_date == SCAN_AT.date()
     assert alert.gap_pct == 5.0
@@ -92,7 +92,7 @@ async def test_persisted_alert_carries_the_score_breakdown(
     await run_and_persist(test_session_factory, golden_snapshot_provider, service)
 
     async with test_session_factory() as session:
-        alert = await session.scalar(select(Alert).where(Alert.symbol == "LOWF"))
+        alert = await session.scalar(select(Alert).where(Alert.ticker == "LOWF"))
 
     breakdown = alert.score_breakdown_json
     assert breakdown["is_provisional"] is True
@@ -144,14 +144,14 @@ async def test_the_later_scan_wins_on_conflicting_values(
     )
 
     async with test_session_factory() as session:
-        early = await session.scalar(select(Alert).where(Alert.symbol == "LOWF"))
+        early = await session.scalar(select(Alert).where(Alert.ticker == "LOWF"))
         assert early.is_final_pass is False
         assert "monitor" in early.suggested_entry_window
 
     await run_and_persist(test_session_factory, golden_snapshot_provider, service)
 
     async with test_session_factory() as session:
-        final = await session.scalar(select(Alert).where(Alert.symbol == "LOWF"))
+        final = await session.scalar(select(Alert).where(Alert.ticker == "LOWF"))
 
     assert final.is_final_pass is True
     assert "09:30-10:00 ET" in final.suggested_entry_window
@@ -165,14 +165,14 @@ async def test_a_re_alert_resurfaces_as_unread(
     )
 
     async with test_session_factory() as session:
-        alert = await session.scalar(select(Alert).where(Alert.symbol == "LOWF"))
+        alert = await session.scalar(select(Alert).where(Alert.ticker == "LOWF"))
         alert.is_read = True
         await session.commit()
 
     await run_and_persist(test_session_factory, golden_snapshot_provider, service)
 
     async with test_session_factory() as session:
-        alert = await session.scalar(select(Alert).where(Alert.symbol == "LOWF"))
+        alert = await session.scalar(select(Alert).where(Alert.ticker == "LOWF"))
     assert alert.is_read is False
 
 
@@ -189,7 +189,7 @@ async def test_different_sessions_get_separate_alerts(
 
     async with test_session_factory() as session:
         total = await session.scalar(
-            select(func.count(Alert.id)).where(Alert.symbol == "LOWF")
+            select(func.count(Alert.id)).where(Alert.ticker == "LOWF")
         )
     assert total == 2
 

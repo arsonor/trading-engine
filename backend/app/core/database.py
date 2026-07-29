@@ -57,7 +57,6 @@ async def init_db() -> None:
         ApiBudget,
         PremarketVolumeProfile,
         ReferenceData,
-        Rule,
         ScannerSettings,
         ScanRun,
         Universe,

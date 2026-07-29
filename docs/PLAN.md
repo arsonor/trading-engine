@@ -192,7 +192,52 @@ fixture-fed and Stages 1/3 read pre-computed reference data).
 
 ---
 
-### Phase 4 (V2 — requires FMP Starter) — Go Live ← NEXT
+### Phase 3.5 (V1 cleanup) — Remove Alpaca + v1 schema vestiges — ✅ DONE
+**Tier:** free (no subscription needed). **Goal:** retire v1 before the V2 work starts.
+
+- [x] Deleted `alpaca_client.py`, `stream_manager.py`, `alert_generator.py`,
+      `rule_engine.py`, the market-data/rules/v1-alerts APIs, Alpaca settings, env
+      vars, the `alpaca-py` dependency and every doc reference
+- [x] MCP audit: **no tool was Alpaca-dependent** — they were database-backed and
+      shaped around the v1 alert columns (127 references). Server deleted; see below
+- [x] Dropped the v1 columns from `alerts` + the `rules` FK
+- [x] Renamed `alerts.symbol` → `alerts.ticker`; mapping layer deleted
+- [x] **`rules` dropped** — orphaned once `scanner_settings` superseded it
+- [x] **v1-origin alert rows deleted** (23 locally), count logged by the migration
+- [x] Round-trip test seeds BOTH origins; downgrade restores the v1 columns nullable
+
+**Delivered as three commits**, one revert point each: MCP removal, Alpaca removal,
+schema migration. MCP went first because it imported `app.models.rule`, which the
+Alpaca commit would otherwise have left dangling.
+
+**Decisions:**
+- *MCP server deleted, not ported.* It is developer tooling — section 1 defines the
+  end user as a non-technical trader on a dashboard — and `PLAN.md` Phase 7 already
+  listed "MCP server decision" as open. This resolves it.
+- *`rules` dropped.* Phase 3's `scanner_settings` gave thresholds typed columns and
+  write-time validation; `rules` held free-text YAML for the retired engine and was
+  read by nothing.
+- *v1-origin rows deleted, not kept.* Every column giving them meaning is dropped by
+  the same migration, and both read paths filter on `session_date`, so they would be
+  unreachable husks. Reasoning in the migration docstring; loss noted in README.
+
+**Verified:** `run_scan.py --fixture --profile demo --at "2026-07-28 09:25 ET"`
+produces byte-identical output before and after; dashboard unchanged end to end;
+333 backend + 45 frontend tests pass; ruff and eslint clean.
+
+**Why here and not later:** this is DDL on a populated table. Right now it holds a
+handful of rows and has zero users — from V2 onward the end user checks the dashboard
+daily and every migration carries a real rollback cost. The round-trip test
+infrastructure is also freshly built. And the "keep Alpaca as a fallback smoke test"
+rationale has already expired: the deployed dashboard reports `Alpaca — Disconnected`,
+and the real smoke tests are `seed_test_alerts.py` and the fixture scan.
+
+**Done when:** no Alpaca anywhere; `alerts` is v2-only with a `ticker` column; scanner
+output byte-identical before and after; round-trip + downgrade pass on populated data.
+
+---
+
+### Phase 4 (V2 — requires FMP Starter) — Go Live
 
 **Verify before subscribing** (from the V1 build):
 1. That the pre/after-market quote endpoints expose a usable pre-market **volume** figure
@@ -238,6 +283,10 @@ alerting; MCP server decision.
 3. Probe accessible symbols before designing around them.
 4. CI never touches live FMP. Fixtures always.
 5. One phase per Claude Code session; verify "done when" before advancing.
+5b. **Phase 3.5 runs before Phase 4**, on the free tier, while waiting on FMP support.
+   Schema cleanup is cheapest with zero users, and Phase 4 should begin on a clean
+   schema — the live snapshot provider is the code most likely to trip over a column
+   stored as `symbol` but exposed as `ticker`.
 6. FMP support questions #1–2: **answered** (see top of this file). Remaining
    pre-Starter check: none — subscribe when V1 ships.
 
@@ -259,4 +308,8 @@ alerting; MCP server decision.
 ## Legacy notes
 
 - `backup.sql` moved out of the repo; `*.sql` gitignored; never restore into Supabase.
-- Alpaca env keys remain until the scanner proves out; remove in a dedicated commit.
+- **Alpaca removal is Phase 3.5** — settled. Earlier drafts variously said "after Phase 2",
+  "once the scanner proves out" and "after V2 goes live"; those are superseded.
+- Migrations are the highest-risk surface in this project (two production issues in three
+  phases). Every schema change gets a round-trip test on POPULATED data, and
+  `pg_dump` before any downgrade is run against a real database.

@@ -10,9 +10,8 @@ services:
       - APP_ENV=production
       - DEBUG=false
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/trading_engine
-      - ALPACA_API_KEY=${ALPACA_API_KEY}
-      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
-      - ALPACA_BASE_URL=${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}
+      - FMP_API_KEY=${FMP_API_KEY}
+      - FMP_BASE_URL=${FMP_BASE_URL:-https://financialmodelingprep.com}
       - CORS_ORIGINS=["http://localhost","http://localhost:80"]
     depends_on:
       db:
