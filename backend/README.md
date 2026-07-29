@@ -8,7 +8,7 @@ FastAPI backend for the Trading Engine - a real-time trading alert system.
 - WebSocket for real-time alert notifications
 - Rule engine for evaluating trading conditions
 - Alpaca Markets API integration for market data
-- MCP (Model Context Protocol) server for AI assistant integration
+
 
 ## Quick Start
 
