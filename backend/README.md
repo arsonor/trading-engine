@@ -7,7 +7,7 @@ FastAPI backend for the Trading Engine - a real-time trading alert system.
 - REST API for alerts, rules, and watchlist management
 - WebSocket for real-time alert notifications
 - Rule engine for evaluating trading conditions
-- Alpaca Markets API integration for market data
+- FMP market data integration
 
 
 ## Quick Start

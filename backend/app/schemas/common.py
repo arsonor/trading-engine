@@ -21,7 +21,6 @@ class HealthResponse(BaseModel):
     status: HealthStatus
     timestamp: datetime
     version: Optional[str] = None
-    alpaca_connected: Optional[bool] = None
     database_connected: Optional[bool] = None
 
 

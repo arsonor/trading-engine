@@ -77,14 +77,6 @@ services:
         sync: false
       - key: FMP_BASE_URL
         value: https://financialmodelingprep.com
-      # Legacy Alpaca credentials — kept until the scanner (Phase 2) is proven,
-      # then removed in a deliberate commit.
-      - key: ALPACA_API_KEY
-        sync: false
-      - key: ALPACA_SECRET_KEY
-        sync: false
-      - key: ALPACA_BASE_URL
-        value: https://paper-api.alpaca.markets
       # Point this at the Vercel frontend URL; multiple origins comma-separated.
       - key: CORS_ORIGINS
         sync: false

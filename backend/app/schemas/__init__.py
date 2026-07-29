@@ -1,17 +1,11 @@
-"""Pydantic schemas."""
+"""Pydantic schemas.
 
-from app.schemas.alert import (
-    Alert,
-    AlertCreate,
-    AlertListResponse,
-    AlertMarketData,
-    AlertStats,
-    AlertUpdate,
-    SetupType,
-)
+The v1 alert schema (`setup_type`, `entry_price`, `stop_loss`, `target_price`) was
+removed in Phase 3.5 along with the rule engine that produced it. The v2 alert contract
+lives in `app/schemas/scanner.py` and is documented in `docs/CLAUDE.md` section 4.4.
+"""
+
 from app.schemas.common import ErrorResponse, HealthResponse, HealthStatus
-from app.schemas.market_data import Bar, MarketData, Timeframe
-from app.schemas.rule import Rule, RuleCreate, RuleType, RuleUpdate
 from app.schemas.scanner import (
     ScannerAlert,
     ScannerAlertListResponse,
@@ -25,27 +19,10 @@ from app.schemas.scanner import (
 from app.schemas.watchlist import WatchlistCreate, WatchlistItem
 
 __all__ = [
-    # Alert
-    "Alert",
-    "AlertCreate",
-    "AlertListResponse",
-    "AlertMarketData",
-    "AlertStats",
-    "AlertUpdate",
-    "SetupType",
     # Common
     "ErrorResponse",
     "HealthResponse",
     "HealthStatus",
-    # Market Data
-    "Bar",
-    "MarketData",
-    "Timeframe",
-    # Rule
-    "Rule",
-    "RuleCreate",
-    "RuleType",
-    "RuleUpdate",
     # Scanner (v2)
     "ScanRunOut",
     "ScannerAlert",

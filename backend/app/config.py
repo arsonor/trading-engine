@@ -100,13 +100,7 @@ class Settings(BaseSettings):
         """DSN Alembic should use: MIGRATION_DATABASE_URL if set, else DATABASE_URL."""
         return self.migration_database_url or self.database_url
 
-    # Alpaca API — v1 legacy. Kept until the scanner (Phase 2) is proven; not used by v2 code.
-    alpaca_api_key: str = ""
-    alpaca_secret_key: str = ""
-    alpaca_base_url: str = "https://paper-api.alpaca.markets"
-    alpaca_data_feed: str = "iex"
-
-    # FMP — v2 data provider.
+    # FMP — the only market-data provider. (Alpaca was removed in Phase 3.5.)
     fmp_api_key: str = ""
     fmp_base_url: str = "https://financialmodelingprep.com"
 
@@ -204,9 +198,6 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://localhost:3000",
     ]
-
-    # Rules directory (v1 rule engine; will be repurposed for scanner threshold overrides)
-    rules_directory: str = "rules"
 
     @field_validator("cors_origins", mode="before")
     @classmethod

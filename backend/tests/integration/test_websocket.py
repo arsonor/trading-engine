@@ -52,20 +52,13 @@ class TestConnectionManager:
         """Test disconnection removes all subscriptions."""
         connection_id = await manager.connect(mock_websocket)
 
-        # Subscribe to channels
-        with patch("app.api.v1.websocket.get_stream_manager"):
-            await manager.subscribe(connection_id, "alerts")
-            await manager.subscribe(connection_id, "market_data", ["AAPL"])
-
-        # Verify subscriptions
+        await manager.subscribe(connection_id, "alerts")
         assert connection_id in manager.subscriptions["alerts"]
 
-        # Disconnect
         manager.disconnect(connection_id)
 
-        # Verify subscriptions are cleaned up
         assert connection_id not in manager.subscriptions["alerts"]
-        assert connection_id not in manager.subscriptions["market_data"]
+        assert connection_id not in manager.active_connections
 
     @pytest.mark.asyncio
     async def test_subscribe_alerts(
@@ -79,23 +72,7 @@ class TestConnectionManager:
         assert connection_id in manager.subscriptions["alerts"]
 
     @pytest.mark.asyncio
-    async def test_subscribe_market_data_with_symbols(
-        self, manager: ConnectionManager, mock_websocket: AsyncMock
-    ):
-        """Test subscribing to market_data with symbols."""
-        connection_id = await manager.connect(mock_websocket)
 
-        with patch("app.api.v1.websocket.get_stream_manager") as mock_stream:
-            mock_stream.return_value.subscribe = AsyncMock()
-            await manager.subscribe(connection_id, "market_data", ["AAPL", "GOOGL"])
-
-        assert connection_id in manager.subscriptions["market_data"]
-        assert "AAPL" in manager.symbol_subscriptions
-        assert "GOOGL" in manager.symbol_subscriptions
-        assert connection_id in manager.symbol_subscriptions["AAPL"]
-        assert connection_id in manager.symbol_subscriptions["GOOGL"]
-
-    @pytest.mark.asyncio
     async def test_unsubscribe(self, manager: ConnectionManager, mock_websocket: AsyncMock):
         """Test unsubscribing from a channel."""
         connection_id = await manager.connect(mock_websocket)
@@ -121,12 +98,9 @@ class TestConnectionManager:
         subs = manager.get_subscriptions(connection_id)
         assert "alerts" in subs
 
-        # Subscribe to market_data
-        with patch("app.api.v1.websocket.get_stream_manager"):
-            await manager.subscribe(connection_id, "market_data")
-        subs = manager.get_subscriptions(connection_id)
-        assert "alerts" in subs
-        assert "market_data" in subs
+        # An unknown channel is ignored rather than created, so it never appears.
+        await manager.subscribe(connection_id, "market_data")
+        assert manager.get_subscriptions(connection_id) == ["alerts"]
 
     @pytest.mark.asyncio
     async def test_send_personal(
@@ -213,35 +187,6 @@ class TestConnectionManager:
         ws1.send_json.assert_called_with(message)
         ws2.send_json.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_broadcast_to_symbol(
-        self, manager: ConnectionManager, mock_websocket: AsyncMock
-    ):
-        """Test broadcasting to symbol subscribers."""
-        connection_id = await manager.connect(mock_websocket)
-
-        with patch("app.api.v1.websocket.get_stream_manager"):
-            await manager.subscribe(connection_id, "market_data", ["AAPL"])
-
-        message = {"type": "quote", "data": {"symbol": "AAPL", "price": 150.0}}
-        await manager.broadcast_to_symbol("AAPL", message)
-
-        mock_websocket.send_json.assert_called_with(message)
-
-    @pytest.mark.asyncio
-    async def test_broadcast_to_symbol_case_insensitive(
-        self, manager: ConnectionManager, mock_websocket: AsyncMock
-    ):
-        """Test symbol broadcast is case insensitive."""
-        connection_id = await manager.connect(mock_websocket)
-
-        with patch("app.api.v1.websocket.get_stream_manager"):
-            await manager.subscribe(connection_id, "market_data", ["AAPL"])
-
-        message = {"type": "quote", "data": {"symbol": "AAPL", "price": 150.0}}
-        await manager.broadcast_to_symbol("aapl", message)  # lowercase
-
-        mock_websocket.send_json.assert_called_with(message)
 
     @pytest.mark.asyncio
     async def test_broadcast_cleans_up_disconnected_clients(
@@ -400,27 +345,20 @@ class TestWebSocketEndpoint:
                 assert data["data"]["code"] == "MISSING_CHANNEL"
 
     @pytest.mark.asyncio
-    async def test_websocket_subscribe_with_symbols(self, client: AsyncClient):
-        """Test subscribing to market_data with symbols."""
+    async def test_websocket_subscribe_to_unknown_channel_is_ignored(self, client: AsyncClient):
+        """The per-symbol `market_data` channel went with the Alpaca stream manager.
+        Subscribing to it must not silently create a channel nothing ever publishes to."""
         from starlette.testclient import TestClient
 
-        with patch("app.api.v1.websocket.get_stream_manager") as mock_stream:
-            mock_stream.return_value.subscribe = AsyncMock()
+        with TestClient(app) as test_client:
+            with test_client.websocket_connect("/api/v1/ws") as websocket:
+                websocket.receive_json()  # Initial status
 
-            with TestClient(app) as test_client:
-                with test_client.websocket_connect("/api/v1/ws") as websocket:
-                    websocket.receive_json()  # Initial status
+                websocket.send_json({"action": "subscribe", "channel": "market_data"})
 
-                    # Subscribe with symbols
-                    websocket.send_json({
-                        "action": "subscribe",
-                        "channel": "market_data",
-                        "symbols": ["AAPL", "GOOGL"],
-                    })
-
-                    data = websocket.receive_json()
-                    assert data["type"] == "status"
-                    assert "market_data" in data["data"]["subscriptions"]
+                data = websocket.receive_json()
+                assert data["type"] == "status"
+                assert data["data"]["subscriptions"] == []
 
 
 class TestGetManager:

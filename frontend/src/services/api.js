@@ -47,35 +47,12 @@ export const scannerApi = {
   resetSettings: () => api.delete('/scanner/settings'),
 };
 
-// Alerts API (v1 rule engine — retained until Alpaca is removed)
-export const alertsApi = {
-  list: (params = {}) => api.get('/alerts', { params }),
-  get: (id) => api.get(`/alerts/${id}`),
-  update: (id, data) => api.patch(`/alerts/${id}`, data),
-  getStats: () => api.get('/alerts/stats'),
-};
-
-// Rules API
-export const rulesApi = {
-  list: () => api.get('/rules'),
-  get: (id) => api.get(`/rules/${id}`),
-  create: (data) => api.post('/rules', data),
-  update: (id, data) => api.put(`/rules/${id}`, data),
-  delete: (id) => api.delete(`/rules/${id}`),
-  toggle: (id) => api.post(`/rules/${id}/toggle`),
-};
-
-// Watchlist API
+// Watchlist API — optional user favourites (docs/CLAUDE.md section 5).
+// The v1 alerts, rules and market-data clients were removed with their backend routes.
 export const watchlistApi = {
   list: () => api.get('/watchlist'),
   add: (data) => api.post('/watchlist', data),
   remove: (symbol) => api.delete(`/watchlist/${symbol}`),
-};
-
-// Market Data API
-export const marketDataApi = {
-  get: (symbol) => api.get(`/market-data/${symbol}`),
-  getHistory: (symbol, params = {}) => api.get(`/market-data/${symbol}/history`, { params }),
 };
 
 // Health API (health endpoint is at root level, not under /api/v1)

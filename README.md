@@ -1,6 +1,8 @@
 # Trading Engine
 
-A real-time trading alert system that monitors stocks via the Alpaca Markets API and generates actionable trading alerts based on configurable rules.
+An alerts-only pre-market stock scanner. It scans a US equity universe during the pre-market session and surfaces candidates where a ~5% intraday move is structurally plausible, delivered to a mobile-first web dashboard.
+
+**It does not execute trades, does not predict returns, and is not financial advice.** Market data comes from FMP (Financial Modeling Prep).
 
 ![Trading Dashboard](docs/trading_dashboard.png)
 
@@ -39,7 +41,7 @@ Active traders need to monitor multiple stocks simultaneously for trading opport
 
 The Trading Engine solves these problems by providing:
 
-1. **Real-Time Market Monitoring**: Connects to Alpaca Markets API to stream live quotes and trades for stocks on your watchlist.
+1. **Scheduled Pre-market Scanning**: A cron job runs a 3-stage filtration pipeline over the universe every 5 minutes from 04:00 to 09:25 ET, using FMP market data.
 
 2. **Configurable Rule Engine**: Define trading rules in YAML format with conditions, filters, and target calculations. Rules can detect:
    - Price breakouts above resistance levels
@@ -64,7 +66,7 @@ The Trading Engine solves these problems by providing:
 
 ## System Architecture
 
-The system consists of a React frontend and a FastAPI backend, with market data from the Alpaca Markets API.
+The system consists of a React frontend, a FastAPI backend, and a scheduled scanner job, with market data from FMP.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -105,19 +107,13 @@ The system consists of a React frontend and a FastAPI backend, with market data 
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                 │                                        │
 │  ┌──────────────────────────────┴───────────────────────────────────┐   │
-│  │                    Alpaca Integration                             │   │
-│  │  ┌────────────────────┐  ┌────────────────────┐                  │   │
-│  │  │   Alpaca Client    │  │   Stream Manager   │                  │   │
-│  │  │   (REST API)       │  │   (WebSocket)      │                  │   │
-│  │  └────────────────────┘  └────────────────────┘                  │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────┘
                                      │
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           External Services                              │
 │  ┌─────────────────────────────┐  ┌─────────────────────────────────┐  │
-│  │      SQLite / PostgreSQL    │  │      Alpaca Markets API         │  │
+│  │        PostgreSQL           │  │           FMP API               │  │
 │  │         (Database)          │  │    (Market Data & Trading)      │  │
 │  └─────────────────────────────┘  └─────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -164,7 +160,7 @@ The system consists of a React frontend and a FastAPI backend, with market data 
 ### External APIs
 | Service | Purpose |
 |---------|---------|
-| **Alpaca Markets** | Real-time market data and paper trading |
+| **FMP (Financial Modeling Prep)** | Market data: EOD prices, float, quotes |
 
 ## Live Demo
 
@@ -186,7 +182,7 @@ The application is deployed and running on Render.com:
 - **Python 3.10+** with [uv](https://docs.astral.sh/uv/) package manager
 - **Node.js 18+** with npm
 - **Docker** and **Docker Compose** (required for local Postgres)
-- **Alpaca Markets account** (optional — legacy v1 fallback; new v2 code uses FMP)
+- **FMP API key** (the free Basic tier is enough for V1)
 - **FMP account** (needed from Phase 1 onwards; not required for Phase 0 verification)
 
 ## Quick Start
@@ -397,9 +393,8 @@ Deploy the complete application stack:
 ```bash
 # Configure environment
 cp .env.example .env
-# Edit .env and add your Alpaca API credentials:
-# - ALPACA_API_KEY
-# - ALPACA_SECRET_KEY
+# Edit .env and add your FMP API key:
+# - FMP_API_KEY
 
 # Build and start all services (migrations run automatically)
 docker-compose up -d --build
@@ -448,7 +443,7 @@ This project includes a `render.yaml` blueprint for one-click deployment to Rend
 
 6. **Configure secrets** in the Render dashboard:
    - Go to your `trading-engine-api` service → Environment
-   - Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`
+   - Add `FMP_API_KEY`
 
 #### Option 2: Manual Deployment
 
@@ -460,8 +455,7 @@ This project includes a `render.yaml` blueprint for one-click deployment to Rend
    - **Environment Variables:**
      - `PYTHON_VERSION`: `3.10.12`
      - `DATABASE_URL`: (from your database)
-     - `ALPACA_API_KEY`: (your key)
-     - `ALPACA_SECRET_KEY`: (your secret)
+     - `FMP_API_KEY`: (your key)
      - `CORS_ORIGINS`: `["https://your-frontend-url.onrender.com"]`
 
 3. Create a Static Site for the frontend:
@@ -574,7 +568,7 @@ npm run test:coverage
 
 ### Testing Without Live Market Data
 
-You can test the complete system without Alpaca API credentials or waiting for market hours. There are two methods:
+You can test the complete system without live market data or waiting for market hours. There are two methods:
 
 #### Method 1: Seed Sample Alerts (Quick Dashboard Demo)
 
@@ -672,7 +666,7 @@ This returns `alerts_triggered: 0` because 50 < 100.
 
 To test with real market data:
 
-1. **Configure Alpaca API credentials** in your `.env` file
+1. **Configure your FMP API key** in your `.env` file
 
 2. **Start the backend and frontend** (see Quick Start above)
 
@@ -718,7 +712,7 @@ trading-engine/
 │   │   ├── engine/           # Rule evaluation engine
 │   │   ├── models/           # SQLAlchemy models
 │   │   ├── schemas/          # Pydantic schemas
-│   │   ├── services/         # Alpaca integration
+│   │   ├── services/         # FMP client, scanner, alerts
 │   │   ├── config.py         # Settings
 │   │   └── main.py           # FastAPI app
 │   ├── alembic/              # Database migrations
@@ -801,9 +795,9 @@ confidence:
 - Ensure CORS is configured in backend `.env`
 
 **No market data:**
-- Verify Alpaca API keys are correct
+- Verify the FMP API key is correct
 - Check if market is open (US market hours)
-- Use paper trading URL: `https://paper-api.alpaca.markets`
+- Check today's API budget: `uv run python scripts/fmp_budget.py`
 
 **WebSocket disconnects:**
 - Check browser console for errors
