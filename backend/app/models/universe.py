@@ -1,7 +1,7 @@
 """Universe database model (v2 scanner).
 
 Naming note: v2 scanner tables use `ticker` (per `docs/CLAUDE.md` sections 4.4 and 5),
-while the retained v1 tables (`alerts`, `watchlist`) keep their original `symbol` column.
+which `alerts` also adopted in Phase 3.5.
 """
 
 from datetime import datetime

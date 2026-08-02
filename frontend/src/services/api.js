@@ -47,14 +47,6 @@ export const scannerApi = {
   resetSettings: () => api.delete('/scanner/settings'),
 };
 
-// Watchlist API — optional user favourites (docs/CLAUDE.md section 5).
-// The v1 alerts, rules and market-data clients were removed with their backend routes.
-export const watchlistApi = {
-  list: () => api.get('/watchlist'),
-  add: (data) => api.post('/watchlist', data),
-  remove: (symbol) => api.delete(`/watchlist/${symbol}`),
-};
-
 // Health API (health endpoint is at root level, not under /api/v1)
 export const healthApi = {
   check: () => axios.get(`${API_BASE_URL}/health`),

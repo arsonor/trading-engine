@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.database import Base, get_db
 from app.main import app
-from app.models import ReferenceData, Universe, Watchlist
+from app.models import ReferenceData, Universe
 from app.services.fmp.client import EP_EOD_FULL, EP_SHARES_FLOAT
 from app.services.fmp.fixtures import FixtureFmpClient, FixtureStore
 from app.services.scanner.snapshot import FixtureSnapshotProvider
@@ -221,41 +221,3 @@ def golden_snapshot_provider() -> FixtureSnapshotProvider:
     return FixtureSnapshotProvider(GOLDEN_SNAPSHOT_FILE)
 
 
-# ============== Sample Data Fixtures ==============
-#
-# The v1 rule/alert fixtures were removed in Phase 3.5 with the columns they set.
-
-
-@pytest_asyncio.fixture
-async def sample_watchlist_item(db_session: AsyncSession) -> Watchlist:
-    """Create a sample watchlist item."""
-    item = Watchlist(
-        symbol="AAPL",
-        notes="Test watchlist item",
-        is_active=True,
-    )
-    db_session.add(item)
-    await db_session.commit()
-    await db_session.refresh(item)
-    return item
-
-
-@pytest_asyncio.fixture
-async def multiple_watchlist_items(db_session: AsyncSession) -> list[Watchlist]:
-    """Create multiple watchlist items."""
-    items = []
-    symbols = ["AAPL", "GOOGL", "MSFT", "TSLA"]
-
-    for symbol in symbols:
-        item = Watchlist(
-            symbol=symbol,
-            notes=f"Watching {symbol}",
-            is_active=True,
-        )
-        db_session.add(item)
-        items.append(item)
-
-    await db_session.commit()
-    for item in items:
-        await db_session.refresh(item)
-    return items

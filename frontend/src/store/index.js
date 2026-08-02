@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import { watchlistApi, healthApi, scannerApi } from '../services/api';
+import { healthApi, scannerApi } from '../services/api';
 
 /**
  * Scanner store (v2) — session alerts, scan status and tunable thresholds.
@@ -113,47 +113,6 @@ export const useScannerStore = create((set, get) => ({
       sessionDate: payload.session_date ?? get().sessionDate,
       hasDemoAlerts: payload.alerts.some((a) => a.is_demo),
     });
-  },
-}));
-
-// Watchlist store
-export const useWatchlistStore = create((set) => ({
-  items: [],
-  loading: false,
-  error: null,
-
-  fetchWatchlist: async () => {
-    set({ loading: true, error: null });
-    try {
-      const response = await watchlistApi.list();
-      set({ items: response.data, loading: false });
-    } catch (error) {
-      set({ error: error.message, loading: false });
-    }
-  },
-
-  addSymbol: async (symbol, notes = '') => {
-    try {
-      const response = await watchlistApi.add({ symbol, notes });
-      set((state) => ({
-        items: [response.data, ...state.items],
-      }));
-    } catch (error) {
-      console.error('Failed to add symbol:', error);
-      throw error;
-    }
-  },
-
-  removeSymbol: async (symbol) => {
-    try {
-      await watchlistApi.remove(symbol);
-      set((state) => ({
-        items: state.items.filter((item) => item.symbol !== symbol),
-      }));
-    } catch (error) {
-      console.error('Failed to remove symbol:', error);
-      throw error;
-    }
   },
 }));
 

@@ -16,7 +16,6 @@ from app.schemas.scanner import (
     ThresholdSettings,
     ThresholdSettingsUpdate,
 )
-from app.schemas.watchlist import WatchlistCreate, WatchlistItem
 
 __all__ = [
     # Common
@@ -32,7 +31,4 @@ __all__ = [
     "ScoreFactorOut",
     "ThresholdSettings",
     "ThresholdSettingsUpdate",
-    # Watchlist
-    "WatchlistCreate",
-    "WatchlistItem",
 ]

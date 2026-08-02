@@ -24,50 +24,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/watchlist": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get watchlist
-         * @description Retrieve all symbols in the watchlist
-         */
-        get: operations["getWatchlist"];
-        put?: never;
-        /**
-         * Add to watchlist
-         * @description Add a symbol to the watchlist
-         */
-        post: operations["addToWatchlist"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/watchlist/{symbol}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Remove from watchlist
-         * @description Remove a symbol from the watchlist
-         */
-        delete: operations["removeFromWatchlist"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/scanner/alerts": {
         parameters: {
             query?: never;
@@ -225,23 +181,6 @@ export interface components {
             version?: string;
             /** @example true */
             database_connected?: boolean;
-        };
-        WatchlistItem: {
-            /** @example 1 */
-            id: number;
-            /** @example AAPL */
-            symbol: string;
-            /** Format: date-time */
-            added_at: string;
-            /** @example true */
-            is_active: boolean;
-            /** @example Watch for earnings breakout */
-            notes?: string | null;
-        };
-        WatchlistCreate: {
-            /** @example AAPL */
-            symbol: string;
-            notes?: string;
         };
         ErrorResponse: {
             /** @example NOT_FOUND */
@@ -471,98 +410,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
-                };
-            };
-        };
-    };
-    getWatchlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Watchlist items */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WatchlistItem"][];
-                };
-            };
-        };
-    };
-    addToWatchlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WatchlistCreate"];
-            };
-        };
-        responses: {
-            /** @description Added to watchlist */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WatchlistItem"];
-                };
-            };
-            /** @description Invalid symbol */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Symbol already in watchlist */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    removeFromWatchlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The ticker symbol */
-                symbol: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Removed from watchlist */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Symbol not in watchlist */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

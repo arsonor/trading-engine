@@ -33,7 +33,8 @@ BACKEND_DIR = Path(__file__).parents[2]
 # Revisions this file navigates between.
 SCANNER_TABLES = "5c3b382f1d74"  # universe, reference_data, scan_runs, api_budget
 V2_CONTRACT = "0ca0181ab014"  # v2 alert columns added; v1 columns still present
-HEAD = "c653a931ecaf"  # Phase 3.5: v1 columns dropped, symbol -> ticker, rules dropped
+PHASE_35 = "c653a931ecaf"  # v1 columns dropped, symbol -> ticker, rules dropped
+HEAD = "544a7fbf3445"  # watchlist dropped
 
 pytestmark = pytest.mark.timeout(180)
 
@@ -214,8 +215,9 @@ async def _seed_at_v2_contract(dsn: str) -> dict:
         await conn.close()
 
 
-async def _seed_at_head(dsn: str) -> dict:
-    """Seed the head schema, where `alerts` has only v2 columns and uses `ticker`."""
+async def _seed_v2_alerts(dsn: str) -> dict:
+    """Seed v2-only alerts. Valid from PHASE_35 onward, where `alerts` uses
+    `ticker` and carries no v1 columns."""
     conn = await asyncpg.connect(dsn)
     try:
         scan_run_id = await conn.fetchval(
@@ -341,11 +343,14 @@ async def test_phase35_upgrade_deletes_v1_rows_and_preserves_v2(scratch_db):
 
 
 async def test_phase35_downgrade_restores_the_v1_shape(scratch_db):
-    """Downgrade must succeed on a populated database and restore the previous schema."""
+    """Downgrade must succeed on a populated database and restore the previous schema.
+
+    Pinned to PHASE_35 rather than `head` so it keeps testing THIS migration as later
+    revisions land on top."""
     url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
 
-    _run_alembic("upgrade", "head", database_url=url)
-    seeded = await _seed_at_head(dsn)
+    _run_alembic("upgrade", PHASE_35, database_url=url)
+    seeded = await _seed_v2_alerts(dsn)
 
     _run_alembic("downgrade", "-1", database_url=url)
 
@@ -381,7 +386,7 @@ async def test_phase35_downgrade_restores_the_v1_shape(scratch_db):
         await conn.close()
 
     # ...and back up again.
-    _run_alembic("upgrade", "head", database_url=url)
+    _run_alembic("upgrade", PHASE_35, database_url=url)
     assert await _column_exists(dsn, "alerts", "ticker")
     assert not await _table_exists(dsn, "rules")
 
@@ -421,6 +426,56 @@ async def test_phase35_upgrade_is_a_no_op_when_no_v1_rows_exist(scratch_db):
         assert await conn.fetchval("SELECT ticker FROM alerts") == "LOWF"
     finally:
         await conn.close()
+
+
+async def test_watchlist_drop_round_trips_on_populated_data(scratch_db):
+    """The watchlist held user-entered rows, so its drop is tested with rows present."""
+    url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
+
+    _run_alembic("upgrade", PHASE_35, database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        for symbol in ("AAPL", "TSLA", "NVDA"):
+            await conn.execute(
+                "INSERT INTO watchlist (symbol, added_at, is_active, notes) "
+                "VALUES ($1, now(), true, 'watching')",
+                symbol,
+            )
+    finally:
+        await conn.close()
+
+    result = _run_alembic("upgrade", "head", database_url=url)
+    assert "Dropping `watchlist` with 3 row(s)" in result.stdout + result.stderr
+    assert not await _table_exists(dsn, "watchlist")
+
+    # Downgrade restores the table, empty — the rows are gone, as documented.
+    _run_alembic("downgrade", "-1", database_url=url)
+    assert await _table_exists(dsn, "watchlist")
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        assert await conn.fetchval("SELECT count(*) FROM watchlist") == 0
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", "head", database_url=url)
+    assert not await _table_exists(dsn, "watchlist")
+
+
+async def test_watchlist_drop_is_safe_when_the_table_is_already_gone(scratch_db):
+    """The migration must not fail on a database where the table was removed by hand."""
+    url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
+
+    _run_alembic("upgrade", PHASE_35, database_url=url)
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute("DROP TABLE watchlist")
+    finally:
+        await conn.close()
+
+    result = _run_alembic("upgrade", "head", database_url=url)
+    assert "already absent" in result.stdout + result.stderr
 
 
 # ======================================================================= v2 contract
@@ -521,7 +576,7 @@ async def test_full_chain_down_to_base_and_back_up(scratch_db):
     url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
 
     _run_alembic("upgrade", "head", database_url=url)
-    await _seed_at_head(dsn)
+    await _seed_v2_alerts(dsn)
 
     _run_alembic("downgrade", "base", database_url=url)
 
@@ -530,10 +585,12 @@ async def test_full_chain_down_to_base_and_back_up(scratch_db):
 
     _run_alembic("upgrade", "head", database_url=url)
 
-    for table in ("alerts", "watchlist", "universe", "scan_runs", "scanner_settings"):
+    for table in ("alerts", "universe", "scan_runs", "scanner_settings"):
         assert await _table_exists(dsn, table), table
-    # `rules` is created by the initial migration and dropped again at head.
+    # Both are created by earlier migrations and dropped again by the time we reach
+    # head: `rules` in Phase 3.5, `watchlist` in the revision after it.
     assert not await _table_exists(dsn, "rules")
+    assert not await _table_exists(dsn, "watchlist")
 
     conn = await asyncpg.connect(dsn)
     try:

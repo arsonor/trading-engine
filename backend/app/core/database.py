@@ -60,7 +60,6 @@ async def init_db() -> None:
         ScannerSettings,
         ScanRun,
         Universe,
-        Watchlist,
     )
 
 

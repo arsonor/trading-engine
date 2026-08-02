@@ -198,8 +198,15 @@ one that pushes the definitive alert set.
    nearest_resistance, resistance_source, upside_pct, suggested_entry_window,
    confidence_score, score_breakdown_json, is_final_pass, is_read, created_at, updated_at
 
-**Retained**: `watchlist` — an optional user favourites list. It has no UI in v2 (the
-watchlist-era pages were retired in Phase 3) but the table and its API remain.
+**Nothing is retained from v1.** `rules` and `watchlist` are both gone; the six tables
+above are the whole schema.
+
+> **`watchlist` was dropped after Phase 3.5.** It described a curated list of symbols to
+> stream quotes for — a v1 concept. The v2 scanner's premise is the opposite: filter the
+> whole universe every morning, so a favourites list plays no part in producing alerts.
+> It had no UI, no mention elsewhere in this spec and no reader outside its own CRUD
+> endpoints, while still having to be considered on every schema change. Git keeps it if
+> a favourites feature ever earns a place on the roadmap.
 
 > **`rules` was dropped in Phase 3.5.** This section previously said `rules` would hold
 > tunable scanner thresholds. Phase 3 built `scanner_settings` for exactly that — typed

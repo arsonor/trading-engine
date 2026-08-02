@@ -4,7 +4,7 @@ FastAPI backend for the Trading Engine - a real-time trading alert system.
 
 ## Features
 
-- REST API for alerts, rules, and watchlist management
+- REST API for scanner candidates, scan status and threshold settings
 - WebSocket for real-time alert notifications
 - Rule engine for evaluating trading conditions
 - FMP market data integration

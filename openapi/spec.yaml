@@ -11,7 +11,6 @@ info:
     - Scanner alerts for a trading session, with confidence-score breakdowns
     - Scan status and history, distinguishing a quiet market from a broken scanner
     - Tunable threshold settings, applied on the next scan without a redeploy
-    - Watchlist management
     - WebSocket streaming for live alert pushes
   version: 1.0.0
   contact:
@@ -26,8 +25,6 @@ servers:
 tags:
   - name: Health
     description: Health check endpoints
-  - name: Watchlist
-    description: Symbol watchlist management
 
 paths:
   /health:
@@ -44,79 +41,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
-
-  /watchlist:
-    get:
-      tags:
-        - Watchlist
-      summary: Get watchlist
-      description: Retrieve all symbols in the watchlist
-      operationId: getWatchlist
-      responses:
-        '200':
-          description: Watchlist items
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/WatchlistItem'
-
-    post:
-      tags:
-        - Watchlist
-      summary: Add to watchlist
-      description: Add a symbol to the watchlist
-      operationId: addToWatchlist
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/WatchlistCreate'
-      responses:
-        '201':
-          description: Added to watchlist
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WatchlistItem'
-        '400':
-          description: Invalid symbol
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '409':
-          description: Symbol already in watchlist
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /watchlist/{symbol}:
-    delete:
-      tags:
-        - Watchlist
-      summary: Remove from watchlist
-      description: Remove a symbol from the watchlist
-      operationId: removeFromWatchlist
-      parameters:
-        - name: symbol
-          in: path
-          required: true
-          description: The ticker symbol
-          schema:
-            type: string
-      responses:
-        '204':
-          description: Removed from watchlist
-        '404':
-          description: Symbol not in watchlist
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
 
   # ===========================================================================
   # v2 pre-market scanner
@@ -354,45 +278,6 @@ components:
         database_connected:
           type: boolean
           example: true
-
-    WatchlistItem:
-      type: object
-      required:
-        - id
-        - symbol
-        - added_at
-        - is_active
-      properties:
-        id:
-          type: integer
-          example: 1
-        symbol:
-          type: string
-          example: AAPL
-        added_at:
-          type: string
-          format: date-time
-        is_active:
-          type: boolean
-          example: true
-        notes:
-          type: string
-          nullable: true
-          example: Watch for earnings breakout
-
-    WatchlistCreate:
-      type: object
-      required:
-        - symbol
-      properties:
-        symbol:
-          type: string
-          minLength: 1
-          maxLength: 10
-          example: AAPL
-        notes:
-          type: string
-          maxLength: 500
 
     ErrorResponse:
       type: object

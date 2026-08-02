@@ -35,7 +35,6 @@ vi.mock('axios', () => {
 });
 
 describe('API Service', () => {
-  let watchlistApi;
   let healthApi;
   let mockAxiosInstance;
 
@@ -47,7 +46,6 @@ describe('API Service', () => {
 
     // Import the module fresh
     const apiModule = await import('../../services/api');
-    watchlistApi = apiModule.watchlistApi;
     healthApi = apiModule.healthApi;
 
     // Reset mocks
@@ -57,33 +55,6 @@ describe('API Service', () => {
     mockAxiosInstance.patch.mockReset();
     mockAxiosInstance.delete.mockReset();
     axios.get.mockReset();
-  });
-
-  describe('watchlistApi', () => {
-    it('list calls GET /watchlist', async () => {
-      mockAxiosInstance.get.mockResolvedValue({ data: [] });
-
-      await watchlistApi.list();
-
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/watchlist');
-    });
-
-    it('add calls POST /watchlist', async () => {
-      const itemData = { symbol: 'AAPL', notes: 'Test' };
-      mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, ...itemData } });
-
-      await watchlistApi.add(itemData);
-
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/watchlist', itemData);
-    });
-
-    it('remove calls DELETE /watchlist/:symbol', async () => {
-      mockAxiosInstance.delete.mockResolvedValue({});
-
-      await watchlistApi.remove('AAPL');
-
-      expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/watchlist/AAPL');
-    });
   });
 
   describe('healthApi', () => {

@@ -43,7 +43,6 @@ from app.models.reference_data import ReferenceData  # noqa: F401
 from app.models.scan_run import ScanRun  # noqa: F401
 from app.models.scanner_settings import ScannerSettings  # noqa: F401
 from app.models.universe import Universe  # noqa: F401
-from app.models.watchlist import Watchlist  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

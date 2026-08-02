@@ -7,7 +7,6 @@ from app.models.reference_data import ReferenceData
 from app.models.scan_run import ScanRun, ScanRunStatus
 from app.models.scanner_settings import SETTINGS_ROW_ID, ScannerSettings
 from app.models.universe import Universe
-from app.models.watchlist import Watchlist
 
 __all__ = [
     "SETTINGS_ROW_ID",
@@ -19,5 +18,4 @@ __all__ = [
     "ScanRunStatus",
     "ScannerSettings",
     "Universe",
-    "Watchlist",
 ]

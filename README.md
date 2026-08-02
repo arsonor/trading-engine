@@ -32,7 +32,7 @@ An alerts-only pre-market stock scanner. It scans a US equity universe during th
 
 Active traders need to monitor multiple stocks simultaneously for trading opportunities, but manually watching price movements, volume spikes, and technical patterns across many securities is impractical. This creates a need for an automated system that can:
 
-- **Monitor markets in real-time** across a customizable watchlist of stocks
+- **Scan the whole universe** each morning rather than a hand-picked list
 - **Evaluate configurable trading rules** against live market data
 - **Generate instant alerts** when trading setups are detected
 - **Provide actionable information** including entry prices, stop losses, and profit targets
@@ -58,7 +58,6 @@ The Trading Engine solves these problems by providing:
 4. **Web Dashboard**: A React-based frontend for:
    - Viewing and managing alerts in real-time
    - Creating and editing trading rules
-   - Managing your stock watchlist
    - Monitoring system status and statistics
 
 5. **WebSocket Updates**: Live push notifications ensure you see new alerts immediately without refreshing.
@@ -89,7 +88,7 @@ The system consists of a React frontend, a FastAPI backend, and a scheduled scan
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                         FastAPI Server                           │   │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐ │   │
-│  │  │ Alerts   │  │  Rules   │  │Watchlist │  │   WebSocket      │ │   │
+│  │  │ Scanner  │  │ Settings │  │  Status  │  │   WebSocket      │ │   │
 │  │  │   API    │  │   API    │  │   API    │  │   Endpoint       │ │   │
 │  │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────────┬─────────┘ │   │
 │  └───────┼─────────────┼─────────────┼─────────────────┼───────────┘   │
@@ -670,34 +669,34 @@ To test with real market data:
 
 2. **Start the backend and frontend** (see Quick Start above)
 
-3. **Add symbols to your watchlist** via the Settings page
+3. **Build the universe and reference data**:
+   ```bash
+   cd backend
+   uv run python scripts/probe_fmp_symbols.py       # discover accessible symbols
+   uv run python scripts/refresh_reference_data.py  # 2 API calls per ticker
+   ```
 
-4. **Create trading rules** via the Rules page
+4. **Run a scan** — `uv run python scripts/run_scan.py --fixture --profile demo`
 
-5. **Monitor the Dashboard** for real-time alerts when market conditions match your rules
+5. **Monitor the Candidates page** for the session's alerts, pushed live over WebSocket
 
-**Note:** Live data only streams during US market hours (9:30 AM - 4:00 PM ET)
+**Note:** the scanner runs pre-market (04:00-09:25 ET). Outside that window it records a
+`skipped` run and does no work.
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/api/v1/alerts` | List alerts (paginated, filterable) |
-| GET | `/api/v1/alerts/{id}` | Get alert details |
-| PATCH | `/api/v1/alerts/{id}` | Update alert (mark as read) |
-| GET | `/api/v1/alerts/stats` | Alert statistics |
-| GET | `/api/v1/rules` | List all rules |
-| GET | `/api/v1/rules/{id}` | Get rule details |
-| POST | `/api/v1/rules` | Create new rule |
-| PUT | `/api/v1/rules/{id}` | Update rule |
-| DELETE | `/api/v1/rules/{id}` | Delete rule |
-| POST | `/api/v1/rules/{id}/toggle` | Enable/disable rule |
-| GET | `/api/v1/watchlist` | Get watchlist |
-| POST | `/api/v1/watchlist` | Add symbol to watchlist |
-| DELETE | `/api/v1/watchlist/{symbol}` | Remove from watchlist |
-| GET | `/api/v1/market-data/{symbol}` | Get market data for symbol |
-| WS | `/api/v1/ws` | WebSocket for real-time updates |
+| GET | `/health` | Health check (reports DB connectivity) |
+| GET | `/api/v1/scanner/alerts` | Session candidates, highest confidence first |
+| GET | `/api/v1/scanner/alerts/{id}` | One candidate with its score breakdown |
+| POST | `/api/v1/scanner/alerts/{id}/read` | Mark a candidate read |
+| GET | `/api/v1/scanner/status` | Scanner health — distinguishes quiet market from outage |
+| GET | `/api/v1/scanner/scan-runs` | Recent scan runs with per-stage funnel counts |
+| GET | `/api/v1/scanner/settings` | Effective thresholds (env defaults + stored overrides) |
+| PUT | `/api/v1/scanner/settings` | Update thresholds; applies on the next scan |
+| DELETE | `/api/v1/scanner/settings` | Reset thresholds to environment defaults |
+| WS | `/api/v1/ws` | WebSocket; subscribe to the `alerts` channel |
 
 Full API documentation available at `/docs` when the server is running.
 
