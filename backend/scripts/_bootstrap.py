@@ -2,15 +2,53 @@
 
 Scripts are run as files (`uv run python scripts/foo.py`) rather than as modules, so the
 backend directory has to be on `sys.path` before `app.*` imports resolve.
+
+Also provides `run_cli()`, which every script uses instead of `asyncio.run()` so pooled
+database connections are closed deterministically — see its docstring.
 """
 
+import asyncio
 import logging
 import sys
+from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
+
+
+def run_cli(coro: Coroutine[Any, Any, int]) -> int:
+    """Run a CLI coroutine and dispose the database engine before the loop closes.
+
+    `asyncio.run(main())` on its own leaves the engine's pooled connections to be torn
+    down by garbage collection — after the event loop has already closed. Against local
+    Docker Postgres that is invisible. Against Supabase (TLS) it prints a
+    `Fatal error on SSL transport` / `RuntimeError: Event loop is closed` traceback on
+    every run, because the SSL transport's finaliser tries to write a close-notify to a
+    dead loop.
+
+    The work has already committed by then, so it is cosmetic — but a tool that must be
+    trusted when it reports failure cannot spend every successful run training its
+    operator to scroll past tracebacks.
+
+    Disposal happens inside the loop and in a `finally`, so it runs on the error path
+    too. Note this is deterministic cleanup, not warning suppression: the traceback
+    disappears because the connections are actually closed.
+    """
+
+    async def _runner() -> int:
+        try:
+            return await coro
+        finally:
+            # Imported here so `sys.path` is already set up and scripts that never touch
+            # the database do not pay for creating the engine.
+            from app.core.database import close_db
+
+            await close_db()
+
+    return asyncio.run(_runner())
 
 
 def configure_logging(verbose: bool = False) -> None:

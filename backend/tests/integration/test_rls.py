@@ -29,6 +29,7 @@ from app.core.rls import (
     enable_rls_sql,
 )
 from tests.integration.test_migration_round_trip import (
+    RLS,
     _asyncpg_dsn,
     _postgres_available,
     _redact,
@@ -206,8 +207,9 @@ async def test_the_rls_migration_is_idempotent(migrated_db):
     there must be a no-op rather than an error."""
     url, dsn = migrated_db["sqlalchemy_url"], migrated_db["dsn"]
 
-    # Already at head with RLS on; go back one and forward again.
-    _run_alembic("downgrade", "-1", database_url=url)
+    # Pinned to the RLS revision: "-1" from head retargets whenever a new migration
+    # lands on top, which has already caused false failures elsewhere in this suite.
+    _run_alembic("downgrade", f"{RLS}-1", database_url=url)
     after_downgrade = await _public_tables(dsn)
     assert not any(after_downgrade.values()), "Downgrade should have disabled RLS"
 

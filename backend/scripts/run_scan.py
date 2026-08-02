@@ -12,11 +12,10 @@ Stages 1 and 3 run on real reference data.
 """
 
 import argparse
-import asyncio
 import sys
 
 # Import first: puts the backend directory on sys.path for the `app.*` imports below.
-from _bootstrap import configure_logging
+from _bootstrap import configure_logging, run_cli
 
 from app.config import get_settings
 from app.models.scan_run import ScanRunStatus
@@ -32,6 +31,13 @@ from app.services.scanner.snapshot import FixtureSnapshotProvider
 DEMO_BANNER = "!" * 78
 
 
+def _wrap(text: str, width: int = 74) -> list[str]:
+    """Wrap a long diagnostic so it stays readable in a terminal."""
+    import textwrap
+
+    return textwrap.wrap(text, width=width)
+
+
 def _print_header(scanner: Scanner, provider, clock, args) -> None:
     profile = scanner.profile
     print()
@@ -40,17 +46,19 @@ def _print_header(scanner: Scanner, provider, clock, args) -> None:
         print("  DEMO PROFILE — thresholds are loosened so the pipeline can be seen")
         print("  running on free-tier data. These candidates are ILLUSTRATIVE and must")
         print("  NOT be treated as real trading signals.")
+        # The EFFECTIVE cap, after any stored override. Printing the designed value here
+        # is what previously let the banner contradict the stage logs in the same run.
+        print(f"  Effective float cap: < {profile.float_max:,}")
         print(DEMO_BANNER)
 
     print("Pre-market scan")
     print("=" * 78)
     print(f"  Scan time        : {describe(clock.now_et())}")
     print(f"  Profile          : {profile.name}" + ("  [DEMO]" if profile.is_demo else ""))
-    print(f"  Thresholds       : float < {profile.float_max:,} | avg vol > "
-          f"{profile.avg_volume_min:,.0f} | gap {profile.gap_min}-{profile.gap_max}% | "
-          f"rvol > {profile.rvol_min}% | upside >= {profile.upside_min}%")
-    print(f"  Risk filters     : price >= ${profile.price_floor} | dollar volume >= "
-          f"${profile.dollar_volume_min:,.0f}")
+    # Both derived from the profile's effective fields, so the banner above, this
+    # header and the stage logs can never disagree.
+    print(f"  Thresholds       : {profile.threshold_summary()}")
+    print(f"  Risk filters     : {profile.risk_summary()}")
     print(f"  Snapshot source  : {provider.source} ({getattr(provider, 'name', 'n/a')})")
     print(f"  RVOL mode        : {get_settings().rvol_mode}")
     if args.dry_run:
@@ -96,6 +104,13 @@ def _print_result(result: ScanResult, verbose: bool) -> None:
             print()
             print("  NOTE: RVOL is APPROXIMATE (not time-of-day normalized) — needs FMP")
             print("        Premium extended-hours bars (app V3).")
+    elif result.misconfiguration:
+        # An empty result caused by broken thresholds is not evidence about the market,
+        # so it must not be reported as one.
+        print("Candidates: none — but this looks like a MISCONFIGURATION.")
+        print("-" * 78)
+        for line in _wrap(result.misconfiguration):
+            print(f"  {line}")
     else:
         print("Candidates: none.")
         print("  The scan COMPLETED successfully and found nothing. This is a quiet")
@@ -230,4 +245,4 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="Per-ticker rejections")
     args = parser.parse_args()
     configure_logging(args.verbose)
-    sys.exit(asyncio.run(main(args)))
+    sys.exit(run_cli(main(args)))

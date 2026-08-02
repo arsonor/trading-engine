@@ -45,12 +45,44 @@ class ThresholdProfile:
     price_floor: float
     dollar_volume_min: float
 
-    description: str = ""
+    # NOTE: there is deliberately no `description` field.
+    #
+    # There used to be, holding a sentence like "float cap loosened to 20,000,000,000".
+    # `resolve_profile()` applies stored overrides with `replace(profile, **applied)`,
+    # which updates the numbers and leaves that sentence untouched — so a single run
+    # printed the effective cap in one line and the designed cap in the next. A
+    # hardcoded string that duplicates configuration is a second source of truth and
+    # will go stale again. Every summary below is derived from the fields at call time.
 
     @property
     def is_demo(self) -> bool:
         """Whether this profile's output is illustrative rather than actionable."""
         return self.name != PRODUCTION
+
+    def threshold_summary(self) -> str:
+        """The stage thresholds actually in effect, one line."""
+        return (
+            f"float < {self.float_max:,} | avg vol > {self.avg_volume_min:,.0f} | "
+            f"gap {self.gap_min}-{self.gap_max}% | rvol > {self.rvol_min}% | "
+            f"upside >= {self.upside_min}%"
+        )
+
+    def risk_summary(self) -> str:
+        """The risk filters actually in effect, one line."""
+        return (
+            f"price >= ${self.price_floor} | "
+            f"dollar volume >= ${self.dollar_volume_min:,.0f}"
+        )
+
+    def describe(self) -> str:
+        """Full human-readable description, derived — safe to show anywhere."""
+        if self.is_demo:
+            return (
+                f"DEMO — float cap loosened to {self.float_max:,} so free-tier mega-caps "
+                f"can reach Stage 1. Output is illustrative, NOT actionable. "
+                f"Effective: {self.threshold_summary()}"
+            )
+        return f"Production thresholds (docs/CLAUDE.md 4.3). Effective: {self.threshold_summary()}"
 
     def as_dict(self) -> dict:
         """Flat mapping for stamping into `scan_runs.stage_counts_json` and payloads."""
@@ -65,6 +97,7 @@ class ThresholdProfile:
             "upside_min": self.upside_min,
             "price_floor": self.price_floor,
             "dollar_volume_min": self.dollar_volume_min,
+            "summary": self.threshold_summary(),
         }
 
 
@@ -81,7 +114,6 @@ def production_profile() -> ThresholdProfile:
         upside_min=settings.scan_upside_min,
         price_floor=settings.scan_price_floor,
         dollar_volume_min=settings.scan_dollar_volume_min,
-        description="Production thresholds from docs/CLAUDE.md section 4.3.",
     )
 
 
@@ -92,10 +124,6 @@ def demo_profile() -> ThresholdProfile:
         production_profile(),
         name=DEMO,
         float_max=settings.scan_demo_float_max,
-        description=(
-            f"DEMO — float cap loosened to {settings.scan_demo_float_max:,} so free-tier "
-            f"mega-caps can reach Stage 1. Output is illustrative, NOT actionable."
-        ),
     )
 
 

@@ -102,6 +102,9 @@ class ScanResult:
     duration_s: float = 0.0
     error: str | None = None
     dry_run: bool = False
+    # Set when the funnel's shape indicates a misconfiguration rather than a quiet
+    # market. Callers must show this INSTEAD of the quiet-market message.
+    misconfiguration: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -109,8 +112,12 @@ class ScanResult:
 
     @property
     def is_quiet_market(self) -> bool:
-        """Completed successfully and found nothing — NOT the same as a failure."""
-        return self.succeeded and not self.candidates
+        """Completed successfully and found nothing — NOT the same as a failure.
+
+        False when a misconfiguration was detected: an empty result caused by broken
+        thresholds is not evidence about the market.
+        """
+        return self.succeeded and not self.candidates and self.misconfiguration is None
 
     def rejections_at(self, stage: str) -> list[Rejection]:
         return [r for r in self.rejections if r.stage == stage]
@@ -125,6 +132,7 @@ class ScanResult:
             "counts": self.counts.as_dict(),
             "candidates": [c.ticker for c in self.candidates],
             "error": self.error,
+            "misconfiguration": self.misconfiguration,
         }
 
 
@@ -173,7 +181,7 @@ class Scanner:
         )
 
         if self._profile.is_demo:
-            logger.warning("DEMO PROFILE ACTIVE — %s", self._profile.description)
+            logger.warning("DEMO PROFILE ACTIVE — %s", self._profile.describe())
 
         if not ignore_window and not is_within_scan_window(as_of):
             result.status = ScanRunStatus.SKIPPED
@@ -222,6 +230,22 @@ class Scanner:
             f"{self._profile.float_max:,}",
             f"{self._profile.avg_volume_min:,.0f}",
         )
+
+        # The demo profile is DESIGNED so the free-tier universe clears Stage 1 — that is
+        # its entire purpose. Zero survivors out of a non-empty universe therefore means
+        # the thresholds are wrong (most often a stored override reverting the loosened
+        # float cap), not that the market is quiet. Saying "no candidates" here would
+        # send the operator to look at the market instead of at their settings.
+        if self._profile.is_demo and result.counts.universe and not result.counts.stage_1:
+            result.misconfiguration = (
+                f"DEMO profile passed 0 of {result.counts.universe} tickers at Stage 1. "
+                f"Demo exists so the free-tier universe DOES pass, so this is almost "
+                f"certainly a misconfiguration rather than a quiet market. "
+                f"Effective thresholds: {self._profile.threshold_summary()}. "
+                f"Check stored overrides with `GET /api/v1/scanner/settings` — a value "
+                f"saved for this profile can revert the loosened float cap."
+            )
+            logger.warning(result.misconfiguration)
 
         snapshots = await self._snapshots.get_snapshots(stage1, result.as_of_et)
 
@@ -288,6 +312,7 @@ class Scanner:
                     {"ticker": r.ticker, "stage": r.stage, "reason": r.reason}
                     for r in result.rejections
                 ],
+                "misconfiguration": result.misconfiguration,
                 "snapshot_source": getattr(self._snapshots, "source", None),
                 "rvol_mode": self._rvol.mode,
                 "duration_s": round(result.duration_s, 3),
@@ -301,6 +326,15 @@ class Scanner:
                 describe(result.as_of_et),
                 self._profile.name,
                 result.error,
+            )
+            return
+
+        if result.misconfiguration:
+            logger.warning(
+                "Scan completed at %s (profile=%s) with 0 candidates, but the funnel "
+                "indicates a MISCONFIGURATION, not a quiet market.",
+                describe(result.as_of_et),
+                self._profile.name,
             )
             return
 

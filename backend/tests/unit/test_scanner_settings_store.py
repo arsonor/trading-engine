@@ -62,16 +62,55 @@ async def test_an_explicit_profile_beats_the_stored_one(store):
     assert (await store.resolve_profile("production")).name == "production"
 
 
-async def test_overrides_apply_across_profiles(store):
+async def test_overrides_are_scoped_to_the_profile_they_were_saved_for(store):
+    """Overrides saved for one profile must NOT reach another.
+
+    They used to: a single flat set was applied on top of whichever profile was active.
+    """
     await store.save(profile="demo", overrides={"gap_min": 4.0})
 
     demo = await store.resolve_profile("demo")
     production = await store.resolve_profile("production")
 
     assert demo.gap_min == 4.0
-    assert production.gap_min == 4.0
-    # The profile identity still differs where it should.
+    assert production.gap_min == 3.0  # untouched env default
     assert demo.float_max > production.float_max
+
+
+async def test_a_production_override_cannot_defeat_the_demo_float_cap(store):
+    """THE bug this scoping exists to prevent.
+
+    A user saving thresholds while thinking in production terms used to silently revert
+    demo's loosened float cap — and the resulting scan presented as a quiet market.
+    """
+    demo_default = (await store.resolve_profile("demo")).float_max
+
+    await store.save(profile="production", overrides={"float_max": 75_000_000})
+
+    assert (await store.resolve_profile("production")).float_max == 75_000_000
+    assert (await store.resolve_profile("demo")).float_max == demo_default
+
+
+async def test_each_profile_keeps_its_own_override_set(store):
+    await store.save(profile="production", overrides={"gap_min": 2.0})
+    await store.save(profile="demo", overrides={"upside_min": 12.0})
+
+    production = await store.resolve_profile("production")
+    demo = await store.resolve_profile("demo")
+
+    assert production.gap_min == 2.0
+    assert production.upside_min == 5.5
+    assert demo.upside_min == 12.0
+    assert demo.gap_min == 3.0
+
+
+async def test_saving_one_profile_does_not_clear_another(store):
+    await store.save(profile="production", overrides={"gap_min": 2.0})
+    await store.save(profile="demo", overrides={"upside_min": 12.0})
+    await store.save(profile="demo", overrides={"upside_min": 13.0})
+
+    assert (await store.resolve_profile("production")).gap_min == 2.0
+    assert (await store.resolve_profile("demo")).upside_min == 13.0
 
 
 async def test_saving_twice_updates_the_same_row(store):
@@ -84,11 +123,15 @@ async def test_saving_twice_updates_the_same_row(store):
 
 async def test_clear_falls_back_to_the_environment(store):
     await store.save(profile="demo", overrides={"gap_min": 2.5})
+    await store.save(profile="production", overrides={"gap_max": 12.0})
     await store.clear()
 
     profile = await store.resolve_profile()
     assert profile.name == "production"
     assert profile.gap_min == 3.0
+    # Every profile's overrides go, not just the active one's.
+    assert (await store.resolve_profile("demo")).gap_min == 3.0
+    assert profile.gap_max == 15.0
 
 
 # ------------------------------------------------------------------ validation

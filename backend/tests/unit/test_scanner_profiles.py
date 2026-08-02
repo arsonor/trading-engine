@@ -53,7 +53,8 @@ def test_demo_is_flagged_and_describes_why():
 
     assert demo.is_demo is True
     assert demo.name == DEMO
-    assert "NOT actionable" in demo.description
+    # Derived at call time, never a stored string — see test_threshold_reporting.py.
+    assert "NOT actionable" in demo.describe()
 
 
 def test_demo_float_cap_admits_the_free_tier_megacaps():

@@ -11,10 +11,9 @@ Cost: one FMP call per 25 candidates (~4 calls for the default list).
 """
 
 import argparse
-import asyncio
 
 # Import first: puts the backend directory on sys.path for the `app.*` imports below.
-from _bootstrap import configure_logging
+from _bootstrap import configure_logging, run_cli
 
 from app.services.fmp.client import FmpClient
 from app.services.fmp.errors import BudgetExhausted, FmpError
@@ -110,4 +109,4 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     configure_logging(args.verbose)
-    raise SystemExit(asyncio.run(main(args)))
+    raise SystemExit(run_cli(main(args)))

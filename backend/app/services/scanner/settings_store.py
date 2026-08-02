@@ -12,6 +12,22 @@ An absent row means "use the environment", so a fresh deploy needs no seed data.
 keys the user actually changed are stored, so a later change to an env default still
 reaches anything the user has not pinned.
 
+## Overrides are scoped PER PROFILE
+
+`overrides_json` is keyed by profile name::
+
+    {"production": {"gap_min": 2.5}, "demo": {"upside_min": 14.0}}
+
+They used to be one flat set applied on top of whichever profile was active, which had a
+specific and nasty failure: the demo profile exists for exactly one reason — loosen the
+float cap so free-tier mega-caps reach Stage 1 — and a user saving thresholds while
+thinking in production terms silently reverted that cap. The result presented as
+"0 candidates, successful scan, quiet market", which is precisely the confusion the whole
+scan-status design exists to prevent.
+
+Demo and production are different regimes with different intended values, so they do not
+share an override set. A value saved for one never reaches the other.
+
 Overrides are validated before they are written. A threshold set to nonsense (gap_min
 above gap_max, a negative price floor) would not raise anywhere useful — it would just
 silently produce zero candidates forever, which looks exactly like a quiet market.
@@ -24,6 +40,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.config import get_settings
 from app.models.scanner_settings import SETTINGS_ROW_ID, ScannerSettings
 from app.services.scanner.profiles import ThresholdProfile, available_profiles, get_profile
 
@@ -106,17 +123,46 @@ class ScannerSettingsStore:
                 select(ScannerSettings).where(ScannerSettings.id == SETTINGS_ROW_ID)
             )
 
-    async def get_overrides(self) -> tuple[str | None, dict[str, Any]]:
-        """(profile_name_override, threshold_overrides). Both may be empty."""
+    async def get_all_overrides(self) -> dict[str, dict[str, Any]]:
+        """Every profile's overrides, keyed by profile name."""
+        row = await self.load()
+        if row is None or not row.overrides_json:
+            return {}
+        return {
+            name: dict(values)
+            for name, values in row.overrides_json.items()
+            if isinstance(values, dict)
+        }
+
+    async def get_active_profile_name(self) -> str | None:
+        """The stored profile selection, or None to fall back to `SCAN_PROFILE`."""
+        row = await self.load()
+        return row.profile if row is not None else None
+
+    async def get_overrides(self, profile: str | None = None) -> tuple[str | None, dict[str, Any]]:
+        """(active_profile_name, overrides for `profile`).
+
+        `profile` defaults to whichever profile is currently active, so callers that
+        just want "what is in effect" need not know the name.
+        """
         row = await self.load()
         if row is None:
             return None, {}
-        return row.profile, dict(row.overrides_json or {})
+
+        active = row.profile
+        target = profile or active or get_settings().scan_profile
+        all_overrides = await self.get_all_overrides()
+        return active, dict(all_overrides.get(target, {}))
 
     async def save(
         self, profile: str | None = None, overrides: dict[str, Any] | None = None
     ) -> ScannerSettings:
-        """Persist overrides. Validates first — see the module docstring on why."""
+        """Persist overrides SCOPED TO a profile, and select that profile.
+
+        Overrides are written under the profile being edited — `profile` if given, else
+        whichever is currently active. Other profiles' overrides are left untouched. See
+        the module docstring for why they are not shared.
+        """
         resolved_profile = validate_profile_name(profile)
         cleaned = validate_overrides(overrides or {})
 
@@ -128,35 +174,59 @@ class ScannerSettingsStore:
                 row = ScannerSettings(id=SETTINGS_ROW_ID)
                 session.add(row)
 
+            target = resolved_profile or row.profile or get_settings().scan_profile
+            stored = dict(row.overrides_json or {})
+            if cleaned:
+                stored[target] = cleaned
+            else:
+                stored.pop(target, None)
+
             row.profile = resolved_profile
-            row.overrides_json = cleaned or None
+            row.overrides_json = stored or None
             await session.commit()
             await session.refresh(row)
 
         logger.info(
-            "Scanner settings updated: profile=%s overrides=%s", resolved_profile, cleaned
+            "Scanner settings updated: active profile=%s, overrides for %s=%s",
+            resolved_profile,
+            target,
+            cleaned,
         )
         return row
 
     async def clear(self) -> None:
-        """Drop all overrides and fall back to the environment."""
-        await self.save(profile=None, overrides={})
+        """Drop EVERY profile's overrides and the profile selection."""
+        async with self._session_factory() as session:
+            row = await session.scalar(
+                select(ScannerSettings).where(ScannerSettings.id == SETTINGS_ROW_ID)
+            )
+            if row is None:
+                return
+            row.profile = None
+            row.overrides_json = None
+            await session.commit()
+        logger.info("Scanner settings cleared; thresholds fall back to the environment.")
 
     async def resolve_profile(self, name: str | None = None) -> ThresholdProfile:
-        """Build the effective profile: env defaults, then stored overrides.
+        """Build the effective profile: env defaults, then that profile's stored overrides.
 
         `name` (an explicit per-run choice, e.g. `--profile demo`) wins over the stored
-        profile, which in turn wins over `SCAN_PROFILE`.
+        selection, which in turn wins over `SCAN_PROFILE`.
+
+        **Overrides are looked up by the resolved profile's own name.** A value saved
+        while `production` was active never reaches `demo` — see the module docstring.
         """
-        stored_profile, overrides = await self.get_overrides()
+        stored_profile = await self.get_active_profile_name()
         profile = get_profile(name or stored_profile)
 
-        if not overrides:
-            return profile
-
-        applied = {k: v for k, v in overrides.items() if k in OVERRIDABLE_FIELDS}
+        all_overrides = await self.get_all_overrides()
+        applied = {
+            k: v
+            for k, v in all_overrides.get(profile.name, {}).items()
+            if k in OVERRIDABLE_FIELDS
+        }
         if not applied:
             return profile
 
-        logger.info("Applying stored threshold overrides to %s: %s", profile.name, applied)
+        logger.info("Applying stored %s overrides: %s", profile.name, applied)
         return replace(profile, **applied)

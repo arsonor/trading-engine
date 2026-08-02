@@ -12,10 +12,9 @@ Default cost: 5 accessible symbols x 2 calls + 1 unavailable symbol x 1 call = 1
 """
 
 import argparse
-import asyncio
 
 # Import first: puts the backend directory on sys.path for the `app.*` imports below.
-from _bootstrap import configure_logging
+from _bootstrap import configure_logging, run_cli
 
 from app.services.fmp.client import EP_EOD_FULL, EP_SHARES_FLOAT
 from app.services.fmp.errors import BudgetExhausted, FmpError, SymbolNotAvailable
@@ -139,4 +138,4 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     configure_logging(args.verbose)
-    raise SystemExit(asyncio.run(main(args)))
+    raise SystemExit(run_cli(main(args)))

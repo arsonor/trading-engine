@@ -5,10 +5,9 @@
 """
 
 import argparse
-import asyncio
 
 # Import first: puts the backend directory on sys.path for the `app.*` imports below.
-from _bootstrap import configure_logging
+from _bootstrap import configure_logging, run_cli
 
 from app.config import get_settings
 from app.services.fmp.budget import DailyBudgetGuard, next_utc_midnight, utc_today
@@ -51,4 +50,4 @@ if __name__ == "__main__":
     parser.add_argument("--history", type=int, default=7, help="Show the last N days (0 to hide)")
     args = parser.parse_args()
     configure_logging()
-    raise SystemExit(asyncio.run(main(args.history)))
+    raise SystemExit(run_cli(main(args.history)))

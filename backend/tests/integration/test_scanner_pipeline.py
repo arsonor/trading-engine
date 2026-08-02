@@ -345,6 +345,89 @@ async def test_only_the_0925_pass_is_marked_final(
     assert early.counts.stage_3 == final.counts.stage_3
 
 
+# ------------------------------------------------------------------ misconfiguration
+
+
+async def test_demo_with_zero_stage_1_survivors_reports_misconfiguration(
+    test_session_factory, golden_snapshot_provider, golden_reference_data
+):
+    """Demo exists so the free-tier universe DOES clear Stage 1. Zero survivors means
+    the thresholds are wrong — most often a stored override reverting the loosened float
+    cap — and reporting that as a quiet market sends the operator to look at the market
+    instead of at their settings."""
+    from dataclasses import replace as dc_replace
+
+    # Demo, but with the float cap reverted to production's — exactly what a stored
+    # override used to do silently.
+    broken = dc_replace(demo_profile(), float_max=1)
+    scanner = Scanner(
+        session_factory=test_session_factory,
+        snapshot_provider=golden_snapshot_provider,
+        profile=broken,
+        clock=FixedClock(SCAN_AT),
+        rvol_calculator=SimpleRvol(),
+    )
+
+    result = await scanner.run()
+
+    assert result.status == ScanRunStatus.COMPLETED
+    assert result.counts.universe > 0
+    assert result.counts.stage_1 == 0
+    assert result.candidates == []
+
+    # The whole point: NOT a quiet market.
+    assert result.is_quiet_market is False
+    assert result.misconfiguration is not None
+    assert "misconfiguration" in result.misconfiguration.lower()
+    # It must point at the effective thresholds so the operator can see the culprit.
+    assert "float < 1" in result.misconfiguration
+    assert "settings" in result.misconfiguration.lower()
+
+    async with test_session_factory() as session:
+        run = await session.get(ScanRun, result.scan_run_id)
+    assert run.stage_counts_json["misconfiguration"]
+
+
+async def test_production_with_zero_stage_1_survivors_is_a_quiet_market(
+    test_session_factory, golden_snapshot_provider, golden_reference_data
+):
+    """The same funnel shape in PRODUCTION is expected on the free tier — every symbol
+    genuinely fails the real float cap. It must not be flagged as a misconfiguration."""
+    from dataclasses import replace as dc_replace
+
+    strict = dc_replace(production_profile(), float_max=1)
+    scanner = Scanner(
+        session_factory=test_session_factory,
+        snapshot_provider=golden_snapshot_provider,
+        profile=strict,
+        clock=FixedClock(SCAN_AT),
+        rvol_calculator=SimpleRvol(),
+    )
+
+    result = await scanner.run()
+
+    assert result.counts.stage_1 == 0
+    assert result.misconfiguration is None
+    assert result.is_quiet_market is True
+
+
+async def test_demo_with_survivors_reports_no_misconfiguration(
+    test_session_factory, golden_snapshot_provider, golden_reference_data
+):
+    demo = Scanner(
+        session_factory=test_session_factory,
+        snapshot_provider=golden_snapshot_provider,
+        profile=demo_profile(),
+        clock=FixedClock(SCAN_AT),
+        rvol_calculator=SimpleRvol(),
+    )
+
+    result = await demo.run()
+
+    assert result.counts.stage_1 > 0
+    assert result.misconfiguration is None
+
+
 # ------------------------------------------------------------------ scoping
 
 

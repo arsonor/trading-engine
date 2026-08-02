@@ -206,7 +206,9 @@ async def get_scanner_settings() -> ThresholdSettings:
         price_floor=profile.price_floor,
         dollar_volume_min=profile.dollar_volume_min,
         overrides=overrides,
-        description=profile.description,
+        # Derived from the effective fields, never a stored string — see
+        # ThresholdProfile.describe().
+        description=profile.describe(),
     )
 
 
