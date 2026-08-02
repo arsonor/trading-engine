@@ -34,7 +34,12 @@ BACKEND_DIR = Path(__file__).parents[2]
 SCANNER_TABLES = "5c3b382f1d74"  # universe, reference_data, scan_runs, api_budget
 V2_CONTRACT = "0ca0181ab014"  # v2 alert columns added; v1 columns still present
 PHASE_35 = "c653a931ecaf"  # v1 columns dropped, symbol -> ticker, rules dropped
-HEAD = "544a7fbf3445"  # watchlist dropped
+WATCHLIST_DROP = "544a7fbf3445"  # watchlist dropped
+RLS = "dbdf5784db31"  # RLS enabled on all public tables
+
+# Revision-specific tests name the revision they exercise instead of using "head" or
+# a relative "-1". Both of those silently retarget the moment a new migration lands on
+# top — which has already caused two false failures in this file.
 
 pytestmark = pytest.mark.timeout(180)
 
@@ -445,7 +450,7 @@ async def test_watchlist_drop_round_trips_on_populated_data(scratch_db):
     finally:
         await conn.close()
 
-    result = _run_alembic("upgrade", "head", database_url=url)
+    result = _run_alembic("upgrade", WATCHLIST_DROP, database_url=url)
     assert "Dropping `watchlist` with 3 row(s)" in result.stdout + result.stderr
     assert not await _table_exists(dsn, "watchlist")
 

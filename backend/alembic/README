@@ -1,1 +1,64 @@
-Generic single-database configuration.
+Alembic migrations — Trading Engine
+==================================
+
+Generic single-database configuration, with three project-specific rules.
+
+
+1. EVERY NEW TABLE MUST HAVE ROW-LEVEL SECURITY
+-----------------------------------------------
+
+    from app.core.rls import enable_rls
+
+    def upgrade() -> None:
+        op.create_table("my_table", ...)
+        enable_rls("my_table")
+
+Supabase auto-generates a Data API over the `public` schema. A table without RLS is
+readable *and writable* by anyone holding the project URL and the anon key — which is
+public by design — bypassing the FastAPI backend entirely. Supabase flagged this project
+as CRITICAL for exactly that reason.
+
+RLS with **no policies** is the intended configuration: the backend connects as the table
+owner (BYPASSRLS), so deny-all blocks the Data API and changes nothing for the
+application. Do not add permissive policies, and do not use FORCE ROW LEVEL SECURITY.
+
+`tests/integration/test_rls.py` fails CI if any `public` table lacks RLS. Rationale, the
+exemption allowlist, and the assumption this rests on: `app/core/rls.py`.
+
+
+2. DOWNGRADES MUST WORK ON A POPULATED DATABASE
+------------------------------------------------
+
+An empty-database round trip proves almost nothing — that is precisely how a broken
+downgrade shipped once already. Re-adding a NOT NULL column needs a backfill or a
+`server_default`; dropping columns needs an explicit, documented decision about the data
+in them.
+
+Worked examples: `0ca0181ab014` (backfill before restoring NOT NULL, aborting loudly on
+rows it cannot convert) and `c653a931ecaf` (deciding the fate of v1-origin rows).
+
+Cover new migrations in `tests/integration/test_migration_round_trip.py`, seeding
+realistic rows first.
+
+
+3. MIGRATIONS TARGET THE SESSION POOLER
+----------------------------------------
+
+`MIGRATION_DATABASE_URL` (Supabase session pooler, port 5432) if set, otherwise
+`DATABASE_URL`. The app runtime uses the transaction pooler (6543). Both are made
+pgBouncer-safe by `app/core/db_connect.py`; see that module before changing connection
+handling.
+
+
+Common commands
+---------------
+
+    uv run alembic upgrade head
+    uv run alembic downgrade -1
+    uv run alembic revision -m "..."            # hand-write the operations
+    uv run alembic revision --autogenerate -m "..."   # ALWAYS review the output
+    uv run alembic check                        # models vs database, no file written
+
+Autogenerate output needs review every time: it emits unnamed foreign keys (which makes
+downgrades uncompilable), omits `server_default` on new NOT NULL columns, and never
+enables RLS.
