@@ -411,15 +411,352 @@ migration is cheapest now while nobody depends on the app.
 
 ---
 
-## Phase 4+ (V2 — FMP Starter) — not yet written
+## Phase 4-prep (free tier) — Enforce Row-Level Security on every table
 
-Written after V1 ships. Both former FMP open questions are answered (see PLAN.md top):
-no pre-market intraday on Starter (`extended=true` = Premium), and intraday access
-otherwise as the comparison table shows. V2 scope therefore centres on: universe
-expansion, live pre-market gap% via the pre/after-market quote endpoints, an explicitly
-flagged RVOL approximation behind the RvolCalculator interface, cron go-live, and
-observing whether volume conviction justifies the V3 (Premium) upgrade. Scope in
-`docs/PLAN.md` Phase 4.
+**Status:** ✅ DONE (2 August 2026) — migration `dbdf5784db31` enables RLS on all eight
+`public` tables with zero policies; `tests/integration/test_rls.py` fails (never skips)
+when any `public` table lacks it. Policy lives in `app/core/rls.py`; the convention is
+documented in `alembic/script.py.mako` and `alembic/README`, where the next migration
+author will actually meet it.
+**Depends on:** Phase 3.5
+**Tier:** free — no subscription needed. Good use of the wait on FMP support.
+
+````
+# Phase 4-prep — Make missing RLS impossible to ship
+
+## Context
+Supabase flagged a CRITICAL security issue on this project: tables in the `public`
+schema without Row-Level Security. Without RLS, anyone holding the project URL and the
+(publicly-designed) anon key can read, edit and delete those tables through Supabase's
+auto-generated Data API — bypassing the FastAPI backend entirely.
+
+This has been fixed BY HAND on the production database with `ALTER TABLE ... ENABLE ROW
+LEVEL SECURITY` for the current tables. That fix is not durable: every table a future
+migration creates will lack RLS, and V2/V3 add several. `docs/PLAN.md` carries a
+checklist reminder, but a reminder is not enforcement — it depends on a human reading
+the plan at the right moment.
+
+This phase converts "remember to enable RLS" into "CI fails if you didn't", the same way
+the migration round-trip test converted "remember to test downgrades".
+
+## Why RLS with NO policies is the correct configuration here
+This project never uses the Supabase Data API. The backend connects directly over
+Postgres as `postgres`, which owns the tables and carries BYPASSRLS — so RLS with zero
+policies denies the Data API's `anon`/`authenticated` roles while leaving the
+application completely unaffected. Do not write permissive policies to "make it work";
+nothing needs to work through that path.
+
+## Scope
+
+1. **A migration that enables RLS on every existing table**
+   - Enable RLS on all current `public` tables so local, CI and production match.
+     Environment parity is a standing principle in this project — the production
+     database must not be the only place RLS is on.
+   - Handle `alembic_version` deliberately: decide whether it is in scope, and if it is
+     excluded, say why in the migration docstring rather than leaving it an oversight.
+   - Reversible downgrade (disable RLS), with the security implication noted in the
+     docstring.
+
+2. **A reusable convention for future migrations**
+   - A small helper (e.g. `enable_rls(table_name)`) in a shared migration utility module,
+     so new migrations enable RLS in one obvious line.
+   - Document the convention where a developer will actually meet it: the Alembic README
+     or a comment in `alembic/script.py.mako` so it appears in every generated migration
+     stub.
+
+3. **The enforcement test — this is the real deliverable**
+   - Against a migrated Postgres database, query the catalog for every base table in
+     `public` and assert each has `relrowsecurity = true`.
+   - The failure message must name the offending tables and give the exact SQL to fix
+     them — a developer hitting this in CI should not have to research anything.
+   - Any deliberate exclusion lives in an explicit, commented allowlist in the test, so
+     skipping a table is a visible decision rather than a silent gap.
+   - This must run in CI (Postgres is already a CI service as of the last hotfix) and
+     must FAIL rather than SKIP when the database is unavailable in CI — a silently
+     skipped security test is worse than no test.
+
+4. **Prove the test has force**
+   - Temporarily add a table without RLS (or disable it on one), confirm the test fails
+     with the intended message, then revert. Report the observed failure output.
+   - This is the same verification discipline used on the downgrade round-trip test. A
+     test nobody has watched fail is just a test that passes.
+
+## Constraints
+- Do NOT use `FORCE ROW LEVEL SECURITY`. That subjects the table owner to RLS too, which
+  would break the application's own access.
+- Do NOT create any RLS policies. Zero policies is the intended deny-all posture.
+- No change to application behaviour, queries, or the alert contract.
+- Do NOT run anything against the production Supabase instance — it has already been
+  fixed by hand; the migration must be safe to re-apply there (idempotent).
+- Document the assumption that the application's database role owns its tables or has
+  BYPASSRLS. If a future deployment connects as a restricted role, RLS becomes
+  load-bearing and policies would be required — note this so it is not discovered the
+  hard way.
+
+## Definition of done
+1. Migration enables RLS on all existing tables and is idempotent (safe on a database
+   where RLS is already on — i.e. production)
+2. The helper + convention exist and are documented where a developer will see them
+3. The enforcement test passes after the migration
+4. The test demonstrably fails when a table lacks RLS — report the actual output
+5. The test runs in CI and fails (not skips) if Postgres is unavailable there
+6. App works unchanged locally: `/health`, `/api/v1/scanner/status`,
+   `/api/v1/scanner/alerts` all behave as before
+7. Migration round-trip test still passes on populated data
+8. Tests pass; ruff clean
+````
+
+---
+
+## Phase 4-prep (b) — Cleanups from the V1 production shakedown
+
+**Status:** ✅ DONE (2 August 2026) — all three fixed. Issue 3 was resolved by scoping
+`overrides_json` per profile (migration `9c3b774f629a`) rather than by clearing overrides
+on profile switch, so the two profiles' tuning no longer collide; the pipeline now names
+the demo/zero-Stage-1 misconfiguration instead of reporting it as a quiet market.
+**Depends on:** Phase 3.5
+**Tier:** free — no subscription needed
+**Origin:** found while running V1 against Supabase for the first time. All three are
+"the system reports something false while behaving correctly", which is the most
+expensive kind of small bug — it sends you debugging the wrong thing.
+
+````
+# Phase 4-prep (b) — Three cleanups from the first production run
+
+## Context
+Read `docs/CLAUDE.md` and `docs/PLAN.md` first. V1 is complete and was run against the
+production Supabase database for the first time. Three issues surfaced. None breaks the
+scanner; two actively mislead the operator.
+
+## Issue 1 — CLI scripts never dispose the database engine
+
+`app/core/database.py` provides `close_db()` (which calls `await engine.dispose()`), but
+no CLI script in `backend/scripts/` calls it. Connections are torn down by garbage
+collection after the event loop has already closed.
+
+Against local Docker Postgres this is invisible. Against Supabase (TLS) it produces a
+noisy `Fatal error on SSL transport` / `RuntimeError: Event loop is closed` traceback on
+every run, because the SSL transport's finaliser tries to write a close-notify to a dead
+loop. It is cosmetic — the work has already committed — but it trains the operator to
+ignore tracebacks, which is a bad habit to build into a tool that must be trusted when it
+reports failure.
+
+**Fix:** every CLI script disposes the engine inside the async context, in a `finally`
+so it runs on the error path too. Cover all of `backend/scripts/`. The point is
+deterministic cleanup of pooled connections; silencing the Windows traceback is a
+side effect, not the goal — do not "fix" this by suppressing warnings.
+
+## Issue 2 — The demo banner reports nominal thresholds, not effective ones
+
+Observed output, from a single run:
+
+    Thresholds : float < 75,000,000            <- effective (correct)
+    WARNING ... float cap loosened to 20,000,000,000   <- nominal (wrong)
+    Stage 1: 0/43 tickers passed (float < 75,000,000)  <- effective (correct)
+
+The warning text comes from the profile's stored `description` string, which hardcodes
+the designed value. After `resolve_profile()` applies stored overrides via
+`replace(profile, **applied)`, that description is stale — it describes a profile that is
+no longer in effect.
+
+**Fix:** derive every human-readable threshold summary from the profile's actual field
+values at render time. A hardcoded description that duplicates configuration is a second
+source of truth and will go stale again. Prefer removing the parallel string over
+remembering to update it.
+
+## Issue 3 — Stored settings silently defeat the demo profile
+
+The demo profile exists for exactly one reason: loosen the float cap so free-tier
+mega-caps can reach Stage 1 and the pipeline can be seen working. But
+`ScannerSettingsStore.resolve_profile()` applies the single stored settings row on top of
+*any* profile. A user who saves thresholds while thinking in production terms silently
+reverts demo's loosened cap — and the result presents as "0 candidates, successful scan,
+quiet market", which is exactly the failure mode the whole scan-status design exists to
+prevent.
+
+**Decide the fix; do not assume.** Options, with the trade-off stated in the commit:
+- **Scope settings per profile** (a row per profile). Structurally correct — demo and
+  production are different regimes and should not share an override set. Costs a
+  migration, which is cheap now that round-trip tests exist.
+- **Protect the demo profile's loosened fields** from override.
+- **Detect and warn loudly** when an override materially conflicts with the active
+  profile's purpose.
+
+Whichever is chosen, this must hold: **a demo scan whose loosened thresholds have been
+reverted must never present as a quiet market.**
+
+Additionally, add a sanity check to the scan output: **in the demo profile, Stage 1
+passing 0 of N is almost certainly a misconfiguration, not a quiet market** — demo is
+designed so the free-tier universe passes. Say so explicitly in that case, and point at
+the effective thresholds.
+
+## Constraints
+- No change to scanner logic, stage arithmetic, thresholds, or the alert contract.
+- Do NOT run anything against the production Supabase instance.
+- If Issue 3 needs a migration, it is reversible and covered by the round-trip test on
+  populated data, per the standing rule in `docs/PLAN.md`.
+- Preserve the existing three-layer precedence documented in `settings_store.py`
+  (env defaults → stored row → explicit per-run argument) unless the chosen fix
+  deliberately changes it — in which case update that module docstring to match.
+
+## Definition of done
+1. Every script in `backend/scripts/` disposes the engine, including on the error path;
+   no SSL/event-loop traceback when run against a TLS Postgres
+2. Threshold summaries (banner, header, stage logs) all show identical effective values,
+   pinned by a test that applies an override and asserts the banner reflects it
+3. Issue 3's fix implemented, justified in the commit, with a test proving a stored
+   override can no longer silently defeat the demo profile
+4. Demo profile + 0 Stage-1 survivors produces an explicit misconfiguration warning, not
+   a quiet-market message — with a test
+5. `settings_store.py` docstring matches actual behaviour
+6. Existing tests pass; ruff clean; scanner output otherwise byte-identical (verify with
+   a fixture run before and after)
+````
+
+---
+
+## Phase 4A (V2) — Starter capability probe
+
+**Status:** ready — run on the first day of the Starter subscription, before any V2 design
+**Depends on:** Phase 3.5, Phase 4-prep, an active FMP **Starter** key
+**Why first:** Phase 1's probe immediately disproved three documented free-tier behaviours
+(`batch-quote`, `stock-list` and `company-screener` were all 402). FMP support has now
+answered what it can, but three things remain undocumented and one of them
+(does the "aftermarket" quote work during **pre**-market?) determines whether V2 works at
+all. Measure before building.
+
+````
+# Phase 4A — Empirically characterise the FMP Starter tier
+
+## Context
+Read `docs/PLAN.md` ("FMP Starter capabilities" + "call-budget arithmetic") first.
+
+The key has been upgraded from Basic to **Starter**. FMP support confirmed: the
+aftermarket quote endpoint returns volume; `batch-quote` is Premium-only (so every live
+quote costs 1 call); `company-screener` cannot return float, only `shares-float` /
+`shares-float-all` can.
+
+This phase writes NO product code. It measures what the tier actually does, so 4B and 4C
+are designed against reality rather than documentation. Deliverable = a probe script + a
+written findings report.
+
+## Questions to answer empirically
+
+**A. Pre-market data — the critical unknown**
+
+FMP support has confirmed: *Aftermarket **Quote*** is **post-close only** and does not
+cover pre-market; there is **no dedicated pre-market quote endpoint**; and
+`extended=true` (the pre-market bars path) is Premium-only. Their recommendation for
+real-time pre-market activity is the **Aftermarket Trade** endpoint.
+
+So `gap_pct` is probably fine but `rvol_pct` is in doubt. A *trade* payload is usually
+last price + last trade **size** + timestamp — one transaction, not cumulative session
+volume. Establish exactly what is available:
+
+1. **`aftermarket-trade` during pre-market (04:00–09:30 ET)**: does it return data at all?
+   Capture the full raw payload for several tickers. Enumerate every field.
+2. **Does anything in that payload represent cumulative session volume**, as opposed to
+   the size of a single trade? Distinguish them by *sampling the same ticker every ~2
+   minutes for 30–60 minutes of a live pre-market session*: a cumulative field rises
+   monotonically, a per-trade size fluctuates. **Record the raw series in the report** —
+   this is the single most consequential measurement in the phase.
+3. **The regular `quote` endpoint during pre-market.** FMP says Quote is "regular hours
+   only", but day-cumulative `volume` fields often begin accumulating before the open even
+   when `price` is stale. Sample it through the same window and report, per field, whether
+   it updates pre-open: `price`, `volume`, `avgVolume`, `previousClose`, `dayHigh/Low`.
+   **If `volume` accumulates pre-market, RVOL is saved** — this is the highest-value
+   long-shot in the probe.
+4. **The `company-screener` `volume` field during pre-market.** Same question, and if it
+   works it is far better than either of the above: the screener returns many symbols per
+   call, which would solve the volume problem *and* the missing-`batch-quote` problem at
+   once. Compare its `volume` for a given ticker against `quote` and `aftermarket-trade`
+   at the same moment.
+5. Do these work for **low-float small caps**, or only large caps? Probe both.
+6. What is returned for a ticker with **no pre-market activity** — zeros, nulls, stale
+   previous-session values, or an error? The scanner must distinguish "not trading" from
+   "no data", and a stale non-null value is the dangerous case.
+
+> Report the outcome as an explicit verdict: **can V2 compute a meaningful `rvol_pct`,
+> and from which endpoint?** If the answer is no, say so plainly — V2 then ships as a
+> gap-and-headroom scanner with RVOL disabled and labelled, and that becomes the V3
+> upgrade trigger. Do not manufacture an approximation from a per-trade size and present
+> it as relative volume; a fabricated conviction signal is worse than an absent one.
+
+**B. Float endpoints**
+6. **`shares-float-all`** is confirmed available on Starter. Measure it: how many records,
+   is it paginated, payload size (bandwidth matters — 20 GB/30 days), does it cover small
+   caps, and how current is the data? This is the nightly float refresh.
+7. Does `shares-float` now work for arbitrary US symbols (not just the free-tier sample)?
+
+**C. Universe endpoints**
+8. Are `stock-list` and `company-screener` unrestricted now? Capture the exact fields the
+   screener returns.
+9. Screener pagination and filter behaviour: page size, total available, which filters are
+   honoured (`volume`, `price`, `marketCap`, `isEtf`, `isFund`, exchange, country).
+10. **Measure the universe size at several pre-filter settings**, e.g.
+    `price > 2 AND volume > 500000` with market-cap ceilings of $2B / $5B / $10B / none.
+    Report the counts. 4B needs these numbers to size the nightly job; a market-cap ceiling
+    is only a *proxy* for float, so note how over-inclusive each setting is.
+
+**D. Limits**
+11. Confirmed by support: **300 calls/minute, no daily cap**, 20 GB bandwidth per rolling
+    30 days. Verify the rate limit empirically and — since bandwidth is now the binding
+    quota rather than call count — **measure the payload size of every endpoint the
+    scanner will use**, and project monthly bandwidth for a realistic universe and cadence.
+12. Confirm whether 402 responses still occur on Starter and for which endpoints.
+
+## Scope
+
+1. **`scripts/probe_fmp_starter.py`** — a self-contained probe covering A–D. Structured
+   output, and it must be re-runnable at different times of day (pre-market vs after-hours)
+   since question A.1 and A.3 can only be answered during a live extended session.
+2. **Every call goes through the existing budget guard.** Raise `FMP_DAILY_BUDGET` to a
+   Starter-appropriate value via config — do NOT bypass the guard. It is now the record of
+   what the tier costs.
+3. **Record fixtures** for every new endpoint shape discovered (aftermarket quote with and
+   without activity, `shares-float-all` sample, screener page) into `tests/fixtures/fmp/`,
+   reusing the Phase 1 recorder so tests keep running offline.
+4. **Extend the FMP client only as needed to probe** — typed models for the new endpoints,
+   with the same error taxonomy. No scanner or pipeline changes.
+5. **A findings document** at `docs/FMP_STARTER_FINDINGS.md`: every question above with the
+   measured answer, the raw evidence (including the volume time-series from A.3), and an
+   explicit list of what could NOT be determined and why.
+
+## Constraints
+- No changes to the scanner, alert contract, dashboard or thresholds.
+- Do not deliberately exhaust the rate limit or the daily quota.
+- CI must stay offline — fixtures only.
+- A.1 and A.3 require a live pre-market session (04:00–09:30 ET = 10:00–15:30 CEST). If
+  the probe is run outside those hours, say so explicitly in the report rather than
+  inferring, and re-run during a session.
+
+## Definition of done
+1. `scripts/probe_fmp_starter.py` runs and answers A–D as far as the session allows
+2. `docs/FMP_STARTER_FINDINGS.md` exists with measured answers and raw evidence
+3. **An explicit verdict on RVOL**: can V2 compute a meaningful `rvol_pct`, from which
+   endpoint, and with what caveats — or is Stage 2 gap-only at this tier?
+4. **Question A.2/A.3 answered with a time-series**, not single samples
+5. Universe counts reported for at least three pre-filter settings
+6. Projected monthly bandwidth for a realistic universe and scan cadence
+7. Fixtures recorded for every new endpoint shape; tests pass offline; ruff clean
+8. Report closes with: which of 4B/4C's planned designs are now confirmed, which must
+   change, and any newly discovered constraint
+````
+
+---
+
+## Phase 4B / 4C (V2) — written after 4A reports
+
+**4B — Universe expansion + nightly refresh at scale.** Two-step build (screener → float
+→ `reference_data`), sized by 4A's measured counts, budget-aware and resumable.
+
+**4C — Live snapshot provider, RVOL, cron go-live.** `FmpLiveSnapshotProvider` against the
+aftermarket quote; RVOL approximation selected from 4A's volume-semantics finding and
+flagged approximate everywhere; tiered cron cadence (15 min early session, 5 min from
+08:00); Render backend upgraded to Starter; news/catalyst tagging.
+
+Both depend on 4A's answers — particularly whether pre-market is covered and whether the
+quote's volume is cumulative. Writing them earlier would bake in assumptions.
 
 ---
 

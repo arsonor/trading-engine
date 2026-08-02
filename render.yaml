@@ -51,7 +51,14 @@ services:
     # migrations take a Postgres advisory lock (alembic/env.py) so concurrent starts
     # serialize rather than race, and they target the session pooler.
     # If this service ever scales past one instance, or boot latency starts to matter,
-    # move this to a pre-deploy step and drop it from startCommand.
+    # move this to a pre-deploy step and drop it from startCommand:
+    #
+    #   preDeployCommand: cd backend && alembic upgrade head
+    #   startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    #
+    # That requires `plan:` above to be a PAID tier — Render's pre-deploy hook is not
+    # available on free instances. Phase 4C upgrades this service to Starter for
+    # always-on operation, so both changes land together there (see docs/PLAN.md).
     startCommand: |
       cd backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:

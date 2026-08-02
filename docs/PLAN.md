@@ -77,8 +77,9 @@ Reusable: FastAPI + async SQLAlchemy + Alembic + `uv`; React 19/Vite/Zustand fro
 client WebSocket alert broadcast; OpenAPI contract + generated TS types; ~355 tests + CI;
 deployed infra (Render Frankfurt web + cron stub, Vercel, Supabase) — verified end-to-end.
 
-Being retired: Alpaca client + stream manager; watchlist streaming model; per-tick YAML
-rule engine as primary trigger; Alpaca MCP trading tools.
+Retired — all gone as of 2 August 2026 (Phase 3.5 plus the watchlist deletion): Alpaca
+client + stream manager; watchlist model, API and table; per-tick YAML rule engine and the
+`rules` table; the MCP server.
 
 ---
 
@@ -239,24 +240,133 @@ output byte-identical before and after; round-trip + downgrade pass on populated
 
 ### Phase 4 (V2 — requires FMP Starter) — Go Live
 
-**Verify before subscribing** (from the V1 build):
-1. That the pre/after-market quote endpoints expose a usable pre-market **volume** figure
-   at all — the RVOL approximation depends on it, and FMP's docs do not say. If they do
-   not, V2 ships gap% without RVOL conviction, which weakens Stage 2 considerably.
-2. That `batch-quote` really is unrestricted on Starter (it is 402 on free). Universe
-   expansion and the cheap symbol probe both assume it.
-3. Whether `company-screener` returns float, or only market cap. Stage 1 needs float, and
-   the free tier could not be probed for this.
+**Carried over from Phase 3.5 — ✅ DONE (2 August 2026), no subscription needed:**
+- [x] **Watchlist deleted.** Model, API and its router registration, repository, schemas,
+      frontend store slice and components, tests, and the `watchlist` table via migration
+      `544a7fbf3445`. It had no UI, nothing in the v2 spec referenced it, and the scanner's
+      premise is scanning the whole universe rather than a curated list — yet every schema
+      change still had to account for it. `docs/CLAUDE.md` §5 records why. Same reasoning as
+      the MCP removal: git keeps it if a favourites feature ever earns a place on the
+      roadmap.
+- [x] **RLS enforced, not remembered.** Migration `dbdf5784db31` enables row-level security
+      on all eight `public` tables including `alembic_version`, with **zero policies** — a
+      deny-all posture for the Supabase Data API, which the backend is unaffected by because
+      it connects as the table owner. `tests/integration/test_rls.py` fails (never skips) when
+      any `public` table lacks it, so the V2 migrations cannot ship an exposed table. The
+      migration is idempotent: production had already been fixed by hand.
+- [x] **Phase 4-prep (b) — three cleanups.** CLI scripts now dispose the DB engine through
+      `run_cli()`; threshold summaries are derived at call time, so the demo banner reports
+      *effective* rather than nominal values; and `scanner_settings.overrides_json` is scoped
+      per profile (migration `9c3b774f629a`), so a production override can no longer silently
+      defeat the demo float cap and present as a quiet market — the pipeline now names that
+      misconfiguration instead of reporting a clean empty scan.
 
-- [ ] Universe expansion: directory + screener endpoints → real low-float universe
-- [ ] Real-time + pre/after-market quote endpoints → live pre-market gap%
-- [ ] **RVOL approximation** (no pre-market bars on Starter — confirmed): validate
-      empirically what the quote endpoints expose for pre-market volume; implement the
-      best available approximation behind the RvolCalculator interface; **flag every
-      alert's RVOL as approximate** in payload + UI
-- [ ] Wire the cron job to the real scan (every 5 min, 04:00–09:25 ET); upgrade Render
-      backend to Starter (always-on)
-- [ ] News/catalyst tagging; first weeks of live-alert observation (open questions #3–4)
+### FMP Starter capabilities — ANSWERED (FMP support, 29 July 2026)
+
+| Question | Answer | Consequence |
+|---|---|---|
+| Do pre/after-market quote endpoints return **volume**? | **Partly — and not where we needed it.** The *Aftermarket Quote* endpoint returns volume, but it is **post-close only**; it does **not** cover pre-market. There is **no dedicated pre-market quote endpoint**. | The original Stage-2 data source does not exist on any tier. Pre-market price must come from **Aftermarket Trade** instead. See "the pre-market volume problem" below. |
+| Is `batch-quote` available on Starter? | **No** — batch quote and batch quote short are **Premium-only**. One symbol per request. | Every live snapshot costs 1 call per ticker per pass. |
+| Does `company-screener` return float? | **No** — market cap, price, volume, beta, sector, industry, country, ETF/fund flags only. Float comes from `shares-float` or `shares-float-all`. | Universe build is **two-step**: screener pre-filters on proxies, float fetched separately, real Stage-1 cap applied locally. |
+| Is `shares-float-all` (bulk float) available on Starter? | **Yes** — bulk float for many companies in one request (`freeFloat`, `floatShares`, `outstandingShares`), US symbols. | **Nightly float refresh collapses from ~N calls to ~1.** Removes the largest chunk of the nightly job. |
+| Daily request cap on Starter? | **No daily cap** — 300 calls/minute, plus a 20 GB / rolling-30-day bandwidth limit. | The tiered-cadence workaround is **no longer required for quota reasons**. 300/min is still a pacing constraint per pass, and bandwidth now matters more than call count. |
+
+**What FMP recommends for pre-market**, in their own words:
+- *Quote API* → regular hours only
+- *Aftermarket Trade* → real-time pre-market **trading activity**
+- *Historical chart 5min + `extended=true`* → pre-market OHLCV bars — **but `extended=true`
+  is Premium-only**, so this path is V3.
+
+### The pre-market volume problem (the open risk for V2)
+
+A **trade** endpoint and a **quote** endpoint carry different payloads. A trade record is
+typically last price + last trade size + timestamp — the size of *one transaction*, not
+cumulative session volume. If Aftermarket Trade behaves that way, then on Starter:
+
+- Pre-market **price** → available → `gap_pct` works ✅
+- Pre-market **cumulative volume** → possibly unavailable → `rvol_pct` uncomputable ❌
+
+That would reduce Stage 2 to a gap filter with no conviction signal — the exact scenario
+flagged as V2's main risk. It is **not settled**: three candidate sources could still
+supply cumulative pre-market volume, and all three are cheap to measure rather than debate.
+
+| Candidate | Why it might work | Why it might not |
+|---|---|---|
+| `aftermarket-trade` payload | May carry a running/session volume field alongside last trade size | "Trade" endpoints usually report per-transaction size only |
+| `quote` → `volume` field | Day-cumulative volume fields often begin accumulating pre-open, even when the *price* is stale | FMP says Quote is "regular hours only" — that may apply to the whole payload |
+| `company-screener` → `volume` field | Returns many symbols per call — would solve the volume **and** the batch problem at once | Screener volume may be previous-close or delayed |
+
+**Any one of these working salvages RVOL at V2.** Phase 4A measures all three during a
+live pre-market session before a line of V2 code is designed.
+
+**Verdict: Starter still delivers a working scanner — with one unresolved question that
+sets its ceiling.** Stage 1 (real float via bulk `shares-float-all`), Stage 3 (resistance
+math) and Stage 2's `gap_pct` all work. Whether Stage 2 also gets `rvol_pct` depends
+entirely on the pre-market volume question above. Worst case, V2 ships as a gap-and-
+headroom scanner with RVOL disabled and clearly labelled — still a real filter, but
+missing the conviction signal, and that becomes a much sharper V3 trigger.
+
+### The call-budget arithmetic (Starter = 300 requests/minute)
+
+Without `batch-quote`, cost scales linearly with universe size:
+
+| Workload | Calls | At 300/min |
+|---|---|---|
+| Nightly: screener sweep | a few (paginated) | seconds |
+| Nightly: `shares-float` per survivor | 1 × N | — |
+| Nightly: `historical-price-eod/full` per survivor | 1 × N | — |
+| Nightly total at N = 2,000 | ~4,000 | ~14 min |
+| Per scan pass: 1 quote × Stage-1 candidates | 300–800 | 1–3 min |
+| Full session at 65 passes × 500 | ~32,500/day | — |
+
+Two design consequences:
+
+1. **Over-inclusive screener pre-filter, exact filtering locally.** The screener cannot
+   see float, so it filters on proxies (`volume > 500K`, `price > $2`, a *generous*
+   market-cap ceiling as a float proxy). Anything it wrongly excludes is never seen again,
+   so the pre-filter must err heavily toward inclusion; the real `float < 75M` cap is
+   applied in SQL afterwards.
+2. **Nightly float is now ~1 call**, not N — `shares-float-all` is available on Starter.
+   The nightly job reduces to: one screener sweep + one bulk-float call + one
+   `historical-price-eod/full` per survivor.
+
+With **no daily cap**, tiered scan cadence is no longer required to conserve quota. It may
+still be worth adopting to reduce bandwidth (20 GB / 30 days) and pass duration — decide
+with 4A's measured payload sizes, not in advance.
+
+### Still to confirm — all three FMP support questions ANSWERED (29 July 2026)
+
+Nothing further is blocked on FMP support. The remaining unknowns are **empirical** and
+belong to Phase 4A: does anything on Starter expose cumulative pre-market volume, and
+what exactly does Aftermarket Trade return?
+
+---
+
+### Phase 4A (V2) — Starter capability probe **← first V2 step**
+Small, empirical, and gates everything after it. Same discipline as Phase 1's symbol
+probe, which immediately disproved three documented behaviours. Characterises: pre-market
+availability and volume semantics of the aftermarket quote, `shares-float-all` access,
+screener field coverage and pagination, real rate limits, and the true universe size at
+various pre-filter settings. **Report before any V2 code is designed around assumptions.**
+
+### Phase 4B (V2) — Universe expansion + nightly refresh at scale
+Two-step universe build (screener → float → `reference_data`), budget-aware and resumable,
+sized by 4A's measurements. Written after 4A reports.
+
+### Phase 4C (V2) — Live snapshot provider, RVOL, cron go-live
+`FmpLiveSnapshotProvider` against the aftermarket quote; RVOL approximation chosen from
+4A's volume-semantics finding and flagged approximate on every alert; tiered cron cadence;
+Render backend upgraded to Starter (always-on); news/catalyst tagging. Written after 4B.
+
+- [ ] **Move migrations to `preDeployCommand`** — carried over from Phase 3.5, and it belongs
+      *here* rather than in the free-tier prep list because it depends on the Render Starter
+      upgrade above. Render's pre-deploy hook is "available for paid web services, private
+      services, and background workers", and `render.yaml` still has the web service on
+      `plan: free`, so the two changes must land together. Today `alembic upgrade head` runs
+      in `startCommand` on every container start, serialised by a `pg_advisory_xact_lock`;
+      moving it means a bad migration stops the **deploy** instead of stopping a **running
+      service**. The exact two-line change and the trade-off are already written up under
+      "Migration strategy" in `README.md`.
 - [ ] Track in live use whether volume conviction is the weak link — that observation is
       the explicit V3 upgrade trigger
 
@@ -300,6 +410,7 @@ alerting; MCP server decision.
 | 250/day exhausted mid-pipeline | Partial refresh | Budget guard + resumable jobs; 2-calls/ticker design |
 | Starter RVOL approximation too weak in practice | Alert quality suffers at V2 | Flag approximate RVOL on every alert; treat this observation as the V3 upgrade trigger |
 | Render cron UTC/DST drift | Wrong-hour scans | Explicit ET conversion + DST tests (Phase 2) |
+| Supabase RLS on public tables | Supabase flags any table in `public` without Row-Level Security as a critical issue — without it, anyone holding the project URL + anon key can read/write via the auto-generated Data API | This project never uses the Supabase Data API (the backend connects directly as `postgres`, which bypasses RLS). Fix: enable RLS with **no policies** on every public table — denies the Data API, leaves the app unaffected. Every future migration must do the same for new tables |
 | Silent scan failure | Looks like a quiet market | `scan_runs` + distinct UI states + failure alerting |
 | Demo profile confused for production | Misleading alerts | Profile name stamped on every scan run and alert |
 
