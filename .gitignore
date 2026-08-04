@@ -86,3 +86,6 @@ tmpclaude-*
 BUILD_PDF.md
 report.css
 PROJECT_REPORT.md
+
+# Phase 4A-T Tiingo probe output (throwaway, may contain large raw payloads)
+probe_output/
