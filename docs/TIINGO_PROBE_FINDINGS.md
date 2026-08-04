@@ -222,13 +222,22 @@ this project is evaluating alternatives.
 | US common stock among them | **8,685** |
 | `volume` non-null | **100%** |
 
-> **Latency degrades sharply as the open approaches, and this is the operationally
-> significant number.** The same request that took 2.4 s at 04:16 took 14.0 s at 09:08,
-> 13.2 s at 09:18 and **17.7 s at 09:29** — roughly 5–7× worse, on identical payload sizes,
-> so it is server-side contention rather than data growth. The scanner's authoritative pass
-> is at **09:25**, precisely inside this degraded band. A live integration must treat the
-> snapshot call as slow-and-variable at exactly the moment it matters most, with a timeout
-> budget set from the 09:25 figure and not the 04:00 one.
+> **Latency is highly variable and NOT explained by time of day.** An earlier draft of this
+> document claimed the slowdown was contention as the open approached. Later sampling
+> disproved that: 19 further snapshots taken during regular hours (11:51–12:38 ET) ranged
+> from **2.3 s to 12.5 s**, with a 2.3 s call and a 9.6 s call five minutes apart on an
+> identical payload. There is no time-of-day pattern.
+>
+> Two things are worth separating. The pre-market spikes (14.0 s at 09:08, 13.2 s at 09:18,
+> **17.7 s at 09:29**) came from a single sampling process and are genuine. The
+> regular-hours figures are **confounded** — two probe processes were unintentionally
+> sampling concurrently on the same token, and in every close pair the *second* call is the
+> slow one (11:56:40 → 2.6 s, 11:57:21 → 7.2 s; 12:01:44 → 2.3 s, 12:02:30 → 8.3 s). Some
+> of that slowness is self-inflicted and should not be attributed to Tiingo.
+>
+> What survives is the operational point, unchanged: the snapshot call is **2.3–17.7 s**,
+> unpredictably, on a constant ~4.2 MB payload. A live integration needs a timeout budget
+> set from the worst case, not the median — and must not issue overlapping requests.
 
 **C.8 — Freshness rises through the session,** which is the correct shape: a ticker carries
 yesterday's close until it trades today.
@@ -254,6 +263,12 @@ time-dependent *within* the session, and the scanner's authoritative 09:25 pass 
 the densest market of the window. Thin early coverage is the market being quiet, not the
 feed being incomplete — which also means a 04:00 scan is scanning a genuinely small
 tradeable set, whatever the provider.
+
+For scale, 19 further snapshots taken during **regular hours** (11:51–12:38 ET) showed
+**11,001–11,073** fresh US tickers — roughly double the 09:24 pre-market figure and 13× the
+04:16 one. These fall outside the scanner's window and answer none of questions A or B, but
+they confirm the ceiling: the feed's coverage is not the constraint, the pre-market session's
+own thinness is.
 
 At 04:47 the timestamp distribution was: **9,510** tickers stamped 2026-08-03 (yesterday's
 close, untraded so far), **1,783** stamped today, the remainder older — stale or delisted
@@ -382,10 +397,14 @@ in the current V2 design.
 
 The caveats are both real. **Bandwidth:** ~4.19 MB per call means a full 5-minute-cadence
 session is ~275 MB, exhausting the free 1 GB/month in four sessions — this needs a paid
-Tiingo tier for its allowance, not for its endpoints. **Latency:** the call slows from 2.4 s
-early to **17.7 s at 09:29**, and the authoritative pass sits inside that degraded band.
-Neither is disqualifying, but both must be designed for rather than discovered in
+Tiingo tier for its allowance, not for its endpoints. **Latency:** the call takes anywhere
+from **2.3 s to 17.7 s** on a constant payload, unpredictably and with no time-of-day
+pattern. Neither is disqualifying, but both must be designed for rather than discovered in
 production.
+
+> This probe alone consumed **163 MB** across 39 whole-market snapshots — 16% of the free
+> monthly allowance in a single day, and a concrete demonstration that bandwidth, not
+> request count, is the free tier's binding limit.
 
 **3. Does this justify revisiting the FMP-Premium recommendation?**
 **Not on this evidence alone — but §6.1 might, and that is the finding to act on.**
