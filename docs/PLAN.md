@@ -263,6 +263,23 @@ output byte-identical before and after; round-trip + downgrade pass on populated
 
 ### FMP Starter capabilities — ANSWERED (FMP support, 29 July 2026)
 
+> **⚠ A measured finding contradicts the free-tier assumption below.** The Tiingo probe
+> (4 Aug 2026, `docs/TIINGO_PROBE_FINDINGS.md` §6.1) established that **FMP's
+> `shares-float` is NOT restricted to the ~43-symbol free sample** — 64 of 70 arbitrary
+> small caps returned real floats on the **free** tier, including names at 32,174 and
+> 48,821 shares. The ~43-symbol limit applies to `quote` and `historical-price-eod`.
+> `reference_data` holds only megacaps because the universe was built from *quote*
+> accessibility, not because float was unavailable.
+>
+> **Consequence:** a genuine low-float universe may be buildable on the free tier today.
+> Phase 4A must therefore answer a sharper question before any subscription is bought:
+> **what does Starter provide that the free tier plus `shares-float` does not already?**
+>
+> The probe also found that free-tier **Tiingo** already returns 5-min pre-market bars
+> with volume from 04:00 ET across 34 sessions in one request — the data this plan
+> attributes to FMP Premium's `extended=true`. Normalized RVOL may be a data-source
+> choice rather than a tier upgrade. See `docs/TIINGO_VS_FMP_EVALUATION.md`.
+
 | Question | Answer | Consequence |
 |---|---|---|
 | Do pre/after-market quote endpoints return **volume**? | **Partly — and not where we needed it.** The *Aftermarket Quote* endpoint returns volume, but it is **post-close only**; it does **not** cover pre-market. There is **no dedicated pre-market quote endpoint**. | The original Stage-2 data source does not exist on any tier. Pre-market price must come from **Aftermarket Trade** instead. See "the pre-market volume problem" below. |

@@ -615,6 +615,155 @@ the effective thresholds.
 
 ---
 
+## Phase 4A-T — Tiingo free-tier empirical probe (optional, runs before or beside 4A)
+
+**Status:** ready to run
+**Depends on:** Phase 4-prep
+**Tier:** Tiingo **free** account — costs nothing
+**Purpose:** settle by measurement whether Tiingo's consolidated Equity Realtime endpoint
+could serve this scanner's live half. Background and the full comparison are in
+`docs/TIINGO_VS_FMP_EVALUATION.md`.
+
+> **This is a measurement exercise, not an integration.** The recommendation remains FMP
+> Premium. This probe exists because Tiingo's `/tiingo/equity/intraday` snapshot returns
+> the whole market's consolidated pre-market volume in a **single request**, which would
+> be architecturally better than anything FMP offers for live scanning — if it works for
+> low-float small caps and leaves beta. An hour of measurement now makes that a decision
+> rather than a guess.
+
+````
+# Phase 4A-T — Empirically test Tiingo's consolidated pre-market feed (free tier)
+
+## Context
+Read `docs/TIINGO_VS_FMP_EVALUATION.md` first — it contains the full documentation
+findings and the reasoning behind this probe.
+
+The scanner needs cumulative pre-market volume (04:00–09:30 ET) for low-float US small
+caps. FMP Starter cannot supply it; FMP Premium can via `extended=true`. Tiingo has a
+third option that documentation suggests may be excellent, and which appears to be
+available on a **free** account:
+
+  GET https://api.tiingo.com/tiingo/equity/intraday              (ALL tickers, one request)
+  GET https://api.tiingo.com/tiingo/equity/intraday/<ticker>
+  GET https://api.tiingo.com/tiingo/equity/intraday/<ticker>/prices?startDate=...&resampleFreq=5min
+
+Per Tiingo's docs this feed is **consolidated** across exchanges, ATS and OTC venues,
+covers **04:00–20:00 ET**, and its `volume` field is *"consolidated intraday volume
+throughout the day"*. On the historical endpoint, volume is **opt-in** and must be
+requested explicitly: `?columns=open,high,low,close,volume`.
+
+It is also flagged **beta**, with Tiingo recommending the IEX endpoints for production.
+This probe establishes whether the beta is good enough to matter.
+
+Auth: token via `Authorization: Token <API_KEY>` header, or `?token=<API_KEY>`.
+Free-tier limits: 50 requests/hour, 1,000/day, 1 GB/month, 500 unique symbols/month.
+**The hourly limit of 50 is the binding constraint on this probe — design around it.**
+
+## THIS IS A THROWAWAY PROBE
+Do NOT build a Tiingo client into `app/`. No new production modules, no config coupling,
+no changes to the FMP client, scanner, alerts or dashboard. Everything lives in a single
+self-contained script plus a findings document. If the answer is "no", deleting this
+phase must be one `git rm`.
+
+## Questions to answer
+
+**A. Does the consolidated feed actually cover pre-market?**
+1. Call `/tiingo/equity/intraday/<ticker>` during a live pre-market session
+   (04:00–09:30 ET = 10:00–15:30 CEST). Capture the full raw payload. Which fields are
+   populated, and which are null?
+2. **Is `volume` present and does it accumulate?** Sample the same tickers every ~5
+   minutes for at least 45 minutes and record the series. Monotonically rising =
+   cumulative (what we need). Flat, fluctuating or null = not usable.
+3. Does the series start from 04:00 ET, or only from some later hour? If possible, sample
+   early (10:00 CEST) and late (15:00 CEST) in the window and compare.
+
+**B. The critical question — does it work for LOW-FLOAT SMALL CAPS?**
+4. This is the one that decides everything. Mega-caps will almost certainly work; the
+   strategy targets stocks with float < 75M. Assemble a test set of **at least 10
+   genuinely low-float, small-cap US tickers** (use the existing FMP client and
+   `shares-float` to pick real ones — do not guess from memory), plus 3 mega-caps as a
+   control.
+5. For each: is the ticker present in Tiingo's feed at all? Is `volume` non-null? Is it
+   plausible in magnitude? Report a per-ticker table — not an average, since an average
+   hides exactly the failure that matters.
+6. Cross-check magnitude against FMP for the same ticker at the same moment where
+   possible. A consolidated figure should be materially larger than an IEX-only one; if
+   Tiingo's number looks IEX-sized, the "consolidated" claim does not hold in practice.
+
+**C. The whole-market snapshot — the architectural prize**
+7. Call `/tiingo/equity/intraday` with **no ticker**. How many tickers come back? What is
+   the payload size (bandwidth matters: 1 GB/month free, 40 GB on Power)? How long does
+   it take?
+8. What fraction of returned tickers have a non-null `volume` during pre-market?
+9. How many of our Stage-1-relevant low-float names appear in it?
+
+**D. Historical intraday — can volume profiles be built?**
+10. Call the historical endpoint with `?columns=open,high,low,close,volume` and
+    after-hours enabled. Confirm volume is returned when explicitly requested.
+11. **How far back does it go?** The 20-session pre-market volume profile needs 20 trading
+    days of extended-hours bars. Establish the real retention limit — note that the IEX
+    equivalent caps at 2,000 data points, and check whether the consolidated endpoint has
+    a similar ceiling.
+12. Do the historical bars include pre-market intervals, and from what time?
+
+**E. Coverage and limits**
+13. Is there a supported-ticker list, and how many US equities does it contain?
+14. Confirm the free-tier limits empirically (50/hour is easy to hit — do not exhaust it
+    deliberately; pace the probe and report what was observed).
+15. Note anything requiring a paid plan or a separate entitlement.
+
+## Scope
+
+1. **`scripts/probe_tiingo.py`** — self-contained, standalone. Takes the Tiingo token from
+   `TIINGO_API_KEY` in the environment (add to `.env.example` as an optional probe-only
+   variable; do not wire it into `app/config.py`).
+   - Modes: `--snapshot-all`, `--tickers A,B,C`, `--historical`, `--sample-series
+     --minutes 45 --interval 5`.
+   - **Respect the 50/hour free limit**: a local call counter, a conservative ceiling, and
+     a clean stop with partial results preserved when approaching it. Reuse the budget
+     guard's approach conceptually; do NOT couple to the FMP budget table.
+   - Structured logging, and raw responses written to `probe_output/tiingo/`.
+
+2. **Selecting the small-cap test set** — use the existing FMP client to find real
+   low-float names (float < 75M, avg volume > 500K). These calls go through the existing
+   FMP budget guard as normal. Record which tickers were chosen and their float values, so
+   the findings are reproducible.
+
+3. **`docs/TIINGO_PROBE_FINDINGS.md`** — every question A–E with the measured answer, the
+   raw volume time-series from A.2, the **per-ticker table from B.5**, payload sizes, and
+   an explicit list of what could not be determined and why.
+
+4. **A verdict section** answering three things plainly:
+   - Can Tiingo measure cumulative pre-market volume for low-float small caps? Yes/No.
+   - Is the whole-market snapshot viable as a live-scan source (coverage, size, speed)?
+   - Given it is beta and has no float data, does anything here justify revisiting the
+     FMP-Premium recommendation — or is it a future optimisation only?
+
+## Constraints
+- No production code. No Tiingo dependency in `app/`. No changes to scanner, alerts, or
+  dashboard. Nothing added to CI.
+- Do not commit the Tiingo token; `probe_output/` must be gitignored.
+- Timing matters: A and B **require a live pre-market session** (10:00–15:30 CEST). If run
+  outside that window, say so explicitly in the findings rather than inferring — an
+  after-hours sample answers a different question.
+- Respect free-tier limits; do not deliberately exhaust them.
+- Report honestly if a question cannot be answered on the free tier.
+
+## Definition of done
+1. `scripts/probe_tiingo.py` runs in each mode and writes raw responses to disk
+2. `docs/TIINGO_PROBE_FINDINGS.md` exists with measured answers and raw evidence
+3. **B.5's per-ticker low-float table is present** — this is the deliverable that matters
+   most; a probe that only proves AAPL works has proven nothing
+4. A.2's volume series is recorded as a time-series, not single samples
+5. C.7 reports ticker count, payload size and latency for the whole-market snapshot
+6. D.11 states the real historical depth, and whether 20 sessions of pre-market bars are
+   obtainable
+7. The verdict section answers the three questions above plainly
+8. No production code changed; ruff clean on the new script
+````
+
+---
+
 ## Phase 4A (V2) — Starter capability probe
 
 **Status:** ready — run on the first day of the Starter subscription, before any V2 design
