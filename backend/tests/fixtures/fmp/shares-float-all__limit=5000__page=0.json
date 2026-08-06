@@ -1,0 +1,187 @@
+{
+  "endpoint": "shares-float-all",
+  "params": {
+    "limit": 5000,
+    "page": 0
+  },
+  "status": 200,
+  "recorded_at": "2026-08-06T08:30:20.662190+00:00",
+  "note": "bulk float, first 25 rows only (sliced from 5000 rows)",
+  "payload": [
+    {
+      "symbol": "020Y.L",
+      "date": "2026-08-05 17:38:45",
+      "freeFloat": 0,
+      "floatShares": 0,
+      "outstandingShares": 84818244
+    },
+    {
+      "symbol": "0A05.L",
+      "date": "2026-08-05 17:39:14",
+      "freeFloat": 30.526808141830905,
+      "floatShares": 6083007,
+      "outstandingShares": 19926771
+    },
+    {
+      "symbol": "0A0C.L",
+      "date": "2026-08-05 18:51:10",
+      "freeFloat": 54.54895171282762,
+      "floatShares": 54537833,
+      "outstandingShares": 99979617
+    },
+    {
+      "symbol": "0A0D.L",
+      "date": "2026-08-05 17:39:14",
+      "freeFloat": 100.17008662057746,
+      "floatShares": 492636486,
+      "outstandingShares": 491800000
+    },
+    {
+      "symbol": "0A0H.L",
+      "date": "2026-08-05 17:39:14",
+      "freeFloat": 78.29889873811179,
+      "floatShares": 375185622,
+      "outstandingShares": 479171008
+    },
+    {
+      "symbol": "0A18.L",
+      "date": "2026-08-05 18:51:11",
+      "freeFloat": 76.27069773268839,
+      "floatShares": 163049285,
+      "outstandingShares": 213777099
+    },
+    {
+      "symbol": "0A1K.L",
+      "date": "2026-08-05 18:51:11",
+      "freeFloat": 81.16789213975058,
+      "floatShares": 1887781222,
+      "outstandingShares": 2325773372
+    },
+    {
+      "symbol": "0A1O.L",
+      "date": "2026-08-04 23:38:35",
+      "freeFloat": 88.65349233859405,
+      "floatShares": 264089978,
+      "outstandingShares": 297890102
+    },
+    {
+      "symbol": "0A1S.L",
+      "date": "2026-08-05 17:39:14",
+      "freeFloat": 100.24185256887525,
+      "floatShares": 720441965,
+      "outstandingShares": 718703762
+    },
+    {
+      "symbol": "0A1V.L",
+      "date": "2024-12-27 12:07:14",
+      "freeFloat": 37.2954,
+      "floatShares": 11884812,
+      "outstandingShares": 31866699
+    },
+    {
+      "symbol": "0A20.L",
+      "date": "2026-08-06 06:56:40",
+      "freeFloat": 96.4071409043808,
+      "floatShares": 6378720,
+      "outstandingShares": 6616440
+    },
+    {
+      "symbol": "0A23.L",
+      "date": "2026-08-05 05:36:40",
+      "freeFloat": 82.85185199939316,
+      "floatShares": 49915573,
+      "outstandingShares": 60246780
+    },
+    {
+      "symbol": "0A26.L",
+      "date": "2026-08-06 06:47:30",
+      "freeFloat": 114.50074266052735,
+      "floatShares": 122487000,
+      "outstandingShares": 106974852
+    },
+    {
+      "symbol": "0A28.L",
+      "date": "2026-08-05 17:39:14",
+      "freeFloat": 74.97,
+      "floatShares": 1068879207,
+      "outstandingShares": 1425742574
+    },
+    {
+      "symbol": "0A37.L",
+      "date": "2026-08-05 17:39:14",
+      "freeFloat": 84.82756038916581,
+      "floatShares": 115790201,
+      "outstandingShares": 136500685
+    },
+    {
+      "symbol": "0A39.L",
+      "date": "2026-08-05 17:39:14",
+      "freeFloat": 85.72107133693846,
+      "floatShares": 92041501,
+      "outstandingShares": 107373251
+    },
+    {
+      "symbol": "0A3O.L",
+      "date": "2026-08-06 07:57:50",
+      "freeFloat": 92.39825674781483,
+      "floatShares": 328910774,
+      "outstandingShares": 355970757
+    },
+    {
+      "symbol": "0A3R.L",
+      "date": "2026-08-01 14:39:55",
+      "freeFloat": 115.03426,
+      "floatShares": 62769327,
+      "outstandingShares": 54565768
+    },
+    {
+      "symbol": "0A4V.L",
+      "date": "2026-08-05 17:39:14",
+      "freeFloat": 77.63233097835797,
+      "floatShares": 18139124,
+      "outstandingShares": 23365425
+    },
+    {
+      "symbol": "0A4X.L",
+      "date": "2026-08-03 08:17:16",
+      "freeFloat": 90.7501,
+      "floatShares": 10083,
+      "outstandingShares": 11111
+    },
+    {
+      "symbol": "0A52.L",
+      "date": "2026-08-06 06:56:30",
+      "freeFloat": 90.26224253636425,
+      "floatShares": 13902261,
+      "outstandingShares": 15402078
+    },
+    {
+      "symbol": "0A55.L",
+      "date": "2026-08-06 06:49:10",
+      "freeFloat": 97.9141,
+      "floatShares": 65853792,
+      "outstandingShares": 41645640
+    },
+    {
+      "symbol": "0A60.L",
+      "date": "2026-08-05 06:11:10",
+      "freeFloat": 99.645,
+      "floatShares": 16210122,
+      "outstandingShares": 16267873
+    },
+    {
+      "symbol": "0A6Y.L",
+      "date": "2026-08-05 18:51:11",
+      "freeFloat": 92.92483769505826,
+      "floatShares": 119554498,
+      "outstandingShares": 128657204
+    },
+    {
+      "symbol": "0A7O.L",
+      "date": "2026-08-02 13:44:30",
+      "freeFloat": 99.76689999999999,
+      "floatShares": 330036886,
+      "outstandingShares": 330808000
+    }
+  ]
+}

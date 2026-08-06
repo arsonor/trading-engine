@@ -1,0 +1,22 @@
+{
+  "endpoint": "historical-chart/5min",
+  "params": {
+    "symbol": "EROC",
+    "from": "2026-08-06",
+    "to": "2026-08-06",
+    "extended": "true"
+  },
+  "status": 200,
+  "recorded_at": "2026-08-06T08:30:18.942827+00:00",
+  "note": "no pre-market activity",
+  "payload": [
+    {
+      "date": "2026-08-06 04:00:00",
+      "open": 10.93,
+      "low": 10.93,
+      "high": 10.93,
+      "close": 10.93,
+      "volume": 460
+    }
+  ]
+}

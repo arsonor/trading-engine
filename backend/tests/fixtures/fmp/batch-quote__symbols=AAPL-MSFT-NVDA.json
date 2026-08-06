@@ -1,0 +1,68 @@
+{
+  "endpoint": "batch-quote",
+  "params": {
+    "symbols": "AAPL,MSFT,NVDA"
+  },
+  "status": 200,
+  "recorded_at": "2026-08-06T08:30:19.621014+00:00",
+  "note": "batch-quote",
+  "payload": [
+    {
+      "symbol": "AAPL",
+      "name": "Apple Inc.",
+      "price": 311,
+      "changePercentage": 0.52363,
+      "change": 1.62001,
+      "volume": 44330978,
+      "dayLow": 305.67,
+      "dayHigh": 311.7082,
+      "yearHigh": 344.57,
+      "yearLow": 205.59,
+      "marketCap": 4567767716000,
+      "priceAvg50": 309.5228,
+      "priceAvg200": 278.23874,
+      "exchange": "NASDAQ",
+      "open": 309.35999,
+      "previousClose": 309.37999,
+      "timestamp": 1785960001
+    },
+    {
+      "symbol": "MSFT",
+      "name": "Microsoft Corporation",
+      "price": 487.46,
+      "changePercentage": -1.08561,
+      "change": -5.35,
+      "volume": 33388871,
+      "dayLow": 485.68,
+      "dayHigh": 498.24,
+      "yearHigh": 553.72,
+      "yearLow": 349.2,
+      "marketCap": 3619658603000,
+      "priceAvg50": 400.7368,
+      "priceAvg200": 433.4535,
+      "exchange": "NASDAQ",
+      "open": 496.355,
+      "previousClose": 492.81,
+      "timestamp": 1785974398
+    },
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA Corporation",
+      "price": 219.22,
+      "changePercentage": 3.43493,
+      "change": 7.28,
+      "volume": 158187403,
+      "dayLow": 216.4,
+      "dayHigh": 222.22,
+      "yearHigh": 236.54,
+      "yearLow": 164.07,
+      "marketCap": 5309727620000,
+      "priceAvg50": 205.8378,
+      "priceAvg200": 193.24545,
+      "exchange": "NASDAQ",
+      "open": 216.86,
+      "previousClose": 211.94,
+      "timestamp": 1785974398
+    }
+  ]
+}

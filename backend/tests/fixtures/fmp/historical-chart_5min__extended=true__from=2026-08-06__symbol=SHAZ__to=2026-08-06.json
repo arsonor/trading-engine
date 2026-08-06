@@ -1,0 +1,46 @@
+{
+  "endpoint": "historical-chart/5min",
+  "params": {
+    "symbol": "SHAZ",
+    "from": "2026-08-06",
+    "to": "2026-08-06",
+    "extended": "true"
+  },
+  "status": 200,
+  "recorded_at": "2026-08-06T08:30:18.661167+00:00",
+  "note": "low-float active",
+  "payload": [
+    {
+      "date": "2026-08-06 04:20:00",
+      "open": 56.8229,
+      "low": 56.8229,
+      "high": 56.8229,
+      "close": 56.8229,
+      "volume": 246
+    },
+    {
+      "date": "2026-08-06 04:15:00",
+      "open": 56.01,
+      "low": 56.01,
+      "high": 56.01,
+      "close": 56.01,
+      "volume": 63
+    },
+    {
+      "date": "2026-08-06 04:05:00",
+      "open": 57,
+      "low": 57,
+      "high": 57,
+      "close": 57,
+      "volume": 63
+    },
+    {
+      "date": "2026-08-06 04:00:00",
+      "open": 56.88,
+      "low": 56.88,
+      "high": 58.16,
+      "close": 57.27,
+      "volume": 190
+    }
+  ]
+}
