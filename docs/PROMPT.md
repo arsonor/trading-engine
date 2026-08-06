@@ -128,7 +128,7 @@ See Git history for details
 
 ## Phase 4A (V2) — FMP **Premium** capability probe
 
-**Status:** ready — **run during a live pre-market session** (04:00–09:30 ET = 10:00–15:30 CEST)
+**Status:** ✅ DONE — **run during a live pre-market session** (04:00–09:30 ET = 10:00–15:30 CEST)
 **Tier:** Premium, active since 5 Aug 2026 (month-to-month). Key already in `backend/.env`.
 **Writes no product code.**
 
@@ -263,20 +263,171 @@ what is needed to call new endpoints.
 
 ---
 
-## Phase 4B / 4C (V2) — written after 4A reports
+## Phase 4B (V2) — Universe expansion + nightly refresh at scale
 
-**4B — Universe expansion + nightly refresh at scale.** Two-step build (`company-screener`
-pre-filter → `shares-float-all` → exact `float < 75M` in SQL), sized by 4A's measured
-counts, budget- and bandwidth-aware, idempotent and resumable.
+**Status:** ready to run
+**Depends on:** Phase 4A (measured — `docs/FMP_PREMIUM_FINDINGS.md`)
+**Tier:** Premium, active. No live pre-market session required — this phase is nightly-job
+work and can be built and run at any hour.
 
-**4C — Live snapshot provider, RVOL, cron go-live.** `FmpLiveSnapshotProvider` against
-`extended=true` bars; `premarket_volume_profile` built from historical extended-hours data;
-`RVOL_MODE` switched to `normalized`; decreasing-volume guard; market-tape check; cron wired
-to the real scan; Render web service upgraded to Starter; migrations moved to
-`preDeployCommand`.
+````
+# Phase 4B — Real universe, nightly reference refresh, pre-market volume profiles
 
-Both are deliberately unwritten until 4A reports — writing them now would bake in the
-assumptions this project has repeatedly had to correct.
+## Context
+Read `docs/FMP_PREMIUM_FINDINGS.md` FIRST — it is measured, and it supersedes any
+assumption in `docs/PLAN.md` or `docs/CLAUDE.md` about what FMP provides. Then read
+`docs/CLAUDE.md` §4–5 for the specification.
+
+App V1 is complete and deployed: FMP client, budget guard, 3-stage scanner, confidence
+scoring, alerts and dashboard all work — but against a 43-symbol megacap universe on
+free-tier EOD data, so the production profile correctly finds nothing. Phase 4A confirmed
+Premium delivers everything the real scanner needs.
+
+This phase replaces the toy universe with the real one and builds the data the live
+scanner will consume. It does **not** touch the live scan path — that is Phase 4C.
+
+## Measured facts from 4A that constrain this phase
+
+| Fact | Consequence here |
+|---|---|
+| `shares-float-all`: 5,000 rows/page, 8 pages, ~5.2 MB, ~7 s → 19,569 US symbols with float | Nightly float refresh is ~8 calls, not N |
+| 11,504 US symbols have float < 75M | Float alone is not a useful filter — the screener pre-filter does the real narrowing |
+| `company-screener` returns 15 fields, **no float**, and honours price/volume/marketCap/exchange/isEtf/isFund | Two-step build is mandatory |
+| Screener (US, price > $2, vol > 500K) = 1,880 rows, 693 KB | The pre-filter input size |
+| **Stage-1 universe = screener ∩ float < 75M = 554 tickers** | Sizing reference — but see "do not hardcode" below |
+| `historical-chart/5min?extended=true` returns pre-market bars from exactly 04:00 ET, back to at least 2016 | Volume profiles are buildable |
+| Per-request row cap observed between 950 and 1,936 bars; ≤ 1 week at 5-min was reliable | Profile building must paginate by week, not request 20 sessions at once |
+| Bar volume is **per-bar**, not cumulative | Cumulative volume is a **sum**, never a field read |
+| **89 of 180 bars revised upward; all settle within 7 minutes of bar close** | Profiles must be built from **settled** bars only |
+| No daily call cap; 750/min; 50 GB / 30 days | Bandwidth is the limit, not call count |
+
+## Scope
+
+### 1. Universe build — two-step, over-inclusive then exact
+
+`scripts/build_universe.py` (or extend the existing refresh CLI — justify the choice):
+
+1. **Screener pre-filter** — `company-screener` with US exchanges, `price > price_floor`,
+   `volume > avg_volume_min`, `isEtf=false`, `isFund=false`, `isActivelyTrading=true`.
+   Paginate fully. **Err toward inclusion**: the screener cannot see float, so anything it
+   wrongly excludes is never seen again by any later stage. Filter values come from config,
+   not literals.
+2. **Bulk float** — `shares-float-all`, all 8 pages, into a float lookup.
+3. **Join and apply the exact cap locally in SQL** — `float < 75M` is applied to
+   `reference_data`, never to the screener request.
+4. Upsert into `universe`. Mark symbols that disappear as inactive rather than deleting
+   them — a delisted ticker still has alert history pointing at it.
+
+**Do NOT hardcode 554.** That is one day's measurement of a filter's output, not a fixed
+roster: it moves with price, 20-day volume, float changes, listings and delistings, and it
+moves immediately if the end user edits thresholds. The job discovers the count each night.
+
+**Record the count in `scan_runs` (or a small `universe_runs` record) and warn when it moves
+materially** — e.g. more than ±50% from the trailing median, or above a configured ceiling.
+4A measured that bandwidth becomes a real constraint past roughly 3,500 tickers, and a
+threshold edit could cross that silently. A settings change must not be able to make scans
+too slow to finish inside the 5-minute cadence without anyone noticing.
+
+### 2. Nightly reference-data refresh at real scale
+
+Extend `scripts/refresh_reference_data.py` to the real universe:
+
+- Per surviving ticker: `historical-price-eod/full` → compute `volume_avg_20d`,
+  `price_close_yesterday`, `high_yesterday`, `high_20d`, `sma_50`, `sma_200`. Float comes
+  from the bulk call, **not** one `shares-float` per ticker.
+- Budget- and **bandwidth**-aware, idempotent, resumable — preserve the existing semantics
+  (skip tickers already refreshed today unless `--force`; a partial failure must not corrupt
+  rows).
+- Report calls used, bytes transferred, wall time, and per-stage counts.
+
+### 3. Pre-market volume profiles — the new capability
+
+Populate `premarket_volume_profile` (table exists, schema only, empty since Phase 1).
+
+- For each Stage-1 ticker, fetch `historical-chart/5min?extended=true` over the last ~20
+  trading sessions, **paginated by week** (the per-request row cap truncates longer ranges —
+  4A measured truncation between 950 and 1,936 bars).
+- For each session, take only pre-market bars (04:00 → 09:30 ET) and compute the **cumulative**
+  volume at each 5-minute bucket — remember volume is per-bar, so this is a running sum.
+- Average each bucket across sessions → `avg_cumulative_volume`, and store
+  `sessions_sampled` so downstream code knows the profile's reliability.
+- **Skip or flag tickers with insufficient history** rather than averaging noise. A profile
+  built from 3 sessions must not be silently treated like one built from 20.
+- Idempotent and incremental: a nightly re-run should add the newest session and drop the
+  oldest, not rebuild 20 sessions per ticker every night. Report the incremental cost.
+
+**The settled-bar rule — build this in from the start, do not retrofit it.**
+4A measured that 49.4% of bars are revised upward after publication, all settling within 7
+minutes of bar close. Profiles must therefore be built from **settled** bars only.
+Historical bars from previous sessions are all settled, so this mostly matters for the
+current session — but the rule belongs in one shared place because Phase 4C's live path
+needs the identical definition.
+
+Provide a single shared helper (e.g. `settled_bars(bars, now, exclusion_minutes)`) with the
+exclusion window in **config, not hardcoded**. The 7-minute figure comes from one ordinary
+session; a volatile or holiday-shortened morning could report later, and a hardcoded slice
+would silently become wrong.
+
+> **Why this matters beyond correctness:** in Phase 4C the live numerator and this profile
+> denominator are divided by each other. If the profile is built from fully-revised history
+> while the live sum includes provisional bars, RVOL is biased low by construction — the
+> bias compounds and lands on the `rvol_pct > 10` gate. Both sides must use the same
+> settled-bar definition and refer to the same clock time. Document this explicitly where
+> the helper lives, because it is the kind of coupling that is invisible until alert counts
+> come in mysteriously low.
+
+### 4. Config and housekeeping
+
+- Raise `FMP_DAILY_BUDGET` to a Premium-appropriate value; keep the guard — its role is now
+  observability and runaway protection, not avoiding a hard cap.
+- **Add bandwidth tracking** to the guard (bytes per day/month). 4A projects ~15% of the
+  50 GB allowance at the current universe size; that is comfortable but it is now the
+  binding limit and should be visible before it bites.
+- Update `docs/CLAUDE.md` §6, which still documents `FMP_DAILY_BUDGET=230` — a free-tier
+  value against a cap that no longer exists.
+- Record fixtures for `company-screener` and `shares-float-all` pages, and for an
+  `extended=true` multi-session window, so the profile builder is testable offline.
+
+## Constraints
+- **Do NOT touch the live scan path.** `FmpLiveSnapshotProvider`, `RVOL_MODE=normalized`,
+  the cron wiring and the Render upgrade are all Phase 4C. This phase produces data.
+- Do NOT change scanner stage logic, thresholds, the alert contract, or the dashboard.
+- Do NOT run anything against the production Supabase instance.
+- Any schema change needs a reversible migration, RLS on new tables (the CI test enforces
+  it), and a round-trip test on **populated** data.
+- CI stays offline — fixtures only.
+- Mind the cost of a full profile build: ~554 tickers × ~4 weekly requests ≈ 2,200 calls.
+  That is fine on Premium, but run it deliberately and report actual calls and bytes.
+
+## Definition of done
+1. `build_universe` produces a real Stage-1 universe from live Premium data; report the
+   count, and confirm it is derived rather than hardcoded
+2. Universe-size change detection works and warns on a large move or a configured ceiling
+3. Nightly refresh populates `reference_data` for the full universe; report calls, bytes
+   and wall time
+4. Re-running the same day is idempotent (~0 additional calls)
+5. `premarket_volume_profile` is populated for the Stage-1 universe with `sessions_sampled`
+   recorded; tickers with thin history are flagged, not silently averaged
+6. The settled-bar helper exists in one shared place, is config-driven, and is unit-tested
+   including the boundary at the exclusion window
+7. An incremental profile re-run costs materially less than a full rebuild — report both
+8. Bandwidth tracking reports bytes; `docs/CLAUDE.md` §6 updated
+9. Existing scanner output is unchanged: `run_scan.py --fixture --profile demo --at
+   "<fixed time>"` produces identical results before and after
+10. Tests pass offline; ruff clean; migrations round-trip on populated data
+11. Report: real universe size, calls and bytes for a full nightly cycle, profile coverage
+    (how many tickers got ≥20 sessions), and anything that blocks Phase 4C
+````
+
+---
+
+## Phase 4C (V2) — written after 4B reports
+
+Live snapshot provider (per-ticker `extended=true`, summed — **not** `batch-quote`, which
+4A measured as serving the previous session's close during pre-market); `RVOL_MODE` switched
+to `normalized` with the settled-bar rule applied symmetrically to numerator and denominator;
+provisional-bar state recorded on each alert; market-tape check; cron wired to the real scan;
+Render web service upgraded to Starter; migrations moved to `preDeployCommand`.
 
 ---
 

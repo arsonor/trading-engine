@@ -385,45 +385,58 @@ what exactly does Aftermarket Trade return?
 
 ---
 
-### Phase 4A (V2) — Premium capability probe **← NEXT, run on a live pre-market session**
-**Tier:** Premium (active). **Writes no product code.**
+### Phase 4A (V2) — Premium capability probe — ✅ DONE (6 August 2026)
 
-Measures what Premium actually delivers before anything is built on it. Gated on a live
-pre-market window (04:00–09:30 ET = 10:00–15:30 CEST). Deliverable: a probe script plus
-`docs/FMP_PREMIUM_FINDINGS.md`.
+**Verdict: green light.** `extended=true` returns pre-market bars from **exactly 04:00 ET**,
+for low-float small caps (smallest float measured: 13,696 shares) as well as megacaps.
+Quiet tickers return an **empty array**, not stale bars, so "not trading" and "no data" are
+distinguishable by row count. History goes back to at least 2016, so **normalized RVOL is
+unblocked** — it was scheduled as V3 work gated on data availability; the gate is open.
+Full evidence: `docs/FMP_PREMIUM_FINDINGS.md`.
 
-- [ ] **`extended=true` — the decisive test.** Does it return pre-market bars? From 04:00
-      ET or later? For genuinely low-float small caps, or only liquid names? Is `volume`
-      per-bar (summable to a cumulative session total)?
-- [ ] **Guard against the PAVS failure mode** found in the Tiingo probe: sample repeatedly
-      and check whether any cumulative series *decreases* mid-session. A silent reset
-      produces a plausible low RVOL, not an error.
-- [ ] Intraday **history depth** — how many days of extended-hours bars? ≥20 sessions is
-      required for volume profiles; more is needed for V3 backtesting. The "30 years"
-      figure refers to daily bars.
-- [ ] `batch-quote` — confirm available; max symbols per request; payload size
-- [ ] `shares-float-all` — record count, payload size, small-cap coverage
-- [ ] `company-screener` — fields, pagination, and **universe size at 3+ pre-filter
-      settings** (price > $2, volume > 500K, market-cap ceilings). 4B needs these numbers.
-- [ ] Rate limit + **bandwidth projection** for a realistic universe and cadence (50 GB/30d)
-- [ ] Fixtures recorded for every new endpoint shape
+**Three measured facts that change the 4B/4C design:**
+1. **`batch-quote` is useless for pre-market** — it works and takes 1,000 symbols, but during
+   the pre-market window it returns the *previous* session's close. The live snapshot must be
+   per-ticker `historical-chart/5min?extended=true`. Affordable because the real Stage-1
+   universe is **554 tickers**, not thousands: ~0.7 min per pass at 750/min, ~15% of the
+   50 GB monthly bandwidth.
+2. **`volume` is per-bar, not cumulative** — `volume_premarket_accumulated` is a **sum over
+   bars**, never a field read.
+3. **49.4% of bars are revised upward after publication** (89 of 180; median +24.2%, p90
+   +100%, worst +7,156%), and **all revisions settle within 7 minutes of bar close**. Bounded
+   and cheaply fixable: exclude the most recent two bars. The exclusion window must be
+   **config-driven** — 7 minutes comes from one ordinary session.
 
-**Done when:** the findings document answers each question with measured evidence, states
-plainly whether normalized RVOL is achievable, and lists which 4B/4C designs must change.
+> **The coupling to watch in 4C:** the live RVOL numerator and the volume-profile denominator
+> must use the **same settled-bar definition and the same clock time**. A profile built from
+> fully-revised history divided by a live sum containing provisional bars biases RVOL low by
+> construction, straight onto the `rvol_pct > 10` gate — invisible until alert counts come in
+> mysteriously low.
+
+**Also measured:** `shares-float-all` = 8 calls / 5.2 MB for 19,569 US symbols with float
+(11,504 under 75M); `company-screener` returns 15 fields and no float, 1,880 US rows at
+price > $2 and volume > 500K; per-request row cap truncates long ranges, so profile building
+paginates by week; no daily call cap, 750/min, bandwidth is the real limit.
 
 ---
 
-### Phase 4B (V2) — Universe expansion + nightly refresh at scale
-**Depends on:** 4A's measured numbers.
+### Phase 4B (V2) — Universe expansion + nightly refresh at scale **← NEXT**
+**Depends on:** 4A's measured numbers. No live pre-market session needed.
 
 - [ ] Two-step universe build: `company-screener` pre-filter (over-inclusive — it cannot
       see float, so anything it wrongly excludes is never seen) → `shares-float-all` →
       exact `float < 75M` applied locally in SQL
-- [ ] Nightly `reference_data` refresh at real universe scale, budget- and
-      bandwidth-aware, idempotent, resumable
-- [ ] **Retire the demo threshold profile's reason to exist** — production thresholds now
-      return real candidates. Keep the profile mechanism; stop needing it.
-- [ ] Raise `FMP_DAILY_BUDGET`; add bandwidth tracking to the guard
+- [ ] **Universe size is discovered nightly, never hardcoded.** 554 is one day's output of a
+      filter that moves with price, volume, float, listings — and immediately with any
+      threshold edit. Record the count and warn on a material move or a configured ceiling;
+      bandwidth becomes a real constraint past ~3,500 tickers.
+- [ ] Nightly `reference_data` refresh at real scale, budget- and bandwidth-aware,
+      idempotent, resumable
+- [ ] **Populate `premarket_volume_profile`** (5-min buckets × ~20 sessions), paginated by
+      week, with `sessions_sampled` recorded and thin-history tickers flagged not averaged
+- [ ] **Shared, config-driven settled-bar helper** used by both the profile builder and
+      (in 4C) the live path
+- [ ] Raise `FMP_DAILY_BUDGET`; add bandwidth tracking; update `docs/CLAUDE.md` §6
 - [ ] Round-trip migration tests on populated data for any schema change
 
 ---

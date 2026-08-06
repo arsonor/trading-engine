@@ -240,14 +240,43 @@ CORS_ORIGINS=http://localhost:5173
 SCANNER_TIMEZONE=America/New_York
 SCANNER_ENABLED=true
 
-# FMP client + budget guard (free tier is 250 calls/day with a hard 429)
-FMP_DAILY_BUDGET=230
+# FMP client + budget guard.
+# Premium (from 5 Aug 2026) has NO daily call cap: the limits are 750 calls/minute and
+# 50 GB per rolling 30 days. The ceiling below is therefore runaway protection, not a
+# vendor limit — bandwidth is what can actually end a month early, and it is tracked in
+# `api_budget.bytes_used`.
+FMP_DAILY_BUDGET=20000
+FMP_MONTHLY_BANDWIDTH_GB=50
+FMP_BANDWIDTH_WARN_PCT=80
 FMP_TIMEOUT_SECONDS=20
 FMP_MAX_RETRIES=3
 FMP_RETRY_BACKOFF_SECONDS=1.0
 FMP_FIXTURES_DIR=tests/fixtures/fmp
 
-# RVOL implementation: simple | normalized (normalized needs FMP Premium — app V3)
+# Nightly reference refresh. `historical-price-eod/full` returns everything (1,254 bars
+# for AAPL); the deepest metric is SMA-200, so the request is bounded server-side.
+# Measured: 231 KB -> 51 KB per ticker, which across the universe is 19.2 -> 4.2 GB/month.
+REFERENCE_HISTORY_DAYS=400
+
+# Bar settling. Phase 4A measured that 49.4% of pre-market bars are revised UPWARD after
+# publication (median +24.2%), all settling within 7 minutes of the bar closing. A bar
+# younger than this is provisional. NOT hardcoded: 7 minutes is one session's measurement.
+BAR_SETTLE_MINUTES=7
+
+# Universe build. The Stage-1 size is DISCOVERED nightly, never configured; these only
+# bound what counts as a surprise worth warning about.
+UNIVERSE_SIZE_CEILING=3500
+UNIVERSE_SIZE_MOVE_PCT=50
+UNIVERSE_PRICE_MARGIN_PCT=20
+
+# Pre-market volume profiles (the denominator for normalized RVOL).
+PROFILE_SESSIONS_TARGET=20
+PROFILE_SESSIONS_MIN=10
+PROFILE_FETCH_DAYS_PER_REQUEST=7
+
+# RVOL implementation: simple | normalized.
+# `normalized` needs `premarket_volume_profile`, which Phase 4B populates — the data is
+# available on Premium today. Switching the mode over is Phase 4C.
 RVOL_MODE=simple
 
 # Scanner thresholds (tunable without redeploy)
@@ -305,15 +334,38 @@ uv run python scripts/run_scan.py --fixture --profile production --at "2026-07-2
 uv run python scripts/run_scan.py --fixture --profile demo --verbose   # per-ticker rejections
 ```
 
-### FMP data pipeline (spends the daily API budget)
+### FMP data pipeline (spends API budget and bandwidth)
+
+The nightly cycle, in order. Each step is independently re-runnable and idempotent within
+the same day, so a failure part-way is resumed by re-running the same command.
+
 ```bash
 cd backend
-uv run python scripts/fmp_budget.py                  # today's usage, ceiling, reset time
-uv run python scripts/probe_fmp_symbols.py           # discover the accessible universe
-uv run python scripts/probe_fmp_symbols.py --show-universe   # read it back, 0 calls
-uv run python scripts/refresh_reference_data.py --limit 10   # 2 calls per ticker
-uv run python scripts/record_fmp_fixtures.py         # re-record test fixtures (11 calls)
+uv run python scripts/build_universe.py              # ~11 calls: screener + bulk float
+uv run python scripts/refresh_reference_data.py      # 1 call per ticker (float is bulk)
+uv run python scripts/build_volume_profiles.py       # ~4 calls per Stage-1 ticker
 ```
+
+Read-back and inspection, all free:
+
+```bash
+uv run python scripts/fmp_budget.py                  # calls, bytes, 30-day bandwidth
+uv run python scripts/build_universe.py --show       # universe + recent build history
+uv run python scripts/build_volume_profiles.py --show
+uv run python scripts/build_universe.py --dry-run    # fetches, writes nothing
+```
+
+Legacy and maintenance:
+
+```bash
+uv run python scripts/probe_fmp_symbols.py           # V1 free-tier symbol probe
+uv run python scripts/record_fmp_fixtures.py         # re-record test fixtures
+```
+
+> **`probe_fmp_symbols.py` is a V1 artefact.** It discovered which symbols the *free* tier
+> would serve. On Premium every US symbol is served, so the universe comes from
+> `build_universe.py` instead; the probe is kept only because `is_accessible_free_tier`
+> still gates the refresh query.
 
 ### Tests
 ```bash
