@@ -104,13 +104,28 @@ class Settings(BaseSettings):
     fmp_api_key: str = ""
     fmp_base_url: str = "https://financialmodelingprep.com"
 
-    # FMP client behaviour (Phase 1).
-    # The free (Basic) tier allows 250 calls/day with a hard 429 stop. The default
-    # ceiling is deliberately below that so manual testing cannot exhaust the real cap.
+    # FMP client behaviour (Phase 1, re-tuned for Premium in Phase 4B).
+    #
+    # The free tier's 250 calls/day hard stop is gone: Premium has NO daily call cap
+    # (750/min, 50 GB per rolling 30 days). The guard is deliberately kept anyway, but its
+    # job has changed from "avoid a hard 429" to "observability and runaway protection" —
+    # a bug that loops over the universe should still hit a ceiling rather than quietly
+    # spend the bandwidth allowance. A full nightly cycle measures ~3,000 calls, so the
+    # default leaves room without being unbounded.
     fmp_daily_budget: int = Field(
-        default=230,
+        default=20_000,
         ge=1,
-        description="Hard daily ceiling on FMP calls, enforced by the budget guard.",
+        description="Daily ceiling on FMP calls. Runaway protection, not a vendor limit.",
+    )
+    # Bandwidth is the real Premium constraint. Tracked per UTC day by the budget guard and
+    # reported by scripts/fmp_budget.py; 4A projected ~15% of the allowance at the measured
+    # universe size, which is comfortable but worth seeing before it bites.
+    fmp_monthly_bandwidth_gb: float = Field(
+        default=50.0, gt=0, description="Vendor bandwidth allowance per rolling 30 days."
+    )
+    fmp_bandwidth_warn_pct: float = Field(
+        default=80.0, gt=0, le=100,
+        description="Warn once projected 30-day bandwidth exceeds this share of the allowance.",
     )
     fmp_timeout_seconds: float = 20.0
     # Retries apply to transient failures ONLY (5xx / network). A 429 is never retried:
@@ -156,6 +171,67 @@ class Settings(BaseSettings):
     scan_profile: str = "production"
     # Snapshot scenario feeding Stage 2 in V1 (no live pre-market data on the free tier).
     scan_snapshot_fixture: str = "tests/fixtures/snapshots/demo_session.json"
+
+    # --- Bar settling (Phase 4B) --------------------------------------------------
+    # Phase 4A measured that 49.4% of pre-market bars are revised UPWARD after first
+    # publication (median +24.2%, worst +7,156%), and that every observed revision settled
+    # within 7 minutes of the bar closing. A bar younger than this window is provisional.
+    #
+    # NOT hardcoded, deliberately: 7 minutes comes from one ordinary session. A volatile or
+    # holiday-shortened morning could report later, and a hardcoded slice would silently
+    # become wrong on exactly the days that matter most.
+    bar_settle_minutes: int = Field(
+        default=7, ge=0,
+        description="A bar is provisional until this many minutes after it closes.",
+    )
+
+    # --- Universe build (Phase 4B) ------------------------------------------------
+    # The Stage-1 universe size is DISCOVERED nightly, never configured. 4A measured 554,
+    # but that is one day's output of a filter that moves with price, volume, float,
+    # listings — and immediately with any threshold edit. These two settings only bound
+    # what counts as a surprise.
+    universe_size_ceiling: int = Field(
+        default=3_500, ge=1,
+        description="Warn above this many tickers: 4A projects bandwidth pressure past it.",
+    )
+    universe_size_move_pct: float = Field(
+        default=50.0, gt=0,
+        description="Warn when the universe moves this % from its trailing median.",
+    )
+    # The screener reports a LIVE price; the scanner compares against the prior close. A
+    # name just under the floor tonight can gap through it tomorrow morning, and anything
+    # the pre-filter drops is never seen again by any later stage. So the universe admits
+    # names somewhat below the floor and lets the risk filter reject them at scan time,
+    # where the rejection is visible and reversible.
+    universe_price_margin_pct: float = Field(
+        default=20.0, ge=0, lt=100,
+        description="Admit names this % below the price floor, to avoid permanent exclusion.",
+    )
+
+    # --- Nightly reference refresh (Phase 4B) -------------------------------------
+    # `historical-price-eod/full` returns EVERYTHING — 1,254 daily bars for AAPL, 231 KB.
+    # The deepest metric computed from it is SMA-200, which needs 200 trading days, so the
+    # other ~1,000 bars are pure bandwidth. Measured: bounding the request to 400 calendar
+    # days returns 276 bars for 51 KB, a 78% reduction, which across a 3,948-ticker nightly
+    # refresh is 19.2 GB/month -> 4.2 GB/month against a 50 GB allowance.
+    #
+    # 400 days rather than 300: holidays and halts mean calendar days overstate trading
+    # days, and a ticker that silently returns 199 bars would produce a null SMA-200 and
+    # drop out of Stage 3 with no obvious cause.
+    reference_history_days: int = Field(
+        default=400, ge=250,
+        description="Calendar days of EOD history to request per ticker.",
+    )
+
+    # --- Pre-market volume profiles (Phase 4B) ------------------------------------
+    # Target sessions per profile. Below `profile_sessions_min` a profile is FLAGGED as
+    # thin rather than silently averaged — a 3-session profile must never be mistaken for
+    # a 20-session one by the RVOL that divides by it.
+    profile_sessions_target: int = Field(default=20, ge=1)
+    profile_sessions_min: int = Field(default=10, ge=1)
+    # The per-request row cap truncates long ranges (4A measured truncation between 950 and
+    # 1,936 bars), so history is fetched a week at a time.
+    profile_fetch_days_per_request: int = Field(default=7, ge=1, le=31)
 
     # --- Confidence score weights (must sum to 1.0; validated at startup) ---------
     # PROVISIONAL. These are reasoned assumptions, not fitted parameters — nothing has

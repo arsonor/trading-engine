@@ -11,6 +11,7 @@ Design constraints that come from the free (Basic) tier, not from taste:
 
 import asyncio
 import logging
+from datetime import date
 from typing import Any
 
 import httpx
@@ -23,7 +24,14 @@ from app.services.fmp.errors import (
     SymbolNotAvailable,
     TransientError,
 )
-from app.services.fmp.models import CompanyProfile, EodBar, Quote, SharesFloat
+from app.services.fmp.models import (
+    CompanyProfile,
+    EodBar,
+    IntradayBar,
+    Quote,
+    SharesFloat,
+    SharesFloatRow,
+)
 from app.services.fmp.parsing import RawResponse, as_list, interpret
 
 logger = logging.getLogger(__name__)
@@ -36,6 +44,9 @@ EP_BATCH_QUOTE = "batch-quote"
 EP_PROFILE = "profile"
 EP_STOCK_LIST = "stock-list"
 EP_SCREENER = "company-screener"
+# Premium endpoints, measured in Phase 4A (docs/FMP_PREMIUM_FINDINGS.md).
+EP_SHARES_FLOAT_ALL = "shares-float-all"
+EP_HISTORICAL_CHART = "historical-chart"
 
 
 class FmpClient:
@@ -108,6 +119,9 @@ class FmpClient:
                 last_error = TransientError(f"Network error calling {endpoint}: {exc}")
             else:
                 if response.status_code < 500:
+                    # Bandwidth is the binding Premium limit, so every response is counted.
+                    # Recorded after the fact and never allowed to fail the call.
+                    await self._budget.record_bytes(len(response.content))
                     return RawResponse(response.status_code, _safe_json(response, endpoint))
                 last_error = TransientError(
                     f"FMP returned HTTP {response.status_code} on {endpoint}"
@@ -136,13 +150,21 @@ class FmpClient:
 
     # --------------------------------------------------------------- public API
 
-    async def get_eod_history(self, symbol: str, *, limit: int | None = None) -> list[EodBar]:
-        """Full daily history for a symbol — ONE call yields every EOD-derived metric.
+    async def get_eod_history(
+        self, symbol: str, *, limit: int | None = None, since: date | None = None
+    ) -> list[EodBar]:
+        """Daily history for a symbol — ONE call yields every EOD-derived metric.
 
         Bars are returned newest-first, matching FMP, because every consumer wants the
         recent window.
+
+        `since` bounds the request **server-side** and is the difference between 231 KB and
+        51 KB per ticker. `limit` only trims client-side, so it saves no bandwidth — at a
+        nightly 3,948-ticker refresh the distinction is 19.2 GB/month versus 4.2 GB.
         """
         params: dict[str, Any] = {"symbol": symbol}
+        if since is not None:
+            params["from"] = since.isoformat()
         payload = await self._get(EP_EOD_FULL, params, symbol=symbol)
         rows = as_list(payload, endpoint=EP_EOD_FULL)
         if not rows:
@@ -197,6 +219,66 @@ class FmpClient:
         """Company screener. Often plan-restricted on free — probe, do not assume."""
         payload = await self._get(EP_SCREENER, {k: v for k, v in criteria.items() if v is not None})
         return as_list(payload, endpoint=EP_SCREENER)
+
+    # ----------------------------------------------------- Premium (Phase 4A-measured)
+
+    async def get_shares_float_page(
+        self, page: int = 0, limit: int = 5000
+    ) -> list[SharesFloatRow]:
+        """One page of `shares-float-all` — bulk float for the whole market.
+
+        Premium-only. 4A measured 5,000 rows and ~650 KB per page, 8 pages covering 19,569
+        US symbols with float, in about 7 seconds total. This is what makes the nightly
+        float refresh ~8 calls instead of one per ticker.
+
+        Rows include non-US listings; filtering is the caller's job.
+        """
+        payload = await self._get(EP_SHARES_FLOAT_ALL, {"limit": limit, "page": page})
+        rows = as_list(payload, endpoint=EP_SHARES_FLOAT_ALL)
+        return [_validate(SharesFloatRow, row, EP_SHARES_FLOAT_ALL) for row in rows]
+
+    async def get_intraday_bars(
+        self,
+        symbol: str,
+        *,
+        interval: str = "5min",
+        start: date | None = None,
+        end: date | None = None,
+        extended: bool = True,
+    ) -> list[IntradayBar]:
+        """Intraday bars, including pre-market when `extended` is set.
+
+        **`extended=True` is the whole reason Premium was bought.** 4A measured that with it
+        the first bar of every session is stamped exactly 04:00 ET, back to at least 2016;
+        without it the same request returns nothing at all during pre-market.
+
+        Two behaviours callers must respect:
+
+        - **A quiet ticker returns an empty list, not stale bars.** 4A watched EROC return
+          `[]` for three consecutive samples and then convert to real bars once it traded.
+          Empty means "nothing yet this session", never "unsupported symbol" — so it must
+          not be cached as a negative.
+        - **Long ranges are silently truncated to their most recent portion** by a
+          per-request row cap (4A observed truncation between 950 and 1,936 bars). Request
+          about a week at a time; asking for 20 sessions in one call quietly returns 8.
+
+        Returned oldest-first, which is the order every cumulative sum wants.
+        """
+        params: dict[str, Any] = {"symbol": symbol}
+        if start:
+            params["from"] = start.isoformat()
+        if end:
+            params["to"] = end.isoformat()
+        if extended:
+            params["extended"] = "true"
+
+        payload = await self._get(
+            f"{EP_HISTORICAL_CHART}/{interval}", params, symbol=symbol
+        )
+        rows = as_list(payload, endpoint=EP_HISTORICAL_CHART)
+        bars = [_validate(IntradayBar, row, EP_HISTORICAL_CHART) for row in rows]
+        bars.sort(key=lambda b: b.date)
+        return bars
 
 
 def _safe_json(response: httpx.Response, endpoint: str) -> Any:

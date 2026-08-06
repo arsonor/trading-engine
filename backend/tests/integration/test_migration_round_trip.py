@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import uuid
+from datetime import date
 from pathlib import Path
 
 import asyncpg
@@ -36,6 +37,7 @@ V2_CONTRACT = "0ca0181ab014"  # v2 alert columns added; v1 columns still present
 PHASE_35 = "c653a931ecaf"  # v1 columns dropped, symbol -> ticker, rules dropped
 WATCHLIST_DROP = "544a7fbf3445"  # watchlist dropped
 RLS = "dbdf5784db31"  # RLS enabled on all public tables
+PHASE_4B = "b008d4bf3a18"  # api_budget.bytes_used + universe_runs
 
 # Revision-specific tests name the revision they exercise instead of using "head" or
 # a relative "-1". Both of those silently retarget the moment a new migration lands on
@@ -630,3 +632,94 @@ async def test_stepwise_downgrade_of_the_scanner_tables_migration(scratch_db):
 
     _run_alembic("upgrade", "head", database_url=url)
     assert await _table_exists(dsn, "scan_runs")
+
+
+# ======================================================================= Phase 4B
+
+
+async def test_phase_4b_round_trips_on_populated_data(scratch_db):
+    """`bytes_used` and `universe_runs` survive a downgrade/upgrade cycle with rows present.
+
+    The failure this guards is the one that has bitten this project twice: adding a NOT
+    NULL column to a populated table. `api_budget.bytes_used` carries `server_default='0'`
+    precisely so existing rows do not violate the constraint, and an empty-database test
+    would never notice if that default were dropped.
+    """
+    url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
+
+    _run_alembic("upgrade", f"{PHASE_4B}-1", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        # Populate api_budget BEFORE the column exists — the whole point of the test.
+        await conn.execute(
+            "INSERT INTO api_budget (budget_date, provider, calls_used, created_at, "
+            "updated_at) VALUES ($1, 'fmp', 4321, now(), now())",
+            date(2026, 8, 5),
+        )
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", PHASE_4B, database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        row = await conn.fetchrow(
+            "SELECT calls_used, bytes_used FROM api_budget WHERE budget_date = $1",
+            date(2026, 8, 5),
+        )
+        assert row["calls_used"] == 4321, "existing usage must survive the migration"
+        assert row["bytes_used"] == 0, "server_default must backfill, not fail"
+
+        await conn.execute(
+            "INSERT INTO universe_runs (started_at, status, universe_size, "
+            "stage1_eligible, calls_used, bytes_used) "
+            "VALUES (now(), 'completed', 3948, 554, 11, 9427999)"
+        )
+        assert await conn.fetchval("SELECT count(*) FROM universe_runs") == 1
+    finally:
+        await conn.close()
+
+    # Down: the lossy direction. It must succeed WITH rows present, not just when empty.
+    _run_alembic("downgrade", f"{PHASE_4B}-1", database_url=url)
+    assert not await _table_exists(dsn, "universe_runs")
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        cols = await conn.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'api_budget'"
+        )
+        assert "bytes_used" not in {c["column_name"] for c in cols}
+        # The pre-existing row is untouched by the column drop.
+        assert await conn.fetchval(
+            "SELECT calls_used FROM api_budget WHERE budget_date = $1", date(2026, 8, 5)
+        ) == 4321
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", "head", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        assert await conn.fetchval(
+            "SELECT bytes_used FROM api_budget WHERE budget_date = $1", date(2026, 8, 5)
+        ) == 0, "re-upgrade restarts the counter; there is no source to reconstruct it"
+    finally:
+        await conn.close()
+
+
+async def test_phase_4b_enables_rls_on_universe_runs(scratch_db):
+    """A new public table without RLS is world-writable through the Supabase anon key.
+    tests/integration/test_rls.py enforces this globally; this pins it to the migration."""
+    url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
+    _run_alembic("upgrade", PHASE_4B, database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        assert await conn.fetchval(
+            "SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n "
+            "ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND relname = 'universe_runs'"
+        ) is True
+    finally:
+        await conn.close()

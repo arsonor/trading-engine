@@ -28,6 +28,15 @@ async def main(history: int) -> int:
     print(f"  Local ceiling   : {guard.ceiling}   (FMP_DAILY_BUDGET)")
     print(f"  Remaining       : {remaining}  ({pct:.1f}% of ceiling used)")
     print(f"  Resets at       : {next_utc_midnight().isoformat()}")
+    print()
+    # On Premium there is no daily call cap; bandwidth is the limit that can actually end
+    # a month early, so it is reported alongside rather than buried.
+    bw = await guard.bandwidth_status()
+    flag = "   <-- OVER WARN THRESHOLD" if bw["over_warn_threshold"] else ""
+    print(f"  Bytes today     : {bw['bytes_today']:,}")
+    print(f"  Bandwidth 30d   : {bw['bytes_30d'] / 1e9:.2f} GB of "
+          f"{bw['allowance_bytes'] / 1e9:.0f} GB  ({bw['pct_used']}%){flag}")
+    print(f"  Warn at         : {bw['warn_at_pct']}%")
     print(f"  Base URL        : {settings.fmp_base_url}")
     print(f"  API key         : {'set' if settings.fmp_api_key else 'MISSING'}")
 
@@ -37,7 +46,8 @@ async def main(history: int) -> int:
             print()
             print(f"Last {len(rows)} day(s):")
             for row in rows:
-                print(f"  {row.budget_date}  {row.calls_used:>4} calls  ({row.provider})")
+                print(f"  {row.budget_date}  {row.calls_used:>6,} calls  "
+                      f"{row.bytes_used / 1e6:>9,.1f} MB  ({row.provider})")
 
     if remaining == 0:
         print()

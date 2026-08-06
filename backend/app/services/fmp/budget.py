@@ -1,8 +1,18 @@
-"""Daily FMP API budget guard.
+"""Daily FMP API budget guard, and bandwidth accounting.
 
 Every FMP call goes through `DailyBudgetGuard.reserve()` *before* the HTTP request is
 made. The counter is in Postgres, not memory, because cron jobs and the web service are
-separate processes and the free tier's 250/day cap is shared between them.
+separate processes and share one quota.
+
+**What the guard is for changed with Premium (Phase 4B).** It was built against the free
+tier's 250 calls/day hard 429 — exceed it and everything stops. Premium has no daily call
+cap at all (750/min, 50 GB per rolling 30 days), so the ceiling is no longer a vendor limit
+being tracked; it is **runaway protection**, there to stop a bug that loops over the
+universe from quietly spending the bandwidth allowance.
+
+The number that can actually end a month early is now `bytes_used`, which is why this
+module also tracks bandwidth. Calls are *reserved* before a request; bytes are *recorded*
+after one, since their size is unknown until the response arrives.
 
 Reservation is a single conditional UPDATE:
 
@@ -19,7 +29,7 @@ over-reported as available.
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -120,6 +130,75 @@ class DailyBudgetGuard:
                 self._ceiling - calls_used,
             )
             return calls_used
+
+    async def record_bytes(self, count: int) -> None:
+        """Record response bytes for today.
+
+        **Recorded after the fact, not reserved.** Calls are reserved beforehand because
+        the ceiling must be enforced before the request goes out; bytes cannot be, because
+        the size is unknown until the response arrives. That asymmetry is deliberate — this
+        is measurement, not enforcement.
+
+        Failures here are swallowed. Bandwidth accounting must never be the reason a scan
+        fails: the number is for the operator, and losing one response's worth of it is
+        immaterial next to losing the scan.
+        """
+        if count <= 0:
+            return
+        day = utc_today()
+        try:
+            async with self._session_factory() as session:
+                await self._ensure_row(session, day)
+                await session.execute(
+                    update(ApiBudget)
+                    .where(ApiBudget.budget_date == day)
+                    .values(
+                        bytes_used=ApiBudget.bytes_used + count,
+                        updated_at=datetime.utcnow(),
+                    )
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001 - see docstring
+            logger.debug("Could not record %s bytes of FMP bandwidth", count, exc_info=True)
+
+    async def bytes_used_today(self) -> int:
+        async with self._session_factory() as session:
+            used = await session.scalar(
+                select(ApiBudget.bytes_used).where(ApiBudget.budget_date == utc_today())
+            )
+            return used or 0
+
+    async def bytes_used_last_30_days(self) -> int:
+        """Bandwidth over the trailing 30 days — the window FMP's 50 GB allowance uses."""
+        since = utc_today() - timedelta(days=29)
+        async with self._session_factory() as session:
+            total = await session.scalar(
+                select(func.coalesce(func.sum(ApiBudget.bytes_used), 0)).where(
+                    ApiBudget.budget_date >= since
+                )
+            )
+            return int(total or 0)
+
+    async def bandwidth_status(self) -> dict[str, float | int | bool | str]:
+        """Bandwidth against the vendor allowance, for reporting.
+
+        Premium has no daily call cap, so this — not `calls_used` — is the number that can
+        end a month early. 4A projected ~15% of the allowance at the measured universe
+        size, which is comfortable, but a threshold edit can move the universe a long way
+        in one night.
+        """
+        settings = get_settings()
+        allowance = int(settings.fmp_monthly_bandwidth_gb * 1_000_000_000)
+        used = await self.bytes_used_last_30_days()
+        pct = (100.0 * used / allowance) if allowance else 0.0
+        return {
+            "bytes_today": await self.bytes_used_today(),
+            "bytes_30d": used,
+            "allowance_bytes": allowance,
+            "pct_used": round(pct, 2),
+            "over_warn_threshold": pct >= settings.fmp_bandwidth_warn_pct,
+            "warn_at_pct": settings.fmp_bandwidth_warn_pct,
+        }
 
     async def calls_used_today(self) -> int:
         """Calls consumed so far today (0 when nothing has been recorded yet)."""
