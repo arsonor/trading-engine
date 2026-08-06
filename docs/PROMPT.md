@@ -8,10 +8,9 @@ Reference: `docs/CLAUDE.md` (spec), `docs/PLAN.md` (roadmap + version ladder),
   cron stub, Vercel, Supabase, CI trimmed, connectivity verified). Prompt removed;
   see git history if needed.
 - Phases 1–3 build **app V1 on the free FMP tier** — no subscription required.
-- Phase 4+ (V2, Starter tier) prompts get written once V1 ships. The two former FMP
-  open questions are **answered** (FMP support, July 2026): Starter intraday bars are
-  regular-hours only; `extended=true` (pre/after-market bars) requires Premium.
-  → Accurate RVOL + volume profiles are V3; V2 uses a flagged approximation.
+- Phase 4+ is **V2 on FMP Premium** (purchased 5 Aug 2026). Starter was skipped: it has
+  no pre-market volume source, and pre-market volume is non-negotiable for the end user.
+  `extended=true` (Premium) is the reason for the purchase and the subject of Phase 4A.
 
 ---
 
@@ -20,129 +19,7 @@ Reference: `docs/CLAUDE.md` (spec), `docs/PLAN.md` (roadmap + version ladder),
 **Status:** ✅ DONE (25 July 2026)
 **Tier:** FMP Basic (free) — 250 calls/day hard cap, EOD data only, 43 accessible symbols
 
-> **What the live free tier actually does** — measured, and it changed the design:
-> `batch-quote`, `stock-list` and `company-screener` are all **402 Restricted Endpoint**,
-> so the symbol probe falls back to one `quote` call per symbol. Restricted *symbols* also
-> return **402**, with a **plain-text** body, and both restriction messages contain
-> "not available under your current subscription" — only `"Restricted Endpoint:"` vs
-> `"Premium Query Parameter: 'Special Endpoint"` separates "fail the path" from "skip the
-> ticker". Full table in `docs/PLAN.md`.
->
-> Delivered: `app/services/fmp/` (client, budget guard, fixtures, typed errors),
-> `app/services/reference/` (metrics, pipeline, probe), `app/services/scanner/rvol.py`,
-> five new tables, and CLIs `probe_fmp_symbols.py` / `refresh_reference_data.py` /
-> `fmp_budget.py` / `record_fmp_fixtures.py`. Prompt kept below for reference.
-
-````
-# Phase 1 — FMP client + daily budget guard + nightly reference pipeline (free tier)
-
-## Context
-Read `docs/CLAUDE.md` (sections 3–5) and `docs/PLAN.md` first. Phase 0 is complete:
-Postgres locally (docker, port 5433), Supabase in prod, Render web + cron stub, Vercel
-frontend, `FMP_API_KEY` already wired into config.
-
-We are building app V1 against FMP's FREE tier. Hard constraints that must shape the
-design (do not treat these as soft limits):
-- 250 API calls per DAY, hard stop with HTTP 429. No overages.
-- End-of-day data only. No intraday endpoints, no real-time guarantees.
-- Most endpoints only serve a fixed sample of ~87 large-cap symbols (AAPL, TSLA, ...).
-- 500 MB bandwidth / 30 days.
-
-## FMP API facts (from official docs — use these, do not invent endpoints)
-- Base: `https://financialmodelingprep.com/stable/<endpoint>`
-- Auth: `?apikey=KEY` query param (or `apikey` header)
-- Endpoints for this phase:
-  - `historical-price-eod/full?symbol=AAPL` → full daily history: date, open, high,
-    low, close, volume, vwap, change. ONE call yields everything needed to compute
-    volume_avg_20d, high_20d, sma_50, sma_200, prior close/high locally.
-  - `shares-float?symbol=AAPL` → float shares, free float, outstanding shares
-  - `quote?symbol=AAPL` and `batch-quote?symbols=AAPL,MSFT` → quote snapshot
-  - `profile?symbol=AAPL` → company name, exchange, sector, market cap
-  - `stock-list`, `company-screener` → directory/screener (may be restricted on free;
-    probe, don't assume)
-- Efficient pattern: **2 calls per ticker per day** (eod/full + shares-float).
-  Budget 250/day → a universe of ~80–100 tickers with headroom for probes and retries.
-
-## Scope
-
-1. **FMP client** (`app/services/fmp/client.py`)
-   - Async httpx client; auth via query param from settings; sane timeouts.
-   - Retries with exponential backoff for transient errors ONLY (5xx, network).
-     NEVER retry a 429 — a daily-cap 429 means stop, not try harder.
-   - Typed pydantic response models for each endpoint used.
-   - Typed errors: BudgetExhausted, RateLimited, SymbolNotAvailable, AuthFailed,
-     TransientError, MalformedResponse.
-
-2. **Daily API budget guard** — build this FIRST; every FMP call goes through it
-   - `api_budget` table: date (UTC), calls_used, updated_at.
-   - Atomic increment per call; configurable ceiling `FMP_DAILY_BUDGET` (default 230,
-     deliberately below 250 to leave manual-testing headroom).
-   - When exhausted: raise BudgetExhausted with a clear message including reset time.
-     Jobs must fail gracefully and record partial progress — never corrupt tables.
-   - CLI: `scripts/fmp_budget.py` showing today's usage.
-
-3. **Symbol probe** (`scripts/probe_fmp_symbols.py`)
-   - The free tier's accessible-symbol sample must be discovered, not assumed.
-   - Probe a candidate list (S&P-100-style megacaps + a handful of known small caps to
-     confirm they are NOT accessible) using batch-quote where possible to conserve budget.
-   - Persist results into `universe` with an `is_accessible_free_tier` flag.
-   - Report: how many symbols are usable; this set IS the V1 universe.
-
-4. **Database migrations** (Alembic, per `docs/CLAUDE.md` section 5)
-   - Tables: `universe`, `reference_data`, `scan_runs`, `api_budget`, and
-     `premarket_volume_profile` (schema only — populated in V3, since building profiles
-     requires `extended=true` pre-market bars, Premium-only per FMP support)
-   - Indexes on `reference_data(static_float, volume_avg_20d)` for the Stage-1 query.
-
-5. **Fixture recorder + replay** (`tests/fixtures/fmp/`)
-   - Recorder mode captures real responses to JSON on disk (one recording session,
-     budget-aware). Replay client serves them in tests. CI NEVER hits live FMP.
-   - Record at minimum: eod/full and shares-float for 5 accessible symbols, plus one
-     not-available symbol and one malformed/empty case.
-
-6. **Reference-data pipeline** (`scripts/refresh_reference_data.py`)
-   - For each active universe ticker: fetch eod/full + shares-float (2 calls), compute
-     locally: volume_avg_20d, price_close_yesterday, high_yesterday, high_20d, sma_50,
-     sma_200; upsert into `reference_data` with computed_at.
-   - Budget-aware: checks remaining budget BEFORE starting each ticker; stops cleanly
-     and reports progress when close to the ceiling.
-   - Idempotent and resumable: re-running continues where it stopped (skip tickers
-     already refreshed today unless `--force`).
-   - Flags: `--tickers AAPL,MSFT`, `--dry-run`, `--force`, `--limit N`.
-   - Structured logging: per-ticker result, calls used, wall time.
-
-7. **RVOL interface** (`app/services/scanner/rvol.py`)
-   - `RvolCalculator` protocol with two implementations:
-     - `SimpleRvol`: premarket_volume / volume_avg_20d (usable from V2)
-     - `NormalizedRvol`: time-of-day profile version — in V1 this raises
-       FeatureRequiresIntraday with a message stating it needs `extended=true`
-       pre-market bars, available from FMP Premium (app V3).
-   - Selected via config `RVOL_MODE=simple|normalized`. This seam is the whole point:
-     upgrading tiers later must be a config change, not a rewrite.
-
-## Constraints
-- Do NOT implement the scanner stages (Phase 2) or touch the dashboard (Phase 3).
-- Do NOT delete Alpaca code yet.
-- Every FMP-touching test uses fixtures. The recorder is the only live-API test path,
-  run manually.
-- Handle missing float gracefully (null-tolerant), and record which symbols lack it.
-- All new settings go through `app/config.py` with documented defaults, and
-  `.env.example` updated.
-
-## Definition of done
-1. `uv run python scripts/probe_fmp_symbols.py` reports the accessible universe and
-   persists it (share the count and a sample in your final report)
-2. `uv run python scripts/refresh_reference_data.py --tickers AAPL,MSFT --dry-run` works
-3. A real limited run (e.g. `--limit 10`) populates `reference_data` correctly and
-   `scripts/fmp_budget.py` shows the expected call count (~2/ticker + probes)
-4. Re-running the same day consumes ~0 additional calls (idempotence)
-5. Exhausting the budget artificially (set ceiling to 3) fails cleanly with partial
-   progress preserved
-6. All tests pass offline against fixtures; ruff clean
-7. Final report: accessible-symbol count, calls consumed, any endpoint that behaved
-   differently from the docs (screener/stock-list especially), and anything that
-   blocks Phase 2
-````
+See Git history for details
 
 ---
 
@@ -161,71 +38,7 @@ design (do not treat these as soft limits):
 > `tests/unit/test_scanner_stages.py`; percentages compare at 6dp so the displayed number
 > and the pass/fail decision always agree.
 
-````
-# Phase 2 — 3-stage scanner on free-tier data + fixtures
-
-## Context
-Read `docs/CLAUDE.md` section 4 (full scanner spec) and `docs/PLAN.md`. Phase 1 is done:
-FMP client + budget guard, populated `universe` and `reference_data`, fixture replay,
-pluggable RVOL (simple/normalized stub).
-
-V1 data reality: EOD only, mega-cap universe. Stage 1 and Stage 3 run on REAL data.
-Stage 2 (live gap + premarket RVOL) is implemented COMPLETELY but fed by fixtures /
-synthetic inputs until V2 provides real-time + intraday data.
-
-## Scope
-
-1. **Scanner service** (`app/services/scanner/`)
-   - Stage 1: SQL candidate query on `reference_data` (float, avg volume, price floor).
-   - Stage 2: gap_pct (3.0–15.0) + RVOL (>10%) via the RvolCalculator interface. Input
-     is a `MarketSnapshot` abstraction (price + accumulated volume per ticker) with two
-     providers: `FixtureSnapshotProvider` (V1) and a documented interface a future
-     `FmpLiveSnapshotProvider` (V2) will implement.
-   - Stage 3: nearest_resistance = lowest of {high_yesterday, high_20d, sma_50, sma_200}
-     ABOVE current price; upside_pct >= 5.5.
-   - Risk filters: price floor, min dollar volume, market-tape check (stub returning
-     neutral in V1, interface ready for V2).
-
-2. **Threshold profiles** — critical for V1 demos
-   - `production`: the real spec (float < 75M, etc.).
-   - `demo`: loosened float cap (e.g. < 20B) so free-tier mega-caps can pass Stage 1
-     and the pipeline visibly fires end-to-end with real reference data.
-   - Profile selected per run; the profile name is stamped into `scan_runs` and onto
-     every alert payload it produces. Demo output must never be mistakable for real.
-
-3. **Clock + timezone (correctness-critical)**
-   - Injectable clock; zero direct `datetime.now()` in scanner logic.
-   - All market logic in America/New_York; explicit conversion; DST transition tests
-     both directions.
-
-4. **Observability** (`scan_runs`)
-   - started/finished, profile, per-stage survivor counts, API calls used, errors.
-   - "Failed scan" must be distinguishable from "zero candidates".
-
-5. **CLI** `scripts/run_scan.py`
-   - `--fixture`, `--profile demo|production`, `--at "2026-07-28 08:45 ET"`, `--dry-run`,
-     `--verbose`. Output to stdout/logs only — alert persistence is Phase 3.
-
-6. **Tests**
-   - Golden-case boundary tests: gap 3.0/15.0, rvol 10.0, upside 5.5 — pin
-     inclusive/exclusive deliberately and document the choice.
-   - Full-pipeline fixture run → deterministic candidate set.
-   - Degraded paths: missing float, missing profile data, budget exhausted mid-scan.
-   - DST tests.
-
-## Constraints
-- No alert persistence/broadcast yet (Phase 3). No dashboard changes.
-- No live FMP calls in tests; a manual `--dry-run` against live data is the only
-  live path, and it must respect the budget guard.
-
-## Definition of done
-1. Fixture run at a fixed `--at` produces a deterministic, documented candidate set
-2. Demo-profile run against REAL reference data completes and (given loosened
-   thresholds + fixture snapshots) produces at least one Stage-3 survivor
-3. Boundary + DST + degraded-path tests pass; ruff clean
-4. `scan_runs` shows a complete audit trail including profile name
-5. Report: survivor counts per stage in both profiles, and anything blocking Phase 3
-````
+See Git history for details
 
 ---
 
@@ -245,70 +58,7 @@ synthetic inputs until V2 provides real-time + intraday data.
 > visually unmistakable from the grey "quiet market" state; no horizontal scroll at 390px.
 > 618 backend + 74 frontend tests green.
 
-````
-# Phase 3 — Confidence scoring, alert delivery, dashboard rebuild (V1)
-
-## Context
-Read `docs/CLAUDE.md` sections 1, 4.4, and `docs/PLAN.md`. Phases 1–2 are done: the
-scanner produces qualified candidates (real Stage 1/3 data; fixture-fed Stage 2;
-demo/production profiles).
-
-## Scope
-
-1. **Confidence score**
-   - Transparent weighted formula (gap position in band, rvol magnitude, upside
-     headroom, liquidity, data-quality/profile reliability). Weights as named config
-     constants with rationale comments.
-   - Every score carries a factor breakdown. API + UI label it PROVISIONAL
-     (unvalidated until V3 backtesting).
-   - **`upside_pct` and `nearest_resistance` MUST be treated as nullable throughout.**
-     Today every candidate reaching this point has a float upside, because Stage 3
-     rejects tickers trading above all four resistance levels. That rejection is a
-     deferred strategy decision (see `docs/CLAUDE.md` 4.3 "Breakout convention" and open
-     question #8) that may be reversed after live V2 use. If scoring, the schema, or the
-     UI assume a non-null upside, reversing it later becomes a cross-cutting refactor
-     instead of a one-branch change. So: score must degrade gracefully with a null upside
-     (documented fallback weight), the API schema must mark the field optional, and the
-     alert card must render a sensible "no overhead resistance" state.
-
-2. **Alert model + persistence**
-   - Extend `alerts` to the v2 contract (`docs/CLAUDE.md` 4.4) + `scan_run_id` FK +
-     `profile` field. Alembic migration.
-   - Dedup: one alert per ticker per session, updated in place by later scans.
-   - Broadcast over the existing WebSocket channel.
-
-3. **API + contract**
-   - Endpoints: list/filter session alerts; single alert with score breakdown; recent
-     scan runs. Update `openapi/spec.yaml`; regenerate TS types.
-
-4. **Dashboard rebuild (mobile-first — phone is the primary device)**
-   - Alert card: ticker, gap%, RVOL, catalyst (nullable), confidence + breakdown,
-     entry window, entry price, resistance, upside. Demo-profile alerts visibly badged.
-   - Session view sorted by confidence, live-updating.
-   - Scan-status panel: last successful scan, per-stage counts, explicit failure state.
-     "No candidates" and "scanner broken" must look DIFFERENT.
-   - Settings: edit thresholds + profile without redeploy.
-   - Retire/repurpose watchlist-era pages that no longer apply.
-   - Honest framing: candidates not predictions; not financial advice; provisional score.
-
-5. **Cleanup**
-   - Wire the Render cron stub to `run_scan.py --profile production` (it will produce
-     zero candidates on free tier — that is correct and must display as such).
-
-## Constraints
-- No trade execution, ever. Preserve the WebSocket transport (extend payloads only).
-- Readable on a 390px viewport without horizontal scroll.
-
-## Definition of done
-1. Fixture scan persists alerts with full v2 fields + breakdowns; they appear live in
-   the dashboard
-2. Demo vs production profiles visually distinct end-to-end
-3. Threshold/profile changes in Settings take effect next scan without redeploy
-4. Scan failure vs zero candidates are distinct in the UI
-5. OpenAPI + TS types in sync; tests pass; usable on a phone
-6. This completes app V1 — report anything to verify before the Starter subscription
-   (feeds the two open FMP questions in PLAN.md)
-````
+See Git history for details
 
 ---
 
@@ -323,91 +73,7 @@ migration carries a real rollback cost. The round-trip migration test infrastruc
 also freshly built and in CI. Doing this before Phase 4 means the live FMP work starts
 on an unambiguous schema.
 
-````
-# Phase 3.5 — Remove Alpaca + v1 schema vestiges
-
-## Context
-Read `docs/CLAUDE.md` and `docs/PLAN.md` first. App V1 has shipped: FMP client, budget
-guard, 3-stage scanner, confidence scoring, alerts and dashboard all work. The v1 Alpaca
-watchlist/rule-engine path is now dead weight — the deployed dashboard reports
-`Alpaca API — Disconnected`, and the real smoke tests are `seed_test_alerts.py` and the
-fixture-driven scan.
-
-This phase removes v1. It is deliberately sequenced BEFORE the V2 (FMP Starter) work so
-the schema is clean when the live snapshot provider is written, and because a schema
-migration is cheapest now while nobody depends on the app.
-
-## Scope — tier 1: dead code and credentials (low risk)
-
-1. Delete `app/services/alpaca_client.py` and `app/services/stream_manager.py`, plus any
-   module existing solely to support them.
-2. Remove Alpaca settings from `app/config.py` and `.env.example`, and the Alpaca env
-   vars from `render.yaml` (both the web service and the cron job).
-3. Delete tests that only exercise the Alpaca client / stream manager. Do NOT delete
-   tests that touch alerts — those are covered in tier 2.
-4. Audit the MCP server (`app/mcp/`, `run_mcp.py`) for Alpaca-dependent tools and remove
-   them. Report what remains and whether the MCP server still has a coherent purpose in
-   v2 — do not delete the whole server without flagging it first.
-5. Remove Alpaca references from the README and any docs describing it as a live
-   fallback.
-
-## Scope — tier 2: schema cleanup (needs the round-trip test)
-
-6. **Drop the retained v1 columns from `alerts`**: `rule_id`, `setup_type`,
-   `entry_price`, `stop_loss`, `target_price`, `market_data_json`, plus the FK to
-   `rules`.
-
-7. **Rename `alerts.symbol` → `alerts.ticker`** and delete the storage/API mapping layer
-   in `app/schemas/scanner.py`. Dependents that must move with it: the index on `symbol`
-   and the `uq_alerts_symbol_session` unique constraint (rename to match).
-
-8. **Decide the fate of the `rules` table — do not assume.**
-   `docs/CLAUDE.md` §5 says `rules` would hold tunable scanner thresholds, but Phase 3
-   created `scanner_settings` for exactly that, leaving `rules` orphaned. Establish
-   whether anything still reads or writes it, then either drop it (with its model,
-   repository, schemas, API routes and the retired YAML rule-engine code) or state
-   clearly what it is still for. Either way, justify the choice and update
-   `docs/CLAUDE.md` §5 to match reality.
-
-9. **Decide and document what happens to existing v1-origin alert rows** (those with
-   `session_date IS NULL`). Options: delete them, or keep them with null v2 fields.
-   They are seeded test data locally, but the deployed database may hold others. The
-   choice must be explicit in the migration docstring — not an accident of whichever DDL
-   you happen to write.
-
-10. **The migration must be reversible**, with the same discipline as the last hotfix:
-    the downgrade restores the v1 columns as NULLABLE (v2 rows have no honest values for
-    them), and the docstring states plainly that dropped v1 column data is not
-    recoverable by re-upgrading.
-
-## Constraints
-- **No behavioural change to the v2 scanner.** Stages, scoring, thresholds, alert
-  contract and dashboard behaviour must be identical before and after.
-- The round-trip migration test must cover this migration **with realistic data
-  present** — both v1-origin and v2-origin alert rows. An empty-database round trip
-  proves nothing; that is precisely how the last downgrade bug shipped.
-- Do NOT run anything against the production Supabase instance.
-- The API contract stays as specified in `docs/CLAUDE.md` §4.4 — the field is already
-  exposed as `ticker`, so this rename must be invisible to the frontend.
-- Tier 1 and tier 2 may be separate commits if that eases review; they have very
-  different risk profiles.
-
-## Definition of done
-1. No Alpaca code, settings, env vars, credentials or documentation references remain
-   anywhere in the repo
-2. `alerts` has no v1 columns; the storage column is `ticker`; the mapping layer is gone
-3. The `rules` decision is made, implemented, justified, and `docs/CLAUDE.md` §5 updated
-4. Round-trip test passes on a database seeded with BOTH v1-origin and v2-origin rows
-5. Downgrade succeeds on that same populated database, and the data-loss note is in the
-   migration docstring
-6. The v2 scanner produces identical results before and after: run
-   `scripts/run_scan.py --fixture --profile demo --at "<fixed time>"` on both sides and
-   compare
-7. Dashboard still works end to end (candidates, scan status, settings, demo badging)
-8. Tests pass; ruff and eslint clean
-9. Report: what the MCP audit found, what you decided about `rules` and why, and how
-   many v1-origin alert rows the migration affects
-````
+See Git history for details
 
 ---
 
@@ -421,90 +87,7 @@ author will actually meet it.
 **Depends on:** Phase 3.5
 **Tier:** free — no subscription needed. Good use of the wait on FMP support.
 
-````
-# Phase 4-prep — Make missing RLS impossible to ship
-
-## Context
-Supabase flagged a CRITICAL security issue on this project: tables in the `public`
-schema without Row-Level Security. Without RLS, anyone holding the project URL and the
-(publicly-designed) anon key can read, edit and delete those tables through Supabase's
-auto-generated Data API — bypassing the FastAPI backend entirely.
-
-This has been fixed BY HAND on the production database with `ALTER TABLE ... ENABLE ROW
-LEVEL SECURITY` for the current tables. That fix is not durable: every table a future
-migration creates will lack RLS, and V2/V3 add several. `docs/PLAN.md` carries a
-checklist reminder, but a reminder is not enforcement — it depends on a human reading
-the plan at the right moment.
-
-This phase converts "remember to enable RLS" into "CI fails if you didn't", the same way
-the migration round-trip test converted "remember to test downgrades".
-
-## Why RLS with NO policies is the correct configuration here
-This project never uses the Supabase Data API. The backend connects directly over
-Postgres as `postgres`, which owns the tables and carries BYPASSRLS — so RLS with zero
-policies denies the Data API's `anon`/`authenticated` roles while leaving the
-application completely unaffected. Do not write permissive policies to "make it work";
-nothing needs to work through that path.
-
-## Scope
-
-1. **A migration that enables RLS on every existing table**
-   - Enable RLS on all current `public` tables so local, CI and production match.
-     Environment parity is a standing principle in this project — the production
-     database must not be the only place RLS is on.
-   - Handle `alembic_version` deliberately: decide whether it is in scope, and if it is
-     excluded, say why in the migration docstring rather than leaving it an oversight.
-   - Reversible downgrade (disable RLS), with the security implication noted in the
-     docstring.
-
-2. **A reusable convention for future migrations**
-   - A small helper (e.g. `enable_rls(table_name)`) in a shared migration utility module,
-     so new migrations enable RLS in one obvious line.
-   - Document the convention where a developer will actually meet it: the Alembic README
-     or a comment in `alembic/script.py.mako` so it appears in every generated migration
-     stub.
-
-3. **The enforcement test — this is the real deliverable**
-   - Against a migrated Postgres database, query the catalog for every base table in
-     `public` and assert each has `relrowsecurity = true`.
-   - The failure message must name the offending tables and give the exact SQL to fix
-     them — a developer hitting this in CI should not have to research anything.
-   - Any deliberate exclusion lives in an explicit, commented allowlist in the test, so
-     skipping a table is a visible decision rather than a silent gap.
-   - This must run in CI (Postgres is already a CI service as of the last hotfix) and
-     must FAIL rather than SKIP when the database is unavailable in CI — a silently
-     skipped security test is worse than no test.
-
-4. **Prove the test has force**
-   - Temporarily add a table without RLS (or disable it on one), confirm the test fails
-     with the intended message, then revert. Report the observed failure output.
-   - This is the same verification discipline used on the downgrade round-trip test. A
-     test nobody has watched fail is just a test that passes.
-
-## Constraints
-- Do NOT use `FORCE ROW LEVEL SECURITY`. That subjects the table owner to RLS too, which
-  would break the application's own access.
-- Do NOT create any RLS policies. Zero policies is the intended deny-all posture.
-- No change to application behaviour, queries, or the alert contract.
-- Do NOT run anything against the production Supabase instance — it has already been
-  fixed by hand; the migration must be safe to re-apply there (idempotent).
-- Document the assumption that the application's database role owns its tables or has
-  BYPASSRLS. If a future deployment connects as a restricted role, RLS becomes
-  load-bearing and policies would be required — note this so it is not discovered the
-  hard way.
-
-## Definition of done
-1. Migration enables RLS on all existing tables and is idempotent (safe on a database
-   where RLS is already on — i.e. production)
-2. The helper + convention exist and are documented where a developer will see them
-3. The enforcement test passes after the migration
-4. The test demonstrably fails when a table lacks RLS — report the actual output
-5. The test runs in CI and fails (not skips) if Postgres is unavailable there
-6. App works unchanged locally: `/health`, `/api/v1/scanner/status`,
-   `/api/v1/scanner/alerts` all behave as before
-7. Migration round-trip test still passes on populated data
-8. Tests pass; ruff clean
-````
+See Git history for details
 
 ---
 
@@ -520,104 +103,13 @@ the demo/zero-Stage-1 misconfiguration instead of reporting it as a quiet market
 "the system reports something false while behaving correctly", which is the most
 expensive kind of small bug — it sends you debugging the wrong thing.
 
-````
-# Phase 4-prep (b) — Three cleanups from the first production run
-
-## Context
-Read `docs/CLAUDE.md` and `docs/PLAN.md` first. V1 is complete and was run against the
-production Supabase database for the first time. Three issues surfaced. None breaks the
-scanner; two actively mislead the operator.
-
-## Issue 1 — CLI scripts never dispose the database engine
-
-`app/core/database.py` provides `close_db()` (which calls `await engine.dispose()`), but
-no CLI script in `backend/scripts/` calls it. Connections are torn down by garbage
-collection after the event loop has already closed.
-
-Against local Docker Postgres this is invisible. Against Supabase (TLS) it produces a
-noisy `Fatal error on SSL transport` / `RuntimeError: Event loop is closed` traceback on
-every run, because the SSL transport's finaliser tries to write a close-notify to a dead
-loop. It is cosmetic — the work has already committed — but it trains the operator to
-ignore tracebacks, which is a bad habit to build into a tool that must be trusted when it
-reports failure.
-
-**Fix:** every CLI script disposes the engine inside the async context, in a `finally`
-so it runs on the error path too. Cover all of `backend/scripts/`. The point is
-deterministic cleanup of pooled connections; silencing the Windows traceback is a
-side effect, not the goal — do not "fix" this by suppressing warnings.
-
-## Issue 2 — The demo banner reports nominal thresholds, not effective ones
-
-Observed output, from a single run:
-
-    Thresholds : float < 75,000,000            <- effective (correct)
-    WARNING ... float cap loosened to 20,000,000,000   <- nominal (wrong)
-    Stage 1: 0/43 tickers passed (float < 75,000,000)  <- effective (correct)
-
-The warning text comes from the profile's stored `description` string, which hardcodes
-the designed value. After `resolve_profile()` applies stored overrides via
-`replace(profile, **applied)`, that description is stale — it describes a profile that is
-no longer in effect.
-
-**Fix:** derive every human-readable threshold summary from the profile's actual field
-values at render time. A hardcoded description that duplicates configuration is a second
-source of truth and will go stale again. Prefer removing the parallel string over
-remembering to update it.
-
-## Issue 3 — Stored settings silently defeat the demo profile
-
-The demo profile exists for exactly one reason: loosen the float cap so free-tier
-mega-caps can reach Stage 1 and the pipeline can be seen working. But
-`ScannerSettingsStore.resolve_profile()` applies the single stored settings row on top of
-*any* profile. A user who saves thresholds while thinking in production terms silently
-reverts demo's loosened cap — and the result presents as "0 candidates, successful scan,
-quiet market", which is exactly the failure mode the whole scan-status design exists to
-prevent.
-
-**Decide the fix; do not assume.** Options, with the trade-off stated in the commit:
-- **Scope settings per profile** (a row per profile). Structurally correct — demo and
-  production are different regimes and should not share an override set. Costs a
-  migration, which is cheap now that round-trip tests exist.
-- **Protect the demo profile's loosened fields** from override.
-- **Detect and warn loudly** when an override materially conflicts with the active
-  profile's purpose.
-
-Whichever is chosen, this must hold: **a demo scan whose loosened thresholds have been
-reverted must never present as a quiet market.**
-
-Additionally, add a sanity check to the scan output: **in the demo profile, Stage 1
-passing 0 of N is almost certainly a misconfiguration, not a quiet market** — demo is
-designed so the free-tier universe passes. Say so explicitly in that case, and point at
-the effective thresholds.
-
-## Constraints
-- No change to scanner logic, stage arithmetic, thresholds, or the alert contract.
-- Do NOT run anything against the production Supabase instance.
-- If Issue 3 needs a migration, it is reversible and covered by the round-trip test on
-  populated data, per the standing rule in `docs/PLAN.md`.
-- Preserve the existing three-layer precedence documented in `settings_store.py`
-  (env defaults → stored row → explicit per-run argument) unless the chosen fix
-  deliberately changes it — in which case update that module docstring to match.
-
-## Definition of done
-1. Every script in `backend/scripts/` disposes the engine, including on the error path;
-   no SSL/event-loop traceback when run against a TLS Postgres
-2. Threshold summaries (banner, header, stage logs) all show identical effective values,
-   pinned by a test that applies an override and asserts the banner reflects it
-3. Issue 3's fix implemented, justified in the commit, with a test proving a stored
-   override can no longer silently defeat the demo profile
-4. Demo profile + 0 Stage-1 survivors produces an explicit misconfiguration warning, not
-   a quiet-market message — with a test
-5. `settings_store.py` docstring matches actual behaviour
-6. Existing tests pass; ruff clean; scanner output otherwise byte-identical (verify with
-   a fixture run before and after)
-````
+See Git history for details
 
 ---
 
 ## Phase 4A-T — Tiingo free-tier empirical probe (optional, runs before or beside 4A)
 
-**Status:** ready to run
+**Status:** ✅ DONE
 **Depends on:** Phase 4-prep
 **Tier:** Tiingo **free** account — costs nothing
 **Purpose:** settle by measurement whether Tiingo's consolidated Equity Realtime endpoint
@@ -631,142 +123,169 @@ could serve this scanner's live half. Background and the full comparison are in
 > low-float small caps and leaves beta. An hour of measurement now makes that a decision
 > rather than a guess.
 
+See Git history for details
+---
+
+## Phase 4A (V2) — FMP **Premium** capability probe
+
+**Status:** ready — **run during a live pre-market session** (04:00–09:30 ET = 10:00–15:30 CEST)
+**Tier:** Premium, active since 5 Aug 2026 (month-to-month). Key already in `backend/.env`.
+**Writes no product code.**
+
+> Starter was skipped: it has no pre-market volume source, and the end user declared
+> pre-market volume non-negotiable. Premium's `extended=true` is the reason for the
+> purchase — and it is the one claim in this project that has never been measured.
+
 ````
-# Phase 4A-T — Empirically test Tiingo's consolidated pre-market feed (free tier)
+# Phase 4A — Measure what FMP Premium actually delivers
 
 ## Context
-Read `docs/TIINGO_VS_FMP_EVALUATION.md` first — it contains the full documentation
-findings and the reasoning behind this probe.
+Read `docs/PLAN.md` ("Delivery model" + Phase 4A) and `docs/TIINGO_PROBE_FINDINGS.md`
+first. The latter is the model for this phase: same discipline, different provider.
 
-The scanner needs cumulative pre-market volume (04:00–09:30 ET) for low-float US small
-caps. FMP Starter cannot supply it; FMP Premium can via `extended=true`. Tiingo has a
-third option that documentation suggests may be excellent, and which appears to be
-available on a **free** account:
+The FMP key in `backend/.env` is now **Premium** (purchased 5 Aug 2026, month-to-month).
+FMP support states that `extended=true` adds pre-market and after-market intervals to
+intraday charts, works for any US symbol with intraday data regardless of float or market
+cap, and that Premium also unlocks `batch-quote`, 1-minute bars, 750 calls/min, 30 years of
+history and no daily request cap (50 GB per rolling 30 days).
 
-  GET https://api.tiingo.com/tiingo/equity/intraday              (ALL tickers, one request)
-  GET https://api.tiingo.com/tiingo/equity/intraday/<ticker>
-  GET https://api.tiingo.com/tiingo/equity/intraday/<ticker>/prices?startDate=...&resampleFreq=5min
+**None of that is measured.** In this project, roughly half of what a vendor asserted has
+needed correction once probed — five separate claims in the Tiingo evaluation alone. This
+phase measures before Phase 4B builds.
 
-Per Tiingo's docs this feed is **consolidated** across exchanges, ATS and OTC venues,
-covers **04:00–20:00 ET**, and its `volume` field is *"consolidated intraday volume
-throughout the day"*. On the historical endpoint, volume is **opt-in** and must be
-requested explicitly: `?columns=open,high,low,close,volume`.
-
-It is also flagged **beta**, with Tiingo recommending the IEX endpoints for production.
-This probe establishes whether the beta is good enough to matter.
-
-Auth: token via `Authorization: Token <API_KEY>` header, or `?token=<API_KEY>`.
-Free-tier limits: 50 requests/hour, 1,000/day, 1 GB/month, 500 unique symbols/month.
-**The hourly limit of 50 is the binding constraint on this probe — design around it.**
-
-## THIS IS A THROWAWAY PROBE
-Do NOT build a Tiingo client into `app/`. No new production modules, no config coupling,
-no changes to the FMP client, scanner, alerts or dashboard. Everything lives in a single
-self-contained script plus a findings document. If the answer is "no", deleting this
-phase must be one `git rm`.
+This phase writes **no product code**: a probe script, recorded fixtures, and a findings
+document. Do not modify the scanner, alerts, dashboard, or the existing FMP client beyond
+what is needed to call new endpoints.
 
 ## Questions to answer
 
-**A. Does the consolidated feed actually cover pre-market?**
-1. Call `/tiingo/equity/intraday/<ticker>` during a live pre-market session
-   (04:00–09:30 ET = 10:00–15:30 CEST). Capture the full raw payload. Which fields are
-   populated, and which are null?
-2. **Is `volume` present and does it accumulate?** Sample the same tickers every ~5
-   minutes for at least 45 minutes and record the series. Monotonically rising =
-   cumulative (what we need). Flat, fluctuating or null = not usable.
-3. Does the series start from 04:00 ET, or only from some later hour? If possible, sample
-   early (10:00 CEST) and late (15:00 CEST) in the window and compare.
+**A. `extended=true` — the decisive test**
+1. Call `historical-chart/5min?symbol=X&from=...&to=...&extended=true` during a live
+   pre-market session. Does it return pre-market bars at all? Capture full raw payloads.
+2. **What time does the earliest bar of the session start** — 04:00 ET, or later? The
+   scanner's window opens at 04:00; if bars begin at 07:00 or 08:00 the timing model in
+   `docs/CLAUDE.md` §4.5 must change.
+3. **Is `volume` per-bar (summable) or already cumulative?** This determines whether
+   `volume_premarket_accumulated` is a sum over bars or a direct read. Establish it by
+   comparing consecutive bars against their own magnitudes — state the evidence, do not
+   infer from field naming.
+4. **Does it work for genuinely low-float small caps?** This is the case that matters and
+   the one a megacap-only test would flatter. Build the test set from **real floats**:
+   use `shares-float-all` (or `shares-float`) to find at least 15 US common stocks with
+   float < 75M and price > $2, then probe those. Report a **per-ticker table**, not an
+   average — an average hides the failure that matters.
+5. What is returned for a ticker with **no pre-market activity** — empty array, zero-volume
+   bars, or stale bars from a previous session? The scanner must distinguish "not trading"
+   from "no data", and a stale non-null value is the dangerous case.
+6. Do 1-minute bars also support `extended=true`, and how do they compare to 5-minute?
 
-**B. The critical question — does it work for LOW-FLOAT SMALL CAPS?**
-4. This is the one that decides everything. Mega-caps will almost certainly work; the
-   strategy targets stocks with float < 75M. Assemble a test set of **at least 10
-   genuinely low-float, small-cap US tickers** (use the existing FMP client and
-   `shares-float` to pick real ones — do not guess from memory), plus 3 mega-caps as a
-   control.
-5. For each: is the ticker present in Tiingo's feed at all? Is `volume` non-null? Is it
-   plausible in magnitude? Report a per-ticker table — not an average, since an average
-   hides exactly the failure that matters.
-6. Cross-check magnitude against FMP for the same ticker at the same moment where
-   possible. A consolidated figure should be materially larger than an IEX-only one; if
-   Tiingo's number looks IEX-sized, the "consolidated" claim does not hold in practice.
+**B. Data-integrity guard — learn from the Tiingo probe**
+7. The Tiingo probe found a low-float ticker whose cumulative volume **reset to zero
+   mid-session and re-accumulated from a new baseline**, permanently losing the earlier
+   total. Every row looked healthy in isolation. For RVOL that is the worst failure shape:
+   a plausible small number that silently drops a real candidate.
+   **Do not assume FMP is immune.** Sample the same tickers repeatedly across the session
+   and check whether any cumulative series decreases, or whether re-requesting the same
+   historical window returns different volumes. Report explicitly either way.
 
-**C. The whole-market snapshot — the architectural prize**
-7. Call `/tiingo/equity/intraday` with **no ticker**. How many tickers come back? What is
-   the payload size (bandwidth matters: 1 GB/month free, 40 GB on Power)? How long does
-   it take?
-8. What fraction of returned tickers have a non-null `volume` during pre-market?
-9. How many of our Stage-1-relevant low-float names appear in it?
+**C. History depth — gates volume profiles and V3 backtesting**
+8. **How many days of extended-hours intraday history are available?** The advertised "30
+   years" refers to daily bars. ≥20 sessions are required for `premarket_volume_profile`;
+   V3 backtesting needs far more. Probe backwards until data stops and report the real
+   limit, plus any per-request row cap.
+9. Is pre-market history complete for low-float names, or sparse/missing on quiet days?
 
-**D. Historical intraday — can volume profiles be built?**
-10. Call the historical endpoint with `?columns=open,high,low,close,volume` and
-    after-hours enabled. Confirm volume is returned when explicitly requested.
-11. **How far back does it go?** The 20-session pre-market volume profile needs 20 trading
-    days of extended-hours bars. Establish the real retention limit — note that the IEX
-    equivalent caps at 2,000 data points, and check whether the consolidated endpoint has
-    a similar ceiling.
-12. Do the historical bars include pre-market intervals, and from what time?
+**D. Scale endpoints**
+10. `batch-quote` — confirm it is no longer 402. Max symbols per request? Payload size?
+    Does it include pre-market prices during the pre-market window, or regular-hours only?
+11. `shares-float-all` — record count, payload size, pagination, small-cap coverage,
+    and how current the data is.
+12. `company-screener` — exact fields returned, pagination, which filters are honoured.
+    **Measure universe size at 3+ pre-filter settings** (e.g. `price > 2 AND volume >
+    500000` with market-cap ceilings of $2B / $5B / none). 4B needs these counts to size
+    the nightly job. Note how over-inclusive each setting is, since market cap is only a
+    proxy for float.
+13. Re-check the **§6.1 contradiction**: FMP support says free-tier `shares-float` is
+    limited to ~87 symbols, but the Tiingo probe measured 64/70 arbitrary small caps
+    returning real floats on the free key. Irrelevant to Premium operationally, but it
+    indicates vendor statements about tier limits are unreliable — note whether Premium
+    behaves as documented.
 
-**E. Coverage and limits**
-13. Is there a supported-ticker list, and how many US equities does it contain?
-14. Confirm the free-tier limits empirically (50/hour is easy to hit — do not exhaust it
-    deliberately; pace the probe and report what was observed).
-15. Note anything requiring a paid plan or a separate entitlement.
+**E. Limits**
+14. Confirm 750/min and the absence of a daily cap. Do not deliberately exhaust anything.
+15. **Measure payload sizes for every endpoint the scanner will use, and project monthly
+    bandwidth** for a realistic universe and scan cadence against the 50 GB/30-day limit.
+    Bandwidth, not call count, is the binding constraint.
 
 ## Scope
 
-1. **`scripts/probe_tiingo.py`** — self-contained, standalone. Takes the Tiingo token from
-   `TIINGO_API_KEY` in the environment (add to `.env.example` as an optional probe-only
-   variable; do not wire it into `app/config.py`).
-   - Modes: `--snapshot-all`, `--tickers A,B,C`, `--historical`, `--sample-series
-     --minutes 45 --interval 5`.
-   - **Respect the 50/hour free limit**: a local call counter, a conservative ceiling, and
-     a clean stop with partial results preserved when approaching it. Reuse the budget
-     guard's approach conceptually; do NOT couple to the FMP budget table.
-   - Structured logging, and raw responses written to `probe_output/tiingo/`.
-
-2. **Selecting the small-cap test set** — use the existing FMP client to find real
-   low-float names (float < 75M, avg volume > 500K). These calls go through the existing
-   FMP budget guard as normal. Record which tickers were chosen and their float values, so
-   the findings are reproducible.
-
-3. **`docs/TIINGO_PROBE_FINDINGS.md`** — every question A–E with the measured answer, the
-   raw volume time-series from A.2, the **per-ticker table from B.5**, payload sizes, and
-   an explicit list of what could not be determined and why.
-
-4. **A verdict section** answering three things plainly:
-   - Can Tiingo measure cumulative pre-market volume for low-float small caps? Yes/No.
-   - Is the whole-market snapshot viable as a live-scan source (coverage, size, speed)?
-   - Given it is beta and has no float data, does anything here justify revisiting the
-     FMP-Premium recommendation — or is it a future optimisation only?
+1. **`scripts/probe_fmp_premium.py`** — self-contained. Modes for each question group, and
+   a `--sample-series --minutes N --interval M` mode for B.7. Re-runnable at different
+   times of day. Raw responses written to `probe_output/fmp_premium/` (gitignored).
+2. **All calls go through the existing budget guard.** Raise `FMP_DAILY_BUDGET` to a
+   Premium-appropriate value via config — do NOT bypass or remove the guard. Its role
+   changes from avoiding a hard 250/day stop to observability and runaway protection.
+   Consider whether it should also track bytes; propose rather than implement if it grows
+   the scope.
+3. **Record fixtures** for every new endpoint shape via the existing recorder:
+   `extended=true` bars (active and quiet tickers), `batch-quote`, `shares-float-all`,
+   `company-screener` page. CI must stay offline.
+4. **Extend the FMP client only as far as probing requires** — typed models and the same
+   error taxonomy for new endpoints. No scanner or pipeline changes.
+5. **`docs/FMP_PREMIUM_FINDINGS.md`** — every question above with the measured answer, raw
+   evidence (including the per-ticker table from A.4 and any series from B.7), and an
+   explicit list of what could NOT be determined and why.
 
 ## Constraints
-- No production code. No Tiingo dependency in `app/`. No changes to scanner, alerts, or
-  dashboard. Nothing added to CI.
-- Do not commit the Tiingo token; `probe_output/` must be gitignored.
-- Timing matters: A and B **require a live pre-market session** (10:00–15:30 CEST). If run
-  outside that window, say so explicitly in the findings rather than inferring — an
-  after-hours sample answers a different question.
-- Respect free-tier limits; do not deliberately exhaust them.
-- Report honestly if a question cannot be answered on the free tier.
+- No changes to scanner logic, alert contract, thresholds, or dashboard.
+- Do NOT run anything against the production Supabase instance.
+- A.1–A.5 and B.7 **require a live pre-market session**. If run outside 04:00–09:30 ET,
+  say so explicitly in the findings rather than inferring — an after-hours sample answers a
+  different question.
+- Persist raw payloads before analysing them. In the Tiingo probe, a timestamp-parsing bug
+  produced a false negative that was only recoverable because the raw data had been kept.
+- Report honestly what could not be measured.
 
 ## Definition of done
-1. `scripts/probe_tiingo.py` runs in each mode and writes raw responses to disk
-2. `docs/TIINGO_PROBE_FINDINGS.md` exists with measured answers and raw evidence
-3. **B.5's per-ticker low-float table is present** — this is the deliverable that matters
-   most; a probe that only proves AAPL works has proven nothing
-4. A.2's volume series is recorded as a time-series, not single samples
-5. C.7 reports ticker count, payload size and latency for the whole-market snapshot
-6. D.11 states the real historical depth, and whether 20 sessions of pre-market bars are
-   obtainable
-7. The verdict section answers the three questions above plainly
-8. No production code changed; ruff clean on the new script
+1. `scripts/probe_fmp_premium.py` runs and answers A–E as far as the session allows
+2. `docs/FMP_PREMIUM_FINDINGS.md` exists with measured answers and raw evidence
+3. **A verdict on the central question:** can V2 compute cumulative pre-market volume from
+   `extended=true`, from what session start, and for low-float small caps? Yes/no, stated
+   plainly, with the per-ticker table as evidence
+4. **A verdict on normalized RVOL:** is ≥20 sessions of extended-hours history available,
+   so `premarket_volume_profile` can be built?
+5. B.7 answered — any evidence of volume resets or non-reproducible historical volumes
+6. Universe counts at ≥3 pre-filter settings, and a projected monthly bandwidth figure
+7. Fixtures recorded; tests pass offline; ruff clean; no production code changed
+8. Report closes with: which Phase 4B/4C designs are confirmed, which must change, and any
+   newly discovered constraint
 ````
 
 ---
 
-## Phase 4A (V2) — Starter capability probe
+## Phase 4B / 4C (V2) — written after 4A reports
 
-**Status:** ready — run on the first day of the Starter subscription, before any V2 design
+**4B — Universe expansion + nightly refresh at scale.** Two-step build (`company-screener`
+pre-filter → `shares-float-all` → exact `float < 75M` in SQL), sized by 4A's measured
+counts, budget- and bandwidth-aware, idempotent and resumable.
+
+**4C — Live snapshot provider, RVOL, cron go-live.** `FmpLiveSnapshotProvider` against
+`extended=true` bars; `premarket_volume_profile` built from historical extended-hours data;
+`RVOL_MODE` switched to `normalized`; decreasing-volume guard; market-tape check; cron wired
+to the real scan; Render web service upgraded to Starter; migrations moved to
+`preDeployCommand`.
+
+Both are deliberately unwritten until 4A reports — writing them now would bake in the
+assumptions this project has repeatedly had to correct.
+
+---
+
+## ~~Phase 4A (Starter)~~ — SUPERSEDED, kept for reference only
+
+**Starter was never purchased.** Its probe found no pre-market volume source, which is
+what forced the jump to Premium. The live prompt is the **Premium** one above.
+
+**Status:** superseded 5 Aug 2026
 **Depends on:** Phase 3.5, Phase 4-prep, an active FMP **Starter** key
 **Why first:** Phase 1's probe immediately disproved three documented free-tier behaviours
 (`batch-quote`, `stock-list` and `company-screener` were all 402). FMP support has now
@@ -894,21 +413,6 @@ volume. Establish exactly what is available:
 
 ---
 
-## Phase 4B / 4C (V2) — written after 4A reports
-
-**4B — Universe expansion + nightly refresh at scale.** Two-step build (screener → float
-→ `reference_data`), sized by 4A's measured counts, budget-aware and resumable.
-
-**4C — Live snapshot provider, RVOL, cron go-live.** `FmpLiveSnapshotProvider` against the
-aftermarket quote; RVOL approximation selected from 4A's volume-semantics finding and
-flagged approximate everywhere; tiered cron cadence (15 min early session, 5 min from
-08:00); Render backend upgraded to Starter; news/catalyst tagging.
-
-Both depend on 4A's answers — particularly whether pre-market is covered and whether the
-quote's volume is cumulative. Writing them earlier would bake in assumptions.
-
----
-
 ## Working notes
 
 - One phase per session; verify Definition of done before advancing.
@@ -916,6 +420,6 @@ quote's volume is cumulative. Writing them earlier would bake in assumptions.
   a "quick test" from it.
 - CI never touches live FMP.
 - Demo-profile output must always be visibly labelled — in logs, DB, and UI.
-- **Alpaca code is removed in Phase 3.5**, between V1 shipping and the V2 (Starter)
-  work — not "after V2 goes live". The schema migration is cheapest while the app has
-  no users, and Phase 4 should start on a clean schema.
+- **Alpaca code was removed in Phase 3.5** — done, 29 July 2026.
+- **Starter was skipped entirely.** V1 (free) → V2 (Premium). Any text in this file
+  referring to a Starter subscription is historical.

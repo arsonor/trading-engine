@@ -14,23 +14,41 @@ when a real data limitation is hit.
 
 ---
 
-## Delivery model: app versions map to FMP tiers
+## Delivery model — UPDATED 5 August 2026: Premium purchased, Starter skipped
 
 | App version | FMP tier | What it is | Status |
 |---|---|---|---|
-| **V1** | Basic (free) | Complete software, small curated universe (43 probed symbols), EOD data only. A development environment that proves every calculation — not yet a live scanner. | **← current** (Phase 1 done) |
-| **V2** | Starter ($19/mo annual) | First genuinely working scanner: real-time quotes, full US universe, intraday (regular hours only — no `extended=true`). RVOL approximate. | next |
-| **V3** | Premium ($49/mo annual) | `extended=true` pre-market intraday bars → real pre-market volume, volume profiles, accurate RVOL; 1-min bars; 30y history; backtesting → validated confidence score. | target |
-| **V4** | Ultimate ($99/mo annual) | Bulk delivery, global. Probably unnecessary. | unlikely |
+| **V1** | Basic (free) | Complete software, 43-symbol universe, EOD only. Proves every calculation; not a live scanner. | ✅ **DONE** (Phases 0–3.5) |
+| **V2** | **Premium — $69 month-to-month, purchased 5 Aug 2026** | The real scanner: full US universe, `extended=true` pre-market bars → genuine pre-market volume, time-of-day-normalized RVOL, batch-quote, 1-min bars, 30y history. | **← current** |
+| ~~Starter~~ | ~~$19/mo~~ | **SKIPPED.** No pre-market volume (`extended=true` is Premium-only) and the end user declared pre-market volume non-negotiable. Buying it would have shipped a gap-only scanner. | skipped |
+| **V3** | Premium (same key) | Backtesting + confidence-score calibration. No new subscription — same tier, deeper work. | after V2 |
+| V4 | Ultimate ($99/mo) | Bulk delivery, global. Almost certainly unnecessary. | unlikely |
 
-**FMP support answers (July 2026) — both former open questions RESOLVED:**
-- Starter's 5-min intraday bars do **NOT** include pre-market. The `extended=true`
-  parameter (which adds pre/after-market intervals) requires **Premium** (US symbols)
-  or Ultimate (global). → Accurate RVOL and pre-market volume profiles are **V3**.
-- Starter's intraday chart access **is** as the comparison table shows: 5-min and
-  coarser intervals, US symbols, regular trading hours only.
+**What FMP support confirmed about Premium** (asked before purchase):
+- `extended=true` adds pre-market and after-market intervals to intraday charts.
+- It applies to **any US symbol with intraday data** — not filtered by market cap, float or
+  liquidity. Low-float small caps are covered. US symbols only.
+- Premium also unlocks `batch-quote` (402 on free and Starter), 1-minute bars, 750
+  calls/min, 30 years of history, and technical indicators.
+- 750 calls/minute, **no daily cap**, 50 GB per rolling 30 days → **bandwidth is the
+  binding limit, not call count.**
 
-**V1 constraints that shape the code** (from FMP docs + pricing page):
+**⚠ None of this is measured yet.** Roughly half the vendor claims taken on trust in this
+project have needed correction once probed (see `docs/TIINGO_VS_FMP_EVALUATION.md` §11).
+**Phase 4A measures before Phase 4B builds.**
+
+### The budget guard is re-tuned, not removed
+
+`FMP_DAILY_BUDGET` (default 230) was built for the free tier's 250/day hard stop. Premium
+has no daily cap, so the guard's purpose changes from *avoiding a hard failure* to
+*observability and runaway protection*. Keep it, raise the ceiling, and add **bandwidth
+tracking** — that is now the real limit.
+
+**Superseded (kept for context):** FMP support's July answers established that Starter's
+5-min intraday bars do **not** include pre-market and that `extended=true` requires Premium.
+That finding is what caused Starter to be skipped entirely.
+
+**V1 constraints (historical — the free tier the app was built against):**
 - 250 API calls/day, hard stop (429). A persistent daily budget guard is mandatory.
 - EOD data only; no intraday, no real-time.
 - Most endpoints limited to a fixed sample of large-cap symbols (AAPL, TSLA, …).
@@ -95,7 +113,7 @@ client + stream manager; watchlist model, API and table; per-tick YAML rule engi
 | Backend host | **Render** (web + cron) | Deployed; cron stub live |
 | Frontend host | **Vercel** | Deployed |
 | Scan window | **04:00 → 09:25 ET**, every 5 min | Full early session (V2+; V1 has no intraday) |
-| RVOL | **Pluggable**: simple ↔ time-of-day-normalized | Normalized needs `extended=true` intraday — **confirmed Premium-only (V3)**. V2 ships an approximate RVOL, flagged on every alert; interface built in V1 |
+| RVOL | **Pluggable**: simple ↔ time-of-day-normalized | Normalized needs `extended=true` — **now available (Premium purchased)**. V2 targets normalized directly, subject to 4A confirming pre-market bar coverage |
 | Scheduler | **Render Cron Job** | Provisioned (stub) |
 
 ---
@@ -261,7 +279,15 @@ output byte-identical before and after; round-trip + downgrade pass on populated
       defeat the demo float cap and present as a quiet market — the pipeline now names that
       misconfiguration instead of reporting a clean empty scan.
 
-### FMP Starter capabilities — ANSWERED (FMP support, 29 July 2026)
+### ~~FMP Starter capabilities~~ — SUPERSEDED (Starter was skipped; Premium purchased 5 Aug 2026)
+
+> Kept as the record of why Starter was rejected. Its conclusion — that Starter has no
+> pre-market volume source — is exactly what forced the jump to Premium. Everything below
+> about "the pre-market volume problem", the 300/min budget arithmetic, and the
+> aftermarket-quote candidates is **no longer the plan**: `extended=true` supersedes all of
+> it. The one item that carries forward is §6.1 (free-tier `shares-float` works for
+> arbitrary small caps), which remains an unexplained contradiction with FMP support and is
+> worth re-checking during 4A.
 
 > **⚠ A measured finding contradicts the free-tier assumption below.** The Tiingo probe
 > (4 Aug 2026, `docs/TIINGO_PROBE_FINDINGS.md` §6.1) established that **FMP's
@@ -359,33 +385,76 @@ what exactly does Aftermarket Trade return?
 
 ---
 
-### Phase 4A (V2) — Starter capability probe **← first V2 step**
-Small, empirical, and gates everything after it. Same discipline as Phase 1's symbol
-probe, which immediately disproved three documented behaviours. Characterises: pre-market
-availability and volume semantics of the aftermarket quote, `shares-float-all` access,
-screener field coverage and pagination, real rate limits, and the true universe size at
-various pre-filter settings. **Report before any V2 code is designed around assumptions.**
+### Phase 4A (V2) — Premium capability probe **← NEXT, run on a live pre-market session**
+**Tier:** Premium (active). **Writes no product code.**
+
+Measures what Premium actually delivers before anything is built on it. Gated on a live
+pre-market window (04:00–09:30 ET = 10:00–15:30 CEST). Deliverable: a probe script plus
+`docs/FMP_PREMIUM_FINDINGS.md`.
+
+- [ ] **`extended=true` — the decisive test.** Does it return pre-market bars? From 04:00
+      ET or later? For genuinely low-float small caps, or only liquid names? Is `volume`
+      per-bar (summable to a cumulative session total)?
+- [ ] **Guard against the PAVS failure mode** found in the Tiingo probe: sample repeatedly
+      and check whether any cumulative series *decreases* mid-session. A silent reset
+      produces a plausible low RVOL, not an error.
+- [ ] Intraday **history depth** — how many days of extended-hours bars? ≥20 sessions is
+      required for volume profiles; more is needed for V3 backtesting. The "30 years"
+      figure refers to daily bars.
+- [ ] `batch-quote` — confirm available; max symbols per request; payload size
+- [ ] `shares-float-all` — record count, payload size, small-cap coverage
+- [ ] `company-screener` — fields, pagination, and **universe size at 3+ pre-filter
+      settings** (price > $2, volume > 500K, market-cap ceilings). 4B needs these numbers.
+- [ ] Rate limit + **bandwidth projection** for a realistic universe and cadence (50 GB/30d)
+- [ ] Fixtures recorded for every new endpoint shape
+
+**Done when:** the findings document answers each question with measured evidence, states
+plainly whether normalized RVOL is achievable, and lists which 4B/4C designs must change.
+
+---
 
 ### Phase 4B (V2) — Universe expansion + nightly refresh at scale
-Two-step universe build (screener → float → `reference_data`), budget-aware and resumable,
-sized by 4A's measurements. Written after 4A reports.
+**Depends on:** 4A's measured numbers.
+
+- [ ] Two-step universe build: `company-screener` pre-filter (over-inclusive — it cannot
+      see float, so anything it wrongly excludes is never seen) → `shares-float-all` →
+      exact `float < 75M` applied locally in SQL
+- [ ] Nightly `reference_data` refresh at real universe scale, budget- and
+      bandwidth-aware, idempotent, resumable
+- [ ] **Retire the demo threshold profile's reason to exist** — production thresholds now
+      return real candidates. Keep the profile mechanism; stop needing it.
+- [ ] Raise `FMP_DAILY_BUDGET`; add bandwidth tracking to the guard
+- [ ] Round-trip migration tests on populated data for any schema change
+
+---
 
 ### Phase 4C (V2) — Live snapshot provider, RVOL, cron go-live
-`FmpLiveSnapshotProvider` against the aftermarket quote; RVOL approximation chosen from
-4A's volume-semantics finding and flagged approximate on every alert; tiered cron cadence;
-Render backend upgraded to Starter (always-on); news/catalyst tagging. Written after 4B.
+**Depends on:** 4B.
 
-- [ ] **Move migrations to `preDeployCommand`** — carried over from Phase 3.5, and it belongs
-      *here* rather than in the free-tier prep list because it depends on the Render Starter
-      upgrade above. Render's pre-deploy hook is "available for paid web services, private
-      services, and background workers", and `render.yaml` still has the web service on
-      `plan: free`, so the two changes must land together. Today `alembic upgrade head` runs
-      in `startCommand` on every container start, serialised by a `pg_advisory_xact_lock`;
-      moving it means a bad migration stops the **deploy** instead of stopping a **running
-      service**. The exact two-line change and the trade-off are already written up under
-      "Migration strategy" in `README.md`.
-- [ ] Track in live use whether volume conviction is the weak link — that observation is
-      the explicit V3 upgrade trigger
+- [ ] `FmpLiveSnapshotProvider` implementing the Phase-2 `MarketSnapshot` interface —
+      `extended=true` intraday bars summed from 04:00 ET for cumulative pre-market volume,
+      via `batch-quote` where it helps
+- [ ] **Build `premarket_volume_profile`** (5-min buckets × 20 sessions) from historical
+      extended-hours bars → switch `RVOL_MODE` to `normalized`
+- [ ] **Decreasing-volume guard**: treat a mid-session drop in cumulative volume as a data
+      fault, not a measurement (Tiingo-probe lesson; do not assume FMP is immune)
+- [ ] Market-tape check (index/futures) replacing the V1 neutral stub
+- [ ] Wire the Render cron to the real scan, 04:00–09:25 ET; **upgrade the Render web
+      service to Starter ($7/mo)** for always-on operation
+- [ ] **Move migrations to `preDeployCommand`** — the pre-deploy hook requires a paid
+      instance, which this upgrade provides
+- [ ] News/catalyst tagging
+- [ ] First weeks of live observation: alerts per morning, threshold calibration
+
+> **Migration strategy note.** Moving `alembic upgrade head` out of `startCommand` into
+> `preDeployCommand` depends on the Render Starter upgrade above — the pre-deploy hook is
+> only available on paid instances, and `render.yaml` still has the web service on
+> `plan: free`. The two changes land together. Today migrations run on every container
+> start, serialised by a `pg_advisory_xact_lock`; moving them means a bad migration stops
+> the **deploy** rather than a **running service**. The exact change is written up under
+> "Migration strategy" in `README.md`.
+
+---
 
 ### Phase 5 (V2/V3) — Enrichment
 Sector relative strength, bid-ask spread, short interest (slow signal), halt-risk flag,
