@@ -54,6 +54,59 @@ SYNTHETIC_FIXTURES = [
 ]
 
 
+async def _record_premium(store: FixtureStore, symbol: str) -> None:
+    """Record the Premium shapes Phase 4B depends on, so CI can replay them offline.
+
+    The important one is the **multi-session** `extended=true` window: the volume-profile
+    builder pages through history a week at a time, and a single-day fixture cannot
+    exercise the session-grouping or the averaging across sessions at all.
+
+    Collection endpoints are sliced. `shares-float-all` and `company-screener` are ~0.7 MB
+    per page and the value of a fixture is the shape of a row, not five thousand of them;
+    the slice is recorded in the note so a truncated page is never mistaken for a full one.
+    """
+    from datetime import date, timedelta
+
+    from app.services.fmp.client import (
+        EP_HISTORICAL_CHART,
+        EP_SCREENER,
+        EP_SHARES_FLOAT_ALL,
+        FmpClient,
+    )
+
+    end = date.today()
+    start = end - timedelta(days=13)  # two weeks: several sessions, still one request
+    client = FmpClient()
+    print("\nPremium fixtures (Phase 4B):")
+    try:
+        targets = [
+            (f"{EP_HISTORICAL_CHART}/5min",
+             {"symbol": symbol, "from": start.isoformat(), "to": end.isoformat(),
+              "extended": "true"},
+             None, f"extended=true, {start}..{end} — multi-session window for profiles"),
+            (EP_SHARES_FLOAT_ALL, {"limit": 5000, "page": 0}, 25, "bulk float"),
+            (EP_SCREENER,
+             {"priceMoreThan": 1.6, "isEtf": "false", "isFund": "false",
+              "isActivelyTrading": "true", "country": "US", "limit": 10000},
+             25, "universe pre-filter"),
+        ]
+        for endpoint, params, slice_n, note in targets:
+            raw = await client._raw_get(endpoint, params)
+            payload = raw.payload
+            full = len(payload) if isinstance(payload, list) else None
+            if slice_n and isinstance(payload, list):
+                payload = payload[:slice_n]
+                note = f"{note} (first {slice_n} of {full} rows)"
+            elif isinstance(payload, list):
+                note = f"{note} ({full} bars)"
+            path = store.save(endpoint, params, raw.status, payload, note=note)
+            print(f"  [ok]   {path.name[:66]}")
+    except FmpError as exc:
+        print(f"  [err]  premium fixtures: {exc}")
+    finally:
+        await client.aclose()
+
+
 async def main(args: argparse.Namespace) -> int:
     store = FixtureStore()
     symbols = (
@@ -116,6 +169,9 @@ async def main(args: argparse.Namespace) -> int:
     finally:
         await client.aclose()
 
+    if not args.skip_premium:
+        await _record_premium(store, args.premium_symbol)
+
     for endpoint, params, status, payload, note in SYNTHETIC_FIXTURES:
         path = store.save(endpoint, params, status, payload, note=note)
         print(f"  [ok]   synthetic {path.name}")
@@ -135,6 +191,14 @@ if __name__ == "__main__":
         help="A symbol expected to be refused by the free tier",
     )
     parser.add_argument("--dry-run", action="store_true", help="Show the plan without calling FMP")
+    parser.add_argument(
+        "--skip-premium", action="store_true",
+        help="Skip the Phase 4B Premium fixtures (extended bars, bulk float, screener)",
+    )
+    parser.add_argument(
+        "--premium-symbol", default="FFAI",
+        help="Low-float symbol for the multi-session extended=true fixture",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     configure_logging(args.verbose)

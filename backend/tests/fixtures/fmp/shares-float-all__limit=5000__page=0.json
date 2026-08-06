@@ -5,8 +5,8 @@
     "page": 0
   },
   "status": 200,
-  "recorded_at": "2026-08-06T08:30:20.662190+00:00",
-  "note": "bulk float, first 25 rows only (sliced from 5000 rows)",
+  "recorded_at": "2026-08-06T14:10:16.026461+00:00",
+  "note": "bulk float (first 25 of 5000 rows)",
   "payload": [
     {
       "symbol": "020Y.L",

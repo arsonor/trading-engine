@@ -1,8 +1,15 @@
 """Nightly reference-data pipeline.
 
-Two FMP calls per ticker — `historical-price-eod/full` and `shares-float` — is the whole
-budget design. At 250 calls/day that funds roughly 80–100 tickers with headroom for
-probes and retries, which is what makes a free-tier V1 universe possible at all.
+Originally two FMP calls per ticker — `historical-price-eod/full` and `shares-float` —
+sized against the free tier's 250 calls/day, which funded roughly 80–100 tickers.
+
+**Phase 4B changed both halves of that arithmetic.** Float now arrives from
+`shares-float-all`, one bulk fetch of ~8 calls covering the entire market, so the
+per-ticker cost drops to a single EOD call. And the EOD request is bounded server-side to
+`reference_history_days`, because the deepest metric computed here is SMA-200 and the
+endpoint otherwise returns five years: measured at 231 KB -> 51 KB per ticker, which across
+a 3,948-ticker universe is the difference between 19.2 GB and 4.2 GB per month against a
+50 GB allowance. On Premium bytes are the binding limit, not calls.
 
 Three properties matter more than speed here:
 
@@ -17,12 +24,15 @@ Three properties matter more than speed here:
 
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.config import get_settings
 from app.models.reference_data import ReferenceData
 from app.models.universe import Universe
 from app.services.fmp.budget import utc_today
@@ -34,13 +44,18 @@ from app.services.fmp.errors import (
     SymbolNotAvailable,
 )
 from app.services.fmp.fixtures import FixtureFmpClient
-from app.services.fmp.models import SharesFloat
 from app.services.reference.metrics import ReferenceMetrics, compute_reference_metrics
 
 logger = logging.getLogger(__name__)
 
-# eod/full + shares-float. Keep in sync with `refresh_ticker` below.
+# eod/full + shares-float, when float is fetched per ticker. Keep in sync with
+# `refresh_ticker` below.
 CALLS_PER_TICKER = 2
+# With a bulk float lookup supplied (Phase 4B), only eod/full is needed per ticker.
+# `shares-float-all` costs ~8 calls for the WHOLE market, so at any universe above a
+# handful of names this halves the nightly cost: 3,948 tickers drop from 7,896 calls to
+# 3,948 + 8.
+CALLS_PER_TICKER_BULK_FLOAT = 1
 
 STATUS_REFRESHED = "refreshed"
 STATUS_SKIPPED = "skipped"
@@ -93,6 +108,7 @@ class ReferenceRefresher:
         *,
         force: bool = False,
         dry_run: bool = False,
+        float_lookup: Mapping[str, Any] | None = None,
     ) -> None:
         if session_factory is None:
             from app.core.database import async_session_maker
@@ -102,6 +118,14 @@ class ReferenceRefresher:
         self._session_factory = session_factory
         self._force = force
         self._dry_run = dry_run
+        # When present, float comes from one bulk fetch instead of a call per ticker.
+        # Anything with `.float_shares` / `.outstanding_shares` works, which is why the
+        # bulk row type and the single-symbol type are interchangeable here.
+        self._float_lookup = float_lookup
+
+    @property
+    def calls_per_ticker(self) -> int:
+        return CALLS_PER_TICKER_BULK_FLOAT if self._float_lookup is not None else CALLS_PER_TICKER
 
     async def active_tickers(self, limit: int | None = None) -> list[str]:
         """Universe tickers eligible for refresh: active and accessible on this plan.
@@ -128,13 +152,13 @@ class ReferenceRefresher:
 
         for ticker in tickers:
             if not self._dry_run and not await self._client.budget.check_available(
-                CALLS_PER_TICKER
+                self.calls_per_ticker
             ):
                 remaining = await self._client.budget.remaining_today()
                 report.stopped_early = True
                 report.stop_reason = (
                     f"Daily budget nearly exhausted: {remaining} call(s) left, "
-                    f"{CALLS_PER_TICKER} needed per ticker. Stopped before {ticker}."
+                    f"{self.calls_per_ticker} needed per ticker. Stopped before {ticker}."
                 )
                 logger.warning(report.stop_reason)
                 report.results.append(
@@ -177,13 +201,30 @@ class ReferenceRefresher:
             return TickerResult(
                 ticker,
                 STATUS_WOULD_REFRESH,
-                detail=f"would use {CALLS_PER_TICKER} FMP calls (eod/full + shares-float)",
+                detail=(
+                    f"would use {self.calls_per_ticker} FMP call(s) "
+                    + ("(eod/full; float from bulk lookup)" if self._float_lookup is not None
+                       else "(eod/full + shares-float)")
+                ),
                 duration_s=time.monotonic() - started,
             )
 
         calls = 0
         try:
-            bars = await self._client.get_eod_history(ticker)
+            # Bounded server-side: the deepest metric is SMA-200, so five years of
+            # history is bandwidth we never read. See `reference_history_days`.
+            #
+            # NOT applied to fixture replay. Fixtures are keyed on the request params, and
+            # `from` is a ROLLING date — a bounded key would change every day, so a
+            # recorded fixture would go stale overnight rather than at some sensible point.
+            # Replay therefore uses the unbounded shape, which is also the honest one:
+            # bandwidth is not a property being tested offline.
+            since = (
+                None
+                if isinstance(self._client, FixtureFmpClient)
+                else date.today() - timedelta(days=get_settings().reference_history_days)
+            )
+            bars = await self._client.get_eod_history(ticker, since=since)
             calls += 1
         except SymbolNotAvailable as exc:
             await self._mark_inaccessible(ticker, str(exc))
@@ -212,16 +253,21 @@ class ReferenceRefresher:
 
         # Float is fetched second and tolerated as missing: plenty of symbols have no
         # float on FMP, and losing the EOD metrics over that would be a bad trade.
-        shares: SharesFloat | None = None
+        shares: Any | None = None
         float_note = ""
-        try:
-            shares = await self._client.get_shares_float(ticker)
-            calls += 1
-        except BudgetExhausted as exc:
-            float_note = f"float skipped: {exc}"
-        except FmpError as exc:
-            calls += 1
-            float_note = f"float unavailable: {exc}"
+        if self._float_lookup is not None:
+            shares = self._float_lookup.get(ticker)
+            if shares is None:
+                float_note = "no float in bulk lookup"
+        else:
+            try:
+                shares = await self._client.get_shares_float(ticker)
+                calls += 1
+            except BudgetExhausted as exc:
+                float_note = f"float skipped: {exc}"
+            except FmpError as exc:
+                calls += 1
+                float_note = f"float unavailable: {exc}"
 
         await self._upsert(ticker, metrics, shares)
 
@@ -265,7 +311,7 @@ class ReferenceRefresher:
             await session.commit()
 
     async def _upsert(
-        self, ticker: str, metrics: ReferenceMetrics, shares: SharesFloat | None
+        self, ticker: str, metrics: ReferenceMetrics, shares: Any | None
     ) -> None:
         async with self._session_factory() as session:
             universe_row = await self._ensure_universe_row(session, ticker)

@@ -1,8 +1,12 @@
 """Refresh `reference_data` from FMP end-of-day history.
 
-Two calls per ticker (eod/full + shares-float). Budget-aware, idempotent and resumable:
-re-running the same day costs ~0 calls, and an exhausted budget stops cleanly with
-everything already written left intact.
+**One call per ticker at scale.** Float used to cost a second call per ticker; since
+Phase 4B it comes from `shares-float-all`, which returns the whole market in ~8 calls
+regardless of universe size. On a 3,948-ticker universe that is 3,956 calls instead of
+7,896. Pass `--no-bulk-float` to restore the per-ticker path.
+
+Budget- and bandwidth-aware, idempotent and resumable: re-running the same day costs ~0
+calls, and an exhausted budget stops cleanly with everything already written left intact.
 
     uv run python scripts/refresh_reference_data.py --tickers AAPL,MSFT --dry-run
     uv run python scripts/refresh_reference_data.py --limit 10
@@ -19,7 +23,6 @@ from _bootstrap import configure_logging, run_cli
 from app.services.fmp.client import FmpClient
 from app.services.fmp.fixtures import FixtureFmpClient
 from app.services.reference.pipeline import (
-    CALLS_PER_TICKER,
     STATUS_FAILED,
     STATUS_REFRESHED,
     STATUS_SKIPPED,
@@ -62,9 +65,45 @@ def _print_report(report: RefreshReport, elapsed: float, dry_run: bool, budget_l
         print("  Progress so far is committed; re-run to continue where this left off.")
 
 
+async def _bulk_float_lookup(client) -> dict[str, object] | None:
+    """Fetch float for the whole market once, instead of once per ticker.
+
+    ~8 calls total regardless of universe size, which is what makes a 3,948-ticker nightly
+    refresh affordable: 3,956 calls instead of 7,896. Returns None on failure so the run
+    falls back to the per-ticker path rather than refreshing everything with no float —
+    a reference_data row without `static_float` cannot pass Stage 1 at all.
+    """
+    page = -1
+    try:
+        rows: dict[str, object] = {}
+        for page in range(12):
+            page_rows = await client.get_shares_float_page(page=page)
+            if not page_rows:
+                break
+            for row in page_rows:
+                rows[row.symbol.upper()] = row
+            if len(page_rows) < 5000:
+                break
+        print(f"  Bulk float: {len(rows):,} symbols in {page + 1} call(s)")
+        return rows
+    except Exception as exc:  # noqa: BLE001 - fall back, do not abort the refresh
+        print(f"  Bulk float unavailable ({type(exc).__name__}: {exc}); "
+              f"falling back to one shares-float call per ticker.")
+        return None
+
+
 async def main(args: argparse.Namespace) -> int:
     client = FixtureFmpClient() if args.fixture else FmpClient()
-    refresher = ReferenceRefresher(client, force=args.force, dry_run=args.dry_run)
+
+    # The fixture client replays single-symbol shapes; bulk float has no fixture path, so
+    # replay keeps the original per-ticker behaviour.
+    float_lookup = None
+    if not args.fixture and not args.dry_run and not args.no_bulk_float:
+        float_lookup = await _bulk_float_lookup(client)
+
+    refresher = ReferenceRefresher(
+        client, force=args.force, dry_run=args.dry_run, float_lookup=float_lookup
+    )
 
     try:
         if args.tickers:
@@ -82,7 +121,7 @@ async def main(args: argparse.Namespace) -> int:
             tickers = tickers[: args.limit]
 
         if not args.dry_run and client.budget.is_enabled:
-            needed = len(tickers) * CALLS_PER_TICKER
+            needed = len(tickers) * refresher.calls_per_ticker
             remaining = await client.budget.remaining_today()
             print(
                 f"Refreshing {len(tickers)} ticker(s); up to {needed} call(s) needed, "
@@ -95,7 +134,13 @@ async def main(args: argparse.Namespace) -> int:
 
         if client.budget.is_enabled:
             used = await client.budget.calls_used_today()
-            budget_line = f"Budget today      : {used}/{client.budget.ceiling}"
+            bw = await client.budget.bandwidth_status()
+            warn = "  [WARNING: past the warn threshold]" if bw["over_warn_threshold"] else ""
+            budget_line = (
+                f"Budget today      : {used}/{client.budget.ceiling} calls\n"
+                f"  Bandwidth (30d)   : {bw['bytes_30d'] / 1e9:.2f} GB of "
+                f"{bw['allowance_bytes'] / 1e9:.0f} GB ({bw['pct_used']}%){warn}"
+            )
         else:
             budget_line = "Budget today      : n/a (fixture replay makes no API calls)"
 
@@ -117,6 +162,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--fixture", action="store_true", help="Replay recorded responses instead of calling FMP"
+    )
+    parser.add_argument(
+        "--no-bulk-float", action="store_true",
+        help="Fetch float per ticker instead of one bulk call (slower, more calls)",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
