@@ -580,7 +580,8 @@ scan-failure alerting (a silent failed scan is the worst bug this app can have).
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| **Split-distorted reference data** | Fabricated resistance → huge upside → sorts to the top of the candidate list. Live and unfixed | Blocking hotfix: adjusted history + rejection rule (`docs/PROMPT.md`) |
+| ~~Split-distorted reference data~~ **DISPROVED** | — | `historical-price-eod/full` is already split-adjusted (verified: price and volume ratios both exactly 150.0 against the non-split-adjusted series). The flagged tickers were real collapses, not data errors |
+| **Extreme-upside candidates from collapsed stocks** | A stock down 85% has all historical levels far above it → huge upside → outranks genuine setups | `scan_upside_max` (100%) and `scan_price_regime_break_ratio` (3×) reject as risk filters with named reasons. **Open:** whether the confidence score's upside factor saturates — if it is linear, the same pathology survives the ceiling and reappears in the ranking |
 | Bandwidth growth with universe size | 47% of 50 GB at 671 tickers; scales linearly | Tiered cadence (→ ~40%); bandwidth tracking in the guard; 400-day EOD bound |
 | Render cron UTC/DST drift | Wrong-hour scans twice a year | Explicit ET conversion, generous UTC schedule + ET gate, DST tests |
 | Silent scan failure | Looks like a quiet market | `scan_runs` failure taxonomy + distinct UI states + failure alerting (Phase 7) |
