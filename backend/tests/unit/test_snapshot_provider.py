@@ -7,11 +7,11 @@ and the scenario quietly stops testing what it claims to.
 """
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.services.scanner.candidate import Candidate
-from app.services.scanner.errors import ScannerError
 from app.services.scanner.snapshot import (
     SOURCE_FIXTURE,
     FixtureSnapshotProvider,
@@ -20,6 +20,9 @@ from app.services.scanner.snapshot import (
 )
 
 AS_OF = datetime(2026, 7, 28, 8, 45)
+# The live provider works in market time; these tests pin an ET-aware clock.
+ET = ZoneInfo("America/New_York")
+LIVE_AS_OF = datetime(2026, 7, 28, 8, 45, tzinfo=ET)
 
 
 def candidate(ticker="TEST", close=100.0, avg_vol=1_000_000.0) -> Candidate:
@@ -141,11 +144,120 @@ def test_snapshot_rejects_impossible_values():
         MarketSnapshot("TEST", 10.0, -1, AS_OF, SOURCE_FIXTURE)
 
 
-async def test_live_provider_refuses_rather_than_faking_data():
-    """V2's implementation drops in behind this interface. Until then it must not
-    silently return anything."""
-    with pytest.raises(ScannerError, match="FMP Starter"):
-        await FmpLiveSnapshotProvider().get_snapshots([candidate()], AS_OF)
+# ============================================ the live provider (Phase 4C)
+
+
+class _Bar:
+    """Shape of an FMP intraday row: naive market-local stamp at the bar's OPENING edge."""
+
+    def __init__(self, hour, minute, volume, close=10.0, day=28, month=7):
+        self.date = datetime(2026, month, day, hour, minute)
+        self.volume = volume
+        self.close = close
+
+
+class _FakeClient:
+    """Replays canned bars per ticker. `raises` makes one ticker fail."""
+
+    def __init__(self, bars_by_ticker, raises=None):
+        self._bars = bars_by_ticker
+        self._raises = raises or {}
+        self.calls = []
+        self.closed = False
+
+    async def get_intraday_bars(self, symbol, **kwargs):
+        self.calls.append(symbol)
+        if symbol in self._raises:
+            raise self._raises[symbol]
+        return self._bars.get(symbol, [])
+
+    async def aclose(self):
+        self.closed = True
+
+
+async def test_live_provider_sums_bars_because_volume_is_per_bar():
+    """Measured in 4A: consecutive bars FALL (30,243 -> 9,965 -> 2,822). Reading the newest
+    bar's volume would report the last five minutes as the whole session."""
+    client = _FakeClient({"LOWF": [
+        _Bar(4, 0, 30_243), _Bar(4, 5, 9_965), _Bar(4, 10, 2_822),
+    ]})
+    provider = FmpLiveSnapshotProvider(client=client)
+
+    snaps = await provider.get_snapshots([candidate("LOWF")], LIVE_AS_OF)
+
+    assert snaps["LOWF"].volume_premarket_accumulated == 43_030
+
+
+async def test_empty_array_means_not_trading_not_an_error_and_not_a_zero():
+    """4A watched EROC return [] three times and then convert to real bars. A zero here
+    would read as measured stillness and hand RVOL a real-looking 0%."""
+    client = _FakeClient({"LOWF": []})
+    provider = FmpLiveSnapshotProvider(client=client)
+
+    snaps = await provider.get_snapshots([candidate("LOWF")], LIVE_AS_OF)
+
+    assert snaps == {}, "absent, never zero-filled"
+    assert provider.not_trading == ["LOWF"]
+    assert provider.failures == {}, "not trading is not a failure"
+
+
+async def test_provisional_bars_are_excluded_and_the_cut_off_is_recorded():
+    """The newest bars are still being revised, so they are dropped and the honest
+    cut-off travels with the snapshot for RVOL to divide at."""
+    as_of = datetime(2026, 7, 28, 4, 20, tzinfo=ET)
+    client = _FakeClient({"LOWF": [
+        _Bar(4, 0, 100), _Bar(4, 5, 100), _Bar(4, 10, 100), _Bar(4, 15, 100),
+    ]})
+    provider = FmpLiveSnapshotProvider(client=client, settle_minutes=7)
+
+    snap = (await provider.get_snapshots([candidate("LOWF")], as_of))["LOWF"]
+
+    # 04:00 closes 04:05 (+7 = 04:12, settled); 04:05 closes 04:10 (+7 = 04:17, settled);
+    # 04:10 closes 04:15 (+7 = 04:22, NOT yet); 04:15 still forming.
+    assert snap.bars_used == 2
+    assert snap.volume_premarket_accumulated == 200
+    assert snap.provisional_bars_excluded == 2
+    assert snap.settled_through == datetime(2026, 7, 28, 4, 10, tzinfo=ET)
+
+
+async def test_bars_after_the_scan_moment_are_ignored():
+    """A pass simulated at 06:00 must not see 09:00 bars merely because the request
+    returned the whole day."""
+    as_of = datetime(2026, 7, 28, 6, 0, tzinfo=ET)
+    client = _FakeClient({"LOWF": [_Bar(4, 0, 100), _Bar(9, 0, 999_999)]})
+    provider = FmpLiveSnapshotProvider(client=client, settle_minutes=0)
+
+    snap = (await provider.get_snapshots([candidate("LOWF")], as_of))["LOWF"]
+
+    assert snap.volume_premarket_accumulated == 100
+
+
+async def test_one_failing_ticker_does_not_fail_the_scan():
+    client = _FakeClient(
+        {"LOWF": [_Bar(4, 0, 500)]},
+        raises={"BUST": RuntimeError("upstream exploded")},
+    )
+    provider = FmpLiveSnapshotProvider(client=client, settle_minutes=0)
+
+    snaps = await provider.get_snapshots(
+        [candidate("LOWF"), candidate("BUST")], LIVE_AS_OF
+    )
+
+    assert set(snaps) == {"LOWF"}
+    assert "BUST" in provider.failures
+    assert "upstream exploded" in provider.failures["BUST"]
+
+
+async def test_an_injected_client_is_not_closed_by_the_provider():
+    """The pipeline shares one client across the whole scan; closing it here would break
+    every later call."""
+    client = _FakeClient({"LOWF": [_Bar(4, 0, 1)]})
+
+    await FmpLiveSnapshotProvider(client=client, settle_minutes=0).get_snapshots(
+        [candidate("LOWF")], LIVE_AS_OF
+    )
+
+    assert client.closed is False
 
 
 def test_committed_golden_scenario_loads(golden_snapshot_provider):

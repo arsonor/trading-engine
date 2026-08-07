@@ -223,6 +223,18 @@ class Settings(BaseSettings):
         description="Calendar days of EOD history to request per ticker.",
     )
 
+    # --- Live snapshot fan-out (Phase 4C) -----------------------------------------
+    # `batch-quote` returns the PREVIOUS session's close during pre-market (measured, 4A),
+    # so the live snapshot is one `historical-chart/5min?extended=true` call per Stage-1
+    # candidate. At ~694 candidates that is ~0.7 min per pass against FMP's 750/min.
+    #
+    # The per-minute cap is set below the vendor's so a burst cannot trip it; concurrency
+    # bounds how many are in flight at once. Both are config because the Stage-1 count is
+    # discovered nightly and can move a long way after a threshold edit.
+    live_snapshot_concurrency: int = Field(default=8, ge=1, le=64)
+    live_snapshot_max_per_minute: int = Field(default=700, ge=1)
+
+
     # --- Pre-market volume profiles (Phase 4B) ------------------------------------
     # Target sessions per profile. Below `profile_sessions_min` a profile is FLAGGED as
     # thin rather than silently averaged — a 3-session profile must never be mistaken for

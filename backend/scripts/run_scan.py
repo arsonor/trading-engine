@@ -6,9 +6,15 @@ Output goes to stdout and logs only — alert persistence and broadcast are Phas
     uv run python scripts/run_scan.py --fixture --profile production --at "2026-07-28 09:25"
     uv run python scripts/run_scan.py --fixture --profile demo --dry-run --verbose
 
-V1 has no live pre-market data, so `--fixture` is required: the free tier has neither
-real-time quotes nor intraday bars. The scenario file supplies Stage 2's inputs while
-Stages 1 and 3 run on real reference data.
+**Live is the default since Phase 4C.** Stage 2 reads `extended=true` pre-market bars, one
+call per Stage-1 candidate, summed over bars old enough to have settled.
+
+`--fixture` remains first-class and is not deprecated: it is how the pipeline is exercised
+offline, how CI stays free of live FMP, and how the demo profile is demonstrated. The
+scenario file supplies Stage 2's inputs while Stages 1 and 3 run on real reference data.
+
+`--at` works against past sessions too, which is the cheapest way to exercise the live path
+outside pre-market hours: extended-hours history goes back to at least 2016.
 """
 
 import argparse
@@ -26,7 +32,7 @@ from app.services.scanner.pipeline import Scanner, ScanResult
 from app.services.scanner.profiles import available_profiles
 from app.services.scanner.rvol import get_rvol_calculator
 from app.services.scanner.settings_store import ScannerSettingsStore
-from app.services.scanner.snapshot import FixtureSnapshotProvider
+from app.services.scanner.snapshot import FixtureSnapshotProvider, FmpLiveSnapshotProvider
 
 DEMO_BANNER = "!" * 78
 
@@ -120,6 +126,16 @@ def _print_result(result: ScanResult, verbose: bool) -> None:
         print()
         print(f"  Market tape: not measured — {result.tape.detail}")
 
+    if result.snapshot_failures:
+        print()
+        print(f"  Snapshot failures: {len(result.snapshot_failures)} ticker(s) could not "
+              f"be fetched and were skipped")
+        for ticker, why in sorted(result.snapshot_failures.items())[:5]:
+            print(f"    {ticker:<8} {why[:60]}")
+    if result.not_trading:
+        print(f"  Not trading yet  : {len(result.not_trading)} ticker(s) had no settled "
+              f"pre-market bars")
+
     if verbose and result.rejections:
         print()
         print("Rejections")
@@ -159,19 +175,17 @@ async def main(args: argparse.Namespace) -> int:
         print(f"Error: {exc}")
         return 1
 
-    if not args.fixture:
-        print(
-            "Error: V1 has no live pre-market data source (FMP free tier has no real-time\n"
-            "quotes and no intraday bars). Re-run with --fixture."
-        )
-        return 1
-
-    scenario_path = args.snapshot_file or get_settings().scan_snapshot_fixture
-    try:
-        provider = FixtureSnapshotProvider(scenario_path)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"Error: {exc}")
-        return 1
+    # Live is the default since Phase 4C; `--fixture` is how the pipeline is exercised
+    # offline and how the demo profile is demonstrated, so it stays first-class.
+    if args.fixture:
+        scenario_path = args.snapshot_file or get_settings().scan_snapshot_fixture
+        try:
+            provider = FixtureSnapshotProvider(scenario_path)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"Error: {exc}")
+            return 1
+    else:
+        provider = FmpLiveSnapshotProvider()
 
     if args.at:
         try:
@@ -179,7 +193,7 @@ async def main(args: argparse.Namespace) -> int:
         except ValueError as exc:
             print(f"Error: {exc}")
             return 1
-    elif provider.declared_as_of is not None:
+    elif getattr(provider, "declared_as_of", None) is not None:
         clock = FixedClock(provider.declared_as_of)
     else:
         clock = SystemClock()

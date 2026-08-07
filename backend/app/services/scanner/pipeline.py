@@ -46,6 +46,7 @@ from app.services.scanner.clock import (
     is_final_pass,
     is_within_scan_window,
 )
+from app.services.scanner.profile_store import load_profiles
 from app.services.scanner.profiles import ThresholdProfile, get_profile
 from app.services.scanner.risk import (
     MarketTape,
@@ -74,10 +75,14 @@ class StageCounts:
     stage_2: int = 0
     stage_3: int = 0
     risk_passed: int = 0
+    # How many Stage-1 candidates had a volume profile. The rest fall back to simple
+    # RVOL, flagged — a low number here explains a morning full of approximate badges.
+    with_profile: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
             "universe": self.universe,
+            "with_profile": self.with_profile,
             STAGE_1: self.stage_1,
             STAGE_2: self.stage_2,
             STAGE_3: self.stage_3,
@@ -105,6 +110,10 @@ class ScanResult:
     # Set when the funnel's shape indicates a misconfiguration rather than a quiet
     # market. Callers must show this INSTEAD of the quiet-market message.
     misconfiguration: str | None = None
+    # Live-provider outcomes. A thin morning and a morning where the fan-out half failed
+    # look identical from the candidate count alone; these separate them.
+    snapshot_failures: dict[str, str] = field(default_factory=dict)
+    not_trading: list[str] = field(default_factory=list)
 
     @property
     def succeeded(self) -> bool:
@@ -249,7 +258,22 @@ class Scanner:
 
         snapshots = await self._snapshots.get_snapshots(stage1, result.as_of_et)
 
-        stage2 = stage_2_momentum(stage1, snapshots, self._profile, self._rvol, result.as_of_et)
+        # Live providers report what they could not reach. Recorded on the run so a thin
+        # morning can be told apart from a morning where a third of the fan-out failed —
+        # both look like "few candidates" from the outside.
+        result.snapshot_failures = dict(getattr(self._snapshots, "failures", {}) or {})
+        result.not_trading = list(getattr(self._snapshots, "not_trading", []) or [])
+
+        # RVOL's denominator. Loaded in one query for the whole Stage-1 set; a per-ticker
+        # round-trip would not fit the cadence at ~694 candidates.
+        async with self._session_factory() as session:
+            vol_profiles = await load_profiles(session, [c.ticker for c in stage1])
+        result.counts.with_profile = len(vol_profiles)
+
+        stage2 = stage_2_momentum(
+            stage1, snapshots, self._profile, self._rvol, result.as_of_et,
+            profiles=vol_profiles,
+        )
         result.counts.stage_2 = len(stage2.survivors)
         result.rejections.extend(stage2.rejections)
 
@@ -316,6 +340,11 @@ class Scanner:
                 "snapshot_source": getattr(self._snapshots, "source", None),
                 "rvol_mode": self._rvol.mode,
                 "duration_s": round(result.duration_s, 3),
+                # Live-path observability. Without these a morning where 200 of 694
+                # tickers failed to fetch is indistinguishable from a genuinely quiet one —
+                # both just report few candidates.
+                "snapshot_failures": result.snapshot_failures,
+                "not_trading_count": len(result.not_trading),
             }
             await session.commit()
 

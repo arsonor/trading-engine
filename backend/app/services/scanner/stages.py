@@ -40,6 +40,7 @@ from app.services.scanner.candidate import (
     StageOutcome,
 )
 from app.services.scanner.errors import FeatureRequiresIntraday, InsufficientRvolData
+from app.services.scanner.profile_store import VolumeProfile
 from app.services.scanner.profiles import ThresholdProfile
 from app.services.scanner.rvol import RvolCalculator, RvolContext
 from app.services.scanner.snapshot import MarketSnapshot
@@ -131,6 +132,7 @@ def stage_2_momentum(
     profile: ThresholdProfile,
     rvol_calculator: RvolCalculator,
     as_of: datetime,
+    profiles: dict[str, VolumeProfile] | None = None,
 ) -> StageOutcome:
     """Gap and relative volume against live pre-market state.
 
@@ -141,6 +143,7 @@ def stage_2_momentum(
     outcome = StageOutcome()
 
     for candidate in candidates:
+        vol_profile = (profiles or {}).get(candidate.ticker)
         snapshot = snapshots.get(candidate.ticker)
         if snapshot is None:
             outcome.rejections.append(
@@ -189,6 +192,16 @@ def stage_2_momentum(
                     volume_premarket_accumulated=snapshot.volume_premarket_accumulated,
                     volume_avg_20d=candidate.volume_avg_20d,
                     as_of=as_of,
+                    # The symmetry rule: the profile bucket is chosen from the instant the
+                    # numerator is actually complete to, not from the scan time. See
+                    # `_expected_volume_at` in rvol.py for why the difference matters.
+                    settled_through=snapshot.settled_through,
+                    premarket_volume_profile=(
+                        vol_profile.buckets if vol_profile else {}
+                    ),
+                    profile_sessions_sampled=(
+                        vol_profile.sessions_sampled if vol_profile else None
+                    ),
                 )
             )
         except InsufficientRvolData as exc:
