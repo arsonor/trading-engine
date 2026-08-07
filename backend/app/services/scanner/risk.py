@@ -52,21 +52,103 @@ class MarketTapeProvider(Protocol):
 
 
 class NeutralMarketTape:
-    """V1 stub: always neutral, and honest that it is not measuring anything.
+    """Always neutral, and honest that it is not measuring anything.
 
-    A tape check needs index futures or a broad-market proxy, which the FMP free tier does
-    not serve. Returning `is_available=False` means downstream code can show "not
-    measured" rather than a green light nobody earned.
+    Kept as the fallback and the offline/test default. `is_available=False` means
+    downstream code shows "not measured" rather than a green light nobody earned.
     """
 
     async def get_tape(self, as_of: datetime) -> MarketTape:
         return MarketTape(
             state=TAPE_NEUTRAL,
             detail=(
-                "Market-wide tape check not implemented in V1 — needs an index/futures "
-                "feed (app V2). Treated as neutral; not a confirmation."
+                "Market-wide tape check not performed. Treated as neutral; not a "
+                "confirmation."
             ),
             is_available=False,
+        )
+
+
+class FmpMarketTape:
+    """Broad-market context from a pre-market index proxy (default SPY).
+
+    **Never allowed to abort a scan.** The tape is a confidence input and a risk filter,
+    not a gate — `docs/CLAUDE.md` §4.3 — so an unreachable index degrades to
+    `is_available=False` and the morning proceeds. Letting one extra HTTP call decide
+    whether 694 tickers get scanned would be a poor trade.
+
+    Read from the same `extended=true` bars the scanner already uses, rather than a quote:
+    Phase 4A measured that quote endpoints serve the *previous* session's close during
+    pre-market, which would make the tape a reading of yesterday dressed as today.
+    """
+
+    def __init__(self, client: object | None = None, symbol: str | None = None) -> None:
+        self._client = client
+        self._owns_client = client is None
+        self._symbol = symbol or "SPY"
+
+    async def get_tape(self, as_of: datetime) -> MarketTape:
+        from zoneinfo import ZoneInfo
+
+        from app.config import get_settings
+        from app.services.bars import Bar, premarket_bars, settled_bars
+        from app.services.fmp.client import FmpClient
+
+        tz = ZoneInfo(get_settings().scanner_timezone)
+        client = self._client or FmpClient()
+        try:
+            session_date = as_of.astimezone(tz).date()
+            rows = await client.get_intraday_bars(
+                self._symbol, interval="5min",
+                start=session_date, end=session_date, extended=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - the tape must never fail a scan
+            logger.warning("Market tape unavailable (%s): %s", self._symbol, exc)
+            return MarketTape(
+                state=TAPE_NEUTRAL,
+                detail=f"{self._symbol} could not be read ({type(exc).__name__}); "
+                       f"tape not measured. The scan continues.",
+                is_available=False,
+            )
+        finally:
+            if self._owns_client:
+                await client.aclose()
+
+        bars = [
+            Bar(start=r.date.replace(tzinfo=tz), volume=r.volume, close=r.close)
+            for r in rows
+        ]
+        window = [b for b in premarket_bars(bars) if b.start <= as_of]
+        settled = settled_bars(window, now=as_of)
+        if not settled:
+            return MarketTape(
+                state=TAPE_NEUTRAL,
+                detail=f"{self._symbol} has no settled pre-market bars yet at "
+                       f"{as_of:%H:%M} ET; tape not measured.",
+                is_available=False,
+            )
+
+        first, last = settled[0], settled[-1]
+        if not first.close or not last.close:
+            return MarketTape(
+                state=TAPE_NEUTRAL,
+                detail=f"{self._symbol} bars carry no close price; tape not measured.",
+                is_available=False,
+            )
+
+        change_pct = (last.close - first.close) / first.close * 100
+        state = (
+            TAPE_RISK_OFF if change_pct <= -0.5
+            else TAPE_RISK_ON if change_pct >= 0.5
+            else TAPE_NEUTRAL
+        )
+        return MarketTape(
+            state=state,
+            detail=(
+                f"{self._symbol} {change_pct:+.2f}% across {len(settled)} settled "
+                f"pre-market bar(s) to {last.end:%H:%M} ET."
+            ),
+            is_available=True,
         )
 
 

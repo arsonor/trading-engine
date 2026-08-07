@@ -122,9 +122,10 @@ def _print_result(result: ScanResult, verbose: bool) -> None:
         print("  The scan COMPLETED successfully and found nothing. This is a quiet")
         print("  market, not a broken scanner.")
 
-    if result.tape and not result.tape.is_available:
+    if result.tape:
         print()
-        print(f"  Market tape: not measured — {result.tape.detail}")
+        label = result.tape.state if result.tape.is_available else "not measured"
+        print(f"  Market tape: {label} — {result.tape.detail}")
 
     # Integrity findings are printed even on a clean run's failure modes, because the whole
     # point of a guard is that nobody goes looking for it. A split-distorted ticker shows
@@ -210,7 +211,11 @@ async def main(args: argparse.Namespace) -> int:
     else:
         clock = SystemClock()
 
+    # Live scans read a real index proxy; fixture replay stays offline and neutral.
+    from app.services.scanner.risk import FmpMarketTape, NeutralMarketTape
+
     scanner = Scanner(
+        tape_provider=NeutralMarketTape() if args.fixture else FmpMarketTape(),
         snapshot_provider=provider,
         profile=profile,
         clock=clock,
