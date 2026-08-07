@@ -42,25 +42,28 @@ services:
   - type: web
     name: trading-engine-api
     runtime: python
-    plan: free
+    plan: starter
     region: frankfurt
     buildCommand: |
       cd backend && pip install -e .
-    # Migrations run on every container start. This is a deliberate trade-off, not an
-    # oversight — see "Migration strategy" in README.md. Two mitigations make it safe:
-    # migrations take a Postgres advisory lock (alembic/env.py) so concurrent starts
-    # serialize rather than race, and they target the session pooler.
-    # If this service ever scales past one instance, or boot latency starts to matter,
-    # move this to a pre-deploy step and drop it from startCommand:
+    # Migrations run BEFORE the new container takes traffic (Phase 4C).
     #
-    #   preDeployCommand: cd backend && alembic upgrade head
-    #   startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # They used to run inside startCommand, which was a deliberate trade-off while the
+    # service was on the free plan — Render's pre-deploy hook needs a paid instance. Now
+    # that `plan: starter` is here for always-on operation, the hook is available and the
+    # failure mode improves materially: a bad migration stops the DEPLOY, leaving the
+    # previous version serving, instead of stopping a RUNNING SERVICE mid-morning.
     #
-    # That requires `plan:` above to be a PAID tier — Render's pre-deploy hook is not
-    # available on free instances. Phase 4C upgrades this service to Starter for
-    # always-on operation, so both changes land together there (see docs/PLAN.md).
+    # That distinction matters most for this app specifically. The scanner's authoritative
+    # pass is 09:25 ET; a failed boot during pre-market would take the dashboard down at
+    # exactly the moment the user is looking at it.
+    #
+    # The advisory lock in alembic/env.py stays regardless — the cron and the web service
+    # are separate processes and must not race.
+    preDeployCommand: |
+      cd backend && alembic upgrade head
     startCommand: |
-      cd backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+      cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.12"
@@ -97,13 +100,25 @@ services:
   # the window. Tightening this schedule to "the right" UTC hours would reintroduce the
   # twice-yearly one-hour drift that the ET gate exists to eliminate.
   #
-  # `--profile production` on the free FMP tier produces ZERO candidates: every
-  # accessible symbol is a mega-cap whose float is ~1000x the 75M cap. That is correct
-  # behaviour, is recorded as a *successful* scan of a quiet market, and the dashboard
-  # displays it as such. It is not a misconfiguration.
+  # LIVE as of Phase 4C: `--fixture` is gone and `FmpLiveSnapshotProvider` supplies Stage 2
+  # from `extended=true` pre-market bars.
   #
-  # `--fixture` is still required because V1 has no live pre-market data source. It is
-  # dropped at V2 (FMP Starter), when FmpLiveSnapshotProvider replaces the scenario file.
+  # ---------------------------------------------------------------------------
+  # `--dry-run` IS DELIBERATE. Do not remove it without reading this.
+  # ---------------------------------------------------------------------------
+  # The scan runs in full and writes `scan_runs`, but persists and broadcasts NO alerts.
+  # This is stage 1 of a two-stage go-live, and it exists because nobody yet knows how many
+  # candidates a real morning produces. If the answer turns out to be 200, the thresholds
+  # need tuning BEFORE the end user ever opens a dashboard full of noise — and tuning from
+  # `scan_runs` history is far easier than tuning from a user who has stopped trusting the
+  # tool.
+  #
+  # Promote to stage 2 by deleting `--dry-run` once several sessions of `scan_runs` show a
+  # sane candidate count and plausible content. Check with:
+  #   SELECT started_at, stage_counts_json->'counts' FROM scan_runs ORDER BY started_at DESC;
+  #
+  # Zero candidates is a legitimate outcome and is recorded as a SUCCESSFUL scan of a quiet
+  # market, not a failure. The dashboard shows it as such.
   - type: cron
     name: trading-engine-premarket-scan
     runtime: python
@@ -113,7 +128,7 @@ services:
     buildCommand: |
       cd backend && pip install -e .
     startCommand: |
-      cd backend && python scripts/run_scan.py --fixture --profile production
+      cd backend && python scripts/run_scan.py --profile production --dry-run
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.12"
@@ -130,8 +145,25 @@ services:
         value: https://financialmodelingprep.com
       # Keep the cron's budget accounting identical to the API's.
       - key: FMP_DAILY_BUDGET
-        value: "230"
+        value: "20000"
+      # Time-of-day-normalized RVOL, against the profiles Phase 4B built. The scanner
+      # degrades to simple RVOL per ticker (flagged on the alert) when a profile is
+      # missing or thin, so a newly-listed name is not silently dropped.
       - key: RVOL_MODE
-        value: simple
+        value: normalized
+      # A bar is provisional until this long after it closes: 4A measured 49.4% of
+      # pre-market bars revised upward, all settling within 7 minutes. Both sides of the
+      # RVOL division use this same window.
+      - key: BAR_SETTLE_MINUTES
+        value: "7"
+      # Live fan-out: one call per Stage-1 candidate, paced below FMP's 750/min.
+      - key: LIVE_SNAPSHOT_CONCURRENCY
+        value: "8"
+      - key: LIVE_SNAPSHOT_MAX_PER_MINUTE
+        value: "700"
+      # Accumulated volume above this multiple of the 20-day average is flagged as a
+      # probable data fault — recorded, never silently dropped.
+      - key: SCAN_VOLUME_SANITY_MULTIPLE
+        value: "50"
       - key: SCAN_PROFILE
         value: production

@@ -441,31 +441,51 @@ paginates by week; no daily call cap, 750/min, bandwidth is the real limit.
 
 ---
 
-### Phase 4C (V2) — Live snapshot provider, RVOL, cron go-live
-**Depends on:** 4B.
+### Phase 4C (V2) — Live scanning — ✅ DONE (7 August 2026), observation stage running
+**Depends on:** 4B. **The scanner is on.**
 
-- [ ] `FmpLiveSnapshotProvider` implementing the Phase-2 `MarketSnapshot` interface —
-      `extended=true` intraday bars summed from 04:00 ET for cumulative pre-market volume,
-      via `batch-quote` where it helps
-- [ ] **Build `premarket_volume_profile`** (5-min buckets × 20 sessions) from historical
-      extended-hours bars → switch `RVOL_MODE` to `normalized`
-- [ ] **Decreasing-volume guard**: treat a mid-session drop in cumulative volume as a data
-      fault, not a measurement (Tiingo-probe lesson; do not assume FMP is immune)
-- [ ] Market-tape check (index/futures) replacing the V1 neutral stub
-- [ ] Wire the Render cron to the real scan, 04:00–09:25 ET; **upgrade the Render web
-      service to Starter ($7/mo)** for always-on operation
-- [ ] **Move migrations to `preDeployCommand`** — the pre-deploy hook requires a paid
-      instance, which this upgrade provides
-- [ ] News/catalyst tagging
-- [ ] First weeks of live observation: alerts per morning, threshold calibration
+- [x] `FmpLiveSnapshotProvider` — one `historical-chart/5min?extended=true` call per
+      Stage-1 candidate, summed over settled bars. **NOT via `batch-quote`**: 4A measured
+      that it returns the *previous* session's close during pre-market, so no batch route
+      to live pre-market state exists. Bounded concurrency plus a pacer that limits calls
+      *started* per minute, not merely in flight
+- [x] **`RVOL_MODE=normalized`** against the profiles 4B built, with the **settled-bar
+      symmetry rule**: numerator and denominator read the same clock instant. Keying the
+      profile lookup off the scan time instead would understate every ticker, land on the
+      `rvol_pct > 10` gate, and produce no symptom beyond missing alerts
+- [x] Per-ticker fallback to simple RVOL, flagged, when a profile is missing or thin —
+      a newly-listed name is not dropped for lacking a profile it cannot have yet
+- [x] **Decreasing-volume guard** (Tiingo-probe lesson), plus volume-sanity and
+      **split-distortion** guards. The last one fired immediately on real data
+- [x] Market-tape check replacing the neutral stub; degrades to "not measured", never
+      aborts a scan
+- [x] **Alert provenance** — `bars_settled_through`, `provisional_bars_excluded`,
+      `profile_sessions_sampled`, exposed via the API. Without these V3 cannot tell a bad
+      call from data revised after the fact
+- [x] Render web on **Starter**; migrations moved to **`preDeployCommand`**
+- [x] Cron wired to the real scan, `--fixture` dropped
 
-> **Migration strategy note.** Moving `alembic upgrade head` out of `startCommand` into
-> `preDeployCommand` depends on the Render Starter upgrade above — the pre-deploy hook is
-> only available on paid instances, and `render.yaml` still has the web service on
-> `plan: free`. The two changes land together. Today migrations run on every container
-> start, serialised by a `pg_advisory_xact_lock`; moving them means a bad migration stops
-> the **deploy** rather than a **running service**. The exact change is written up under
-> "Migration strategy" in `README.md`.
+**Measured, one full live pass:** 60.2 s, 672 calls, 10.2 MB. Funnel 3,948 → 671 → 62 →
+30 → **30 candidates**. 48 tickers not trading yet; 14 integrity findings across 7 tickers.
+
+**Still open — carried into observation and Phase 5:**
+- [ ] **Promote the cron out of `--dry-run`.** It runs the full pipeline and writes
+      `scan_runs` but persists and broadcasts nothing. Remove the flag once several
+      sessions show a sane candidate count. 30/morning is promising, not yet proven
+- [ ] **First weeks of live observation**: alerts per morning, threshold calibration
+- [ ] **Tier the early cadence.** Bandwidth measured at ~47% of the 50 GB allowance, not
+      the ~15% 4A projected (671 tickers at ~15 KB, versus 554 at ~9.6 KB assumed).
+      15-minute passes until 07:00 bring it to ~40%, and those passes are the least
+      valuable — 48 tickers had no settled bars early on
+- [ ] **Make the volume-profile build incremental across days.** It is incremental within
+      a day (5 calls, 9 s) but a fresh night still rebuilds all 20 sessions per ticker:
+      ~2,776 calls, ~140 MB. Roughly 4× more than needed
+- [ ] **Split-distorted reference data.** The guard flags it; nothing fixes it. FFAI's
+      20-day high is 6.9× its prior close, so its resistance levels and the 540% upside
+      shown are fiction. Needs adjusted history or a rejection rule — a decision about
+      alert quality, not a bug fix
+- [ ] News/catalyst tagging → **Phase 5**, deliberately: adding a second new data source
+      in the same phase makes a bad alert harder to diagnose
 
 ---
 

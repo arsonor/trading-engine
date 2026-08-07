@@ -265,7 +265,7 @@ what is needed to call new endpoints.
 
 ## Phase 4B (V2) — Universe expansion + nightly refresh at scale
 
-**Status:** ready to run
+**Status:** ✅ DONE
 **Depends on:** Phase 4A (measured — `docs/FMP_PREMIUM_FINDINGS.md`)
 **Tier:** Premium, active. No live pre-market session required — this phase is nightly-job
 work and can be built and run at any hour.
@@ -421,13 +421,187 @@ would silently become wrong.
 
 ---
 
-## Phase 4C (V2) — written after 4B reports
+## Phase 4C (V2) — Live scanning: real data, normalized RVOL, cron go-live
 
-Live snapshot provider (per-ticker `extended=true`, summed — **not** `batch-quote`, which
-4A measured as serving the previous session's close during pre-market); `RVOL_MODE` switched
-to `normalized` with the settled-bar rule applied symmetrically to numerator and denominator;
-provisional-bar state recorded on each alert; market-tape check; cron wired to the real scan;
-Render web service upgraded to Starter; migrations moved to `preDeployCommand`.
+**Status:** ✅ DONE (7 August 2026) — delivered as four commits: live provider + normalized
+RVOL, integrity guards + provenance, market tape, infrastructure.
+**Depends on:** Phase 4B (universe + reference data + volume profiles populated)
+**Tier:** Premium, active
+**This is the phase that turned the scanner on.**
+
+**Measured:** a full live pass runs in 60.2 s (672 calls, 10.2 MB) against a 5-minute
+cadence, funnelling 3,948 → 671 → 62 → 30 → **30 candidates**.
+
+**The cron is deliberately still on `--dry-run`** — stage 1 of the two-stage go-live. It
+runs the full pipeline and records `scan_runs`, but persists and broadcasts nothing until
+several sessions confirm the candidate count is sane. See `render.yaml` for how to promote.
+
+**Four items carried forward** (detail in `docs/PLAN.md` Phase 4C): promote out of dry-run,
+tier the early cadence (bandwidth measured at ~47% of allowance, not the ~15% projected),
+make the profile build incremental across days, and decide what to do about
+split-distorted reference data — currently flagged but not corrected.
+
+````
+# Phase 4C — Live snapshot provider, normalized RVOL, cron go-live
+
+## Context
+Read `docs/FMP_PREMIUM_FINDINGS.md` FIRST (measured; supersedes any assumption elsewhere),
+then `docs/CLAUDE.md` §4 for the scanner spec and `docs/PLAN.md` Phase 4C.
+
+Everything is now in place except the live path. V1 shipped the full pipeline, scoring,
+alerts and dashboard. Phase 4B built the real universe (3,948 maintained, ~694 Stage-1
+eligible), the nightly `reference_data` refresh, and `premarket_volume_profile` (691 tickers
+with ≥20 sessions). Stage 2 still reads a fixture scenario.
+
+This phase replaces that fixture with live FMP data and puts the scanner on a schedule.
+
+## Measured facts that constrain the design
+
+| Fact (from 4A/4B) | Consequence |
+|---|---|
+| `batch-quote` returns the **previous session's close** during pre-market | **Do not use it for the live snapshot.** Per-ticker `historical-chart/5min?extended=true` only |
+| ~694 Stage-1 tickers × 750 calls/min ≈ **0.7 min per pass** | Per-ticker fan-out is affordable inside a 5-minute cadence |
+| `extended=true` returns bars from **exactly 04:00 ET** | The `docs/CLAUDE.md` §4.5 timing model needs no change |
+| Bar `volume` is **per-bar, not cumulative** | Accumulated pre-market volume is a **sum over bars** |
+| Quiet tickers return an **empty array**, not stale bars | "Not trading" and "no data" are distinguishable by row count — no staleness heuristic needed |
+| **49.4% of bars revised upward; all settle within 7 min of bar close** | The live sum must use `settled_bars()` — see the symmetry rule below |
+| Nightly cycle = ~6,900 calls / 453 MB; 0.53 GB of 50 GB per 30 days | Live scanning adds roughly 694 × 66 passes ≈ 46k calls and ~90 MB/session. **Measure it; do not assume** |
+
+## Scope
+
+### 1. `FmpLiveSnapshotProvider`
+
+Implement the `MarketSnapshot` provider interface defined in Phase 2 (`app/services/
+scanner/snapshot.py`), alongside the existing fixture provider — selected by config, not by
+replacing it. The fixture path must keep working: it is how the pipeline is tested offline.
+
+For each Stage-1 candidate at scan time `T`:
+- Fetch `historical-chart/5min?symbol=X&extended=true` for today.
+- Filter to pre-market bars (04:00 ET → min(T, 09:30 ET)).
+- Apply **`settled_bars()`** from `app/services/bars.py` (built in 4B).
+- **Sum** the per-bar volumes → `volume_premarket_accumulated`.
+- Take the last settled bar's close → `price_premarket_current`.
+- An **empty array means the ticker has not traded yet** — a legitimate, expected state.
+  It must produce a "no pre-market activity" outcome, never an error and never a zero that
+  looks like measured stillness.
+
+Concurrency: 694 sequential requests will not fit comfortably in the cadence. Use bounded
+concurrency that respects 750/min, with the existing budget guard counting every call.
+Degrade gracefully — a handful of failed tickers must not fail the scan; record them.
+
+### 2. Normalized RVOL — and the symmetry rule
+
+Switch `RVOL_MODE` to `normalized` and implement `NormalizedRvol` against
+`premarket_volume_profile`: today's settled cumulative volume at time `T`, divided by the
+profile's `avg_cumulative_volume` for the bucket at `T`, × 100.
+
+**This is the highest-risk correctness item in the phase.** The profile denominator was
+built from fully-revised historical bars. If the live numerator includes provisional bars,
+RVOL is biased low **by construction**, landing directly on the `rvol_pct > 10` gate — and
+the symptom is simply fewer alerts, with nothing indicating a fault.
+
+Requirements:
+- Both sides use the **same `settled_bars()` definition** and refer to the **same clock
+  bucket**. If the live sum excludes the most recent N minutes, the profile lookup must use
+  the correspondingly shifted bucket. Do not compare a settled numerator against an
+  unshifted denominator.
+- Write a test that pins this: a ticker whose live volume exactly matches its profile must
+  score ~100% RVOL, at several times of day including near 09:25.
+- Fallback when a ticker has no profile or `sessions_sampled` is below a configured
+  minimum: use `SimpleRvol` and **flag the alert as using a degraded metric** (the
+  `ApproxRvolBadge` already exists in the frontend). Never silently mix the two.
+
+### 3. Data-integrity guards
+
+4A found no volume resets on FMP, unlike the Tiingo probe — but absence of evidence from
+one session is not a guarantee. Implement cheap guards:
+- **Monotonicity check**: within a session, a ticker's accumulated volume must not decrease
+  between passes. A decrease is a data fault — log it loudly, keep the previous higher
+  value, and mark the ticker's RVOL as suspect for that session rather than acting on the
+  lower number.
+- **Sanity bounds**: reject or flag an accumulated volume that exceeds a configurable
+  multiple of the ticker's `volume_avg_20d` (a 50× pre-market reading is more likely a data
+  error than a real event).
+- Record both in `scan_runs` so they are visible rather than buried in logs.
+
+### 4. Market-tape check
+
+Replace the V1 neutral stub with a real index/futures reading (e.g. SPY or an index quote
+via FMP). Per `docs/CLAUDE.md` §4.3 this is a **risk filter** and a confidence input, not a
+hard gate. If the tape cannot be read, the scan continues and records "tape not measured" —
+exactly as V1 does now. Do not let an unavailable index abort a scan.
+
+### 5. Alert provenance — needed for V3 backtesting
+
+Record on each alert what the scanner actually saw at decision time:
+- `bars_settled_through` (the effective cut-off timestamp)
+- `provisional_bars_excluded` (count)
+- `rvol_mode` used (`normalized` / `simple` fallback)
+- `profile_sessions_sampled` for the ticker
+
+Without this, V3 cannot distinguish "the scanner was wrong" from "the data was later
+revised". Backtesting must replay stored `scan_runs`, not re-fetch history that has since
+settled upward.
+
+### 6. Cron go-live — staged, not switched
+
+The cron currently runs `--fixture --profile production`. Drop `--fixture`.
+
+**Do not go straight to persisting and broadcasting alerts.** Add an observation mode:
+- Stage 1: run the real scan on the real schedule with `--dry-run` — full pipeline,
+  `scan_runs` recorded, **no alerts persisted or broadcast**. Run it for several sessions.
+- Stage 2: once alert volume and content look sane, remove `--dry-run`.
+
+This exists because nobody knows yet how many candidates a morning produces. If the answer
+is 200, the thresholds need tuning before the end user ever sees a dashboard full of noise —
+and tuning is much easier from `scan_runs` data than from a user's disappointment.
+
+Keep the generous UTC schedule and the ET gate as they are; that design is deliberate (see
+the comments in `render.yaml`) and DST-safe.
+
+### 7. Infrastructure changes in `render.yaml`
+
+- Web service `plan: free` → `plan: starter` (always-on; free spins down after 15 min and
+  breaks the dashboard's live updates).
+- Move `alembic upgrade head` from `startCommand` to `preDeployCommand` — the hook requires
+  a paid instance, which the line above provides. The exact change is already written in the
+  `render.yaml` comments and `README.md` “Migration strategy”. A bad migration then stops the
+  **deploy** instead of a **running service**.
+- Add any new env vars (`RVOL_MODE=normalized`, settled-bar exclusion window, guard
+  thresholds) with `sync: false` where they are secret, values inline where they are not.
+
+## Constraints
+- **Do NOT change stage arithmetic, thresholds, or the alert contract's meaning.** This
+  phase changes where Stage 2's inputs come from, not what the stages decide.
+- The fixture snapshot provider must keep working — CI stays offline, no live FMP in tests.
+- Do NOT run against production Supabase.
+- Any schema change: reversible migration, RLS on new tables, round-trip test on populated
+  data.
+- Demo-profile output must remain visibly badged and must never be mistakable for a real
+  alert now that real alerts exist.
+- **Out of scope, deliberately:** news/catalyst tagging moves to Phase 5 with the other
+  enrichment signals. 4C is about the correctness of the core signal; adding a second new
+  data source in the same phase makes a bad alert harder to diagnose.
+
+## Definition of done
+1. `run_scan.py --profile production --dry-run` against live FMP completes inside the
+   5-minute cadence; report wall time, calls, and bytes for one pass
+2. A live pass produces a plausible funnel; report survivor counts per stage and the
+   candidates found
+3. Normalized RVOL verified by test: live volume equal to profile → ~100%, at several clock
+   times including near 09:25
+4. The settled-bar symmetry is pinned by a test that fails if numerator and denominator use
+   different cut-offs
+5. A ticker with no profile falls back to simple RVOL and is flagged, not silently mixed
+6. Empty-bar tickers are handled as "not trading", distinct from errors — with a test
+7. Monotonicity and sanity guards fire on synthetic bad data and are recorded in `scan_runs`
+8. Alert provenance fields are persisted and visible via the API
+9. `render.yaml` updated: web on Starter, migrations in `preDeployCommand`, new env vars
+10. Tests pass offline; ruff clean; migrations round-trip on populated data
+11. Report: measured bandwidth for a full session (nightly + live), projected against the
+    50 GB/30-day allowance, and a recommendation on whether the 5-minute cadence should be
+    tiered early in the session
+````
 
 ---
 
