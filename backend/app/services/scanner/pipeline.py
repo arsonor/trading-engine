@@ -24,7 +24,7 @@ is the authoritative one; Phase 3 decides what to persist and push from that.
 
 import logging
 import time as time_module
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -45,6 +45,12 @@ from app.services.scanner.clock import (
     describe,
     is_final_pass,
     is_within_scan_window,
+)
+from app.services.scanner.integrity import (
+    IntegrityFinding,
+    VolumeMonotonicityGuard,
+    check_split_distortion,
+    check_volume_plausibility,
 )
 from app.services.scanner.profile_store import load_profiles
 from app.services.scanner.profiles import ThresholdProfile, get_profile
@@ -114,6 +120,8 @@ class ScanResult:
     # look identical from the candidate count alone; these separate them.
     snapshot_failures: dict[str, str] = field(default_factory=dict)
     not_trading: list[str] = field(default_factory=list)
+    # Data-integrity guard hits, recorded rather than buried in logs.
+    integrity_warnings: list[str] = field(default_factory=list)
 
     @property
     def succeeded(self) -> bool:
@@ -167,6 +175,9 @@ class Scanner:
         self._clock = clock or SystemClock()
         self._rvol = rvol_calculator or get_rvol_calculator()
         self._tape = tape_provider or NeutralMarketTape()
+        # High-water marks live on the Scanner so a long-lived process can compare
+        # passes; a one-shot cron simply has nothing to compare against.
+        self._volume_guard = VolumeMonotonicityGuard()
 
     @property
     def profile(self) -> ThresholdProfile:
@@ -270,6 +281,11 @@ class Scanner:
             vol_profiles = await load_profiles(session, [c.ticker for c in stage1])
         result.counts.with_profile = len(vol_profiles)
 
+        # Guards run BEFORE Stage 2 so a corrected volume is what the stage decides on,
+        # and so a flagged ticker is flagged even if it is later rejected for gap.
+        snapshots, findings = self._apply_integrity_guards(stage1, snapshots)
+        result.integrity_warnings = [str(f) for f in findings]
+
         stage2 = stage_2_momentum(
             stage1, snapshots, self._profile, self._rvol, result.as_of_et,
             profiles=vol_profiles,
@@ -289,6 +305,42 @@ class Scanner:
         result.candidates = sorted(
             risk.survivors, key=lambda c: (c.upside_pct or 0), reverse=True
         )
+
+    def _apply_integrity_guards(
+        self, candidates: list[Candidate], snapshots: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[IntegrityFinding]]:
+        """Observe and record. These never reject a candidate — see integrity.py.
+
+        The one correction applied is the monotonicity high-water mark: a volume that went
+        DOWN within a session is a data fault, and acting on the lower number would
+        understate RVOL for the rest of the morning.
+        """
+        findings: list[IntegrityFinding] = []
+        corrected = dict(snapshots)
+
+        for candidate in candidates:
+            snapshot = corrected.get(candidate.ticker)
+            if snapshot is None:
+                continue
+
+            kept = self._volume_guard.check(
+                candidate.ticker, snapshot.volume_premarket_accumulated
+            )
+            if kept != snapshot.volume_premarket_accumulated:
+                corrected[candidate.ticker] = replace(
+                    snapshot, volume_premarket_accumulated=kept
+                )
+
+            for finding in (
+                check_volume_plausibility(candidate, kept),
+                check_split_distortion(candidate),
+            ):
+                if finding is not None:
+                    findings.append(finding)
+                    logger.warning("INTEGRITY %s", finding)
+
+        findings.extend(self._volume_guard.findings[len(findings):])
+        return corrected, findings
 
     # ------------------------------------------------------------------ persistence
 
@@ -345,6 +397,7 @@ class Scanner:
                 # both just report few candidates.
                 "snapshot_failures": result.snapshot_failures,
                 "not_trading_count": len(result.not_trading),
+                "integrity_warnings": result.integrity_warnings,
             }
             await session.commit()
 

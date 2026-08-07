@@ -62,6 +62,22 @@ class ScannerAlert(BaseModel):
     rvol_pct: Optional[float] = None
     rvol_mode: Optional[str] = None
     rvol_is_approximate: bool = False
+    # Decision-time provenance (Phase 4C). Exposed rather than kept internal because it is
+    # what lets a reader tell a bad call from data that was revised afterwards — 4A
+    # measured 49.4% of pre-market bars revised upward within ~7 minutes of closing.
+    bars_settled_through: Optional[datetime] = Field(
+        None,
+        description="Effective data cut-off: the newest bar old enough to be trusted. "
+                    "Earlier than scan_timestamp by the settling window.",
+    )
+    provisional_bars_excluded: Optional[int] = Field(
+        None, description="Bars dropped for being too fresh to have settled."
+    )
+    profile_sessions_sampled: Optional[int] = Field(
+        None,
+        description="Sessions averaged into the RVOL denominator. A low number means a "
+                    "noisier normalization; null means no profile and simple RVOL.",
+    )
     catalyst: Optional[str] = Field(
         None, description="News/earnings tag. Always null in V1 — catalyst tagging is Phase 4."
     )
@@ -109,6 +125,9 @@ class ScannerAlert(BaseModel):
             rvol_pct=alert.rvol_pct,
             rvol_mode=alert.rvol_mode,
             rvol_is_approximate=alert.rvol_is_approximate,
+            bars_settled_through=alert.bars_settled_through,
+            provisional_bars_excluded=alert.provisional_bars_excluded,
+            profile_sessions_sampled=alert.profile_sessions_sampled,
             catalyst=alert.catalyst,
             confidence_score=alert.confidence_score,
             score_breakdown=ScoreBreakdownOut(**breakdown) if breakdown else None,

@@ -66,6 +66,15 @@ class Alert(Base):
     rvol_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     rvol_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     rvol_is_approximate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # --- Decision-time provenance (Phase 4C) ---------------------------------
+    # Phase 4A measured that 49.4% of pre-market bars are revised UPWARD after
+    # publication, settling within ~7 minutes. Re-fetching history later therefore returns
+    # HIGHER volumes than the scanner saw. Without these three columns, V3 backtesting
+    # cannot tell a bad call from a later revision, and would calibrate the confidence
+    # score against numbers that did not exist at decision time.
+    bars_settled_through: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    provisional_bars_excluded: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    profile_sessions_sampled: Mapped[int | None] = mapped_column(Integer, nullable=True)
     catalyst: Mapped[str | None] = mapped_column(String(255), nullable=True)
     entry_reference_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Nullable by design — see the module docstring.

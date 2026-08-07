@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import asyncpg
@@ -38,6 +38,7 @@ PHASE_35 = "c653a931ecaf"  # v1 columns dropped, symbol -> ticker, rules dropped
 WATCHLIST_DROP = "544a7fbf3445"  # watchlist dropped
 RLS = "dbdf5784db31"  # RLS enabled on all public tables
 PHASE_4B = "b008d4bf3a18"  # api_budget.bytes_used + universe_runs
+PHASE_4C = "ae74a2cbe20c"  # alerts decision-time provenance
 
 # Revision-specific tests name the revision they exercise instead of using "head" or
 # a relative "-1". Both of those silently retarget the moment a new migration lands on
@@ -723,3 +724,53 @@ async def test_phase_4b_enables_rls_on_universe_runs(scratch_db):
         ) is True
     finally:
         await conn.close()
+
+
+async def test_phase_4c_provenance_round_trips_on_populated_alerts(scratch_db):
+    """Adding provenance to a populated `alerts` table, and dropping it again.
+
+    All three columns are nullable with no default, so neither direction needs a backfill.
+    What a downgrade destroys is the provenance itself — the bars those alerts were
+    computed from have since settled to different values, so it cannot be reconstructed.
+    The schema round-trips; the information does not.
+    """
+    url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
+    _run_alembic("upgrade", f"{PHASE_4C}-1", database_url=url)
+
+    await _seed_v2_alerts(dsn)
+
+    _run_alembic("upgrade", PHASE_4C, database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        row = await conn.fetchrow(
+            "SELECT gap_pct, bars_settled_through, provisional_bars_excluded, "
+            "profile_sessions_sampled FROM alerts WHERE ticker = 'ADBE'"
+        )
+        assert row["gap_pct"] == 7.0, "the pre-existing alert survives untouched"
+        assert row["bars_settled_through"] is None
+        # And the columns actually accept what the scanner writes.
+        await conn.execute(
+            "UPDATE alerts SET bars_settled_through = $1, provisional_bars_excluded = 2, "
+            "profile_sessions_sampled = 20 WHERE ticker = 'ADBE'",
+            datetime(2026, 8, 6, 9, 15),
+        )
+        assert await conn.fetchval(
+            "SELECT profile_sessions_sampled FROM alerts WHERE ticker = 'ADBE'"
+        ) == 20
+    finally:
+        await conn.close()
+
+    _run_alembic("downgrade", f"{PHASE_4C}-1", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        cols = {c["column_name"] for c in await conn.fetch(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'alerts'"
+        )}
+        assert "bars_settled_through" not in cols
+        assert await conn.fetchval("SELECT gap_pct FROM alerts WHERE ticker = 'ADBE'") == 7.0
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", "head", database_url=url)

@@ -112,6 +112,13 @@ class ScannerAlertService:
             "rvol_pct": candidate.rvol_pct,
             "rvol_mode": candidate.rvol_mode,
             "rvol_is_approximate": candidate.rvol_is_approximate,
+            # What the scanner actually saw, so V3 can distinguish a wrong call from data
+            # that was revised afterwards. See docs/FMP_PREMIUM_FINDINGS.md section 3.
+            "bars_settled_through": candidate.bars_settled_through.replace(tzinfo=None)
+            if candidate.bars_settled_through
+            else None,
+            "provisional_bars_excluded": candidate.provisional_bars_excluded,
+            "profile_sessions_sampled": candidate.profile_sessions_sampled,
             # Catalyst tagging is Phase 4 (needs FMP news + earnings calendar).
             "catalyst": None,
             "entry_reference_price": candidate.price_premarket_current,

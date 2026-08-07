@@ -126,6 +126,18 @@ def _print_result(result: ScanResult, verbose: bool) -> None:
         print()
         print(f"  Market tape: not measured — {result.tape.detail}")
 
+    # Integrity findings are printed even on a clean run's failure modes, because the whole
+    # point of a guard is that nobody goes looking for it. A split-distorted ticker shows
+    # up as the BEST-looking row in the candidate table; it has to be contradicted in the
+    # same output, not in a log file somebody reads afterwards.
+    if result.integrity_warnings:
+        print()
+        print(f"DATA INTEGRITY — {len(result.integrity_warnings)} finding(s)")
+        print("-" * 78)
+        for warning in result.integrity_warnings:
+            for i, line in enumerate(_wrap(warning)):
+                print(f"  {line}" if i == 0 else f"    {line}")
+
     if result.snapshot_failures:
         print()
         print(f"  Snapshot failures: {len(result.snapshot_failures)} ticker(s) could not "

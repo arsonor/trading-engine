@@ -40,6 +40,14 @@ class Candidate:
     rvol_pct: float | None = None
     rvol_mode: str | None = None
     rvol_is_approximate: bool = False
+    # --- Provenance: what the scanner actually saw at decision time (Phase 4C) ---
+    # 4A measured that 49.4% of pre-market bars are revised UPWARD after publication.
+    # Without these, V3 backtesting cannot tell "the scanner was wrong" from "the data was
+    # revised after the scanner saw it", and would calibrate the confidence score against
+    # numbers that did not exist when the decision was made.
+    bars_settled_through: datetime | None = None
+    provisional_bars_excluded: int | None = None
+    profile_sessions_sampled: int | None = None
     rvol_detail: str = ""
 
     # --- Stage 3 ---
@@ -71,6 +79,11 @@ class Candidate:
             "rvol_pct": self.rvol_pct,
             "rvol_mode": self.rvol_mode,
             "rvol_is_approximate": self.rvol_is_approximate,
+            "bars_settled_through": (
+                self.bars_settled_through.isoformat() if self.bars_settled_through else None
+            ),
+            "provisional_bars_excluded": self.provisional_bars_excluded,
+            "profile_sessions_sampled": self.profile_sessions_sampled,
             "entry_reference_price": self.price_premarket_current,
             "nearest_resistance": self.nearest_resistance,
             "resistance_source": self.resistance_source,

@@ -234,6 +234,11 @@ class Settings(BaseSettings):
     live_snapshot_concurrency: int = Field(default=8, ge=1, le=64)
     live_snapshot_max_per_minute: int = Field(default=700, ge=1)
 
+    # --- Data-integrity guards (Phase 4C) -----------------------------------------
+    # Accumulated pre-market volume above this multiple of volume_avg_20d is more likely a
+    # data fault than a real event. Flagged, not silently dropped — a genuine 30x morning
+    # is exactly what the scanner exists to find, so the operator decides.
+    scan_volume_sanity_multiple: float = Field(default=50.0, gt=0)
 
     # --- Pre-market volume profiles (Phase 4B) ------------------------------------
     # Target sessions per profile. Below `profile_sessions_min` a profile is FLAGGED as

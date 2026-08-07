@@ -217,6 +217,13 @@ def stage_2_momentum(
         candidate.rvol_mode = result.mode
         candidate.rvol_is_approximate = result.is_approximate
         candidate.rvol_detail = result.detail
+        # Provenance travels with the candidate to the alert. `rvol_mode` above already
+        # records whether the normalized path degraded; these say what data it saw.
+        candidate.bars_settled_through = snapshot.settled_through
+        candidate.provisional_bars_excluded = snapshot.provisional_bars_excluded
+        candidate.profile_sessions_sampled = (
+            vol_profile.sessions_sampled if vol_profile else None
+        )
 
         # Strictly greater, per the spec.
         if candidate.rvol_pct <= profile.rvol_min:
