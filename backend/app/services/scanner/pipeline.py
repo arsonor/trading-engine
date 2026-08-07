@@ -49,7 +49,7 @@ from app.services.scanner.clock import (
 from app.services.scanner.integrity import (
     IntegrityFinding,
     VolumeMonotonicityGuard,
-    check_split_distortion,
+    check_price_regime_break,
     check_volume_plausibility,
 )
 from app.services.scanner.profile_store import load_profiles
@@ -122,6 +122,22 @@ class ScanResult:
     not_trading: list[str] = field(default_factory=list)
     # Data-integrity guard hits, recorded rather than buried in logs.
     integrity_warnings: list[str] = field(default_factory=list)
+
+    @property
+    def data_quality_rejections(self) -> list[Rejection]:
+        """Rejections caused by unusable reference data, not by the market.
+
+        Kept distinct because they mean something different to the operator: an ordinary
+        gap rejection says the stock did not qualify, while these say the scanner could
+        not trust its own inputs for that ticker.
+        """
+        from app.services.scanner.risk import DATA_QUALITY_REASONS
+
+        return [r for r in self.rejections if r.reason in DATA_QUALITY_REASONS]
+
+    @property
+    def data_quality_suppressed(self) -> int:
+        return len(self.data_quality_rejections)
 
     @property
     def succeeded(self) -> bool:
@@ -333,7 +349,7 @@ class Scanner:
 
             for finding in (
                 check_volume_plausibility(candidate, kept),
-                check_split_distortion(candidate),
+                check_price_regime_break(candidate),
             ):
                 if finding is not None:
                     findings.append(finding)
@@ -398,6 +414,9 @@ class Scanner:
                 "snapshot_failures": result.snapshot_failures,
                 "not_trading_count": len(result.not_trading),
                 "integrity_warnings": result.integrity_warnings,
+                # Suppressed candidates are counted separately: "3 suppressed for
+                # implausible reference data" is information, a silent drop is not.
+                "data_quality_suppressed": result.data_quality_suppressed,
             }
             await session.commit()
 

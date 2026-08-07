@@ -139,6 +139,18 @@ def _print_result(result: ScanResult, verbose: bool) -> None:
             for i, line in enumerate(_wrap(warning)):
                 print(f"  {line}" if i == 0 else f"    {line}")
 
+    if result.data_quality_rejections:
+        print()
+        print(f"DATA QUALITY — {result.data_quality_suppressed} candidate(s) suppressed")
+        print("-" * 78)
+        print("  These cleared every stage but their reference data could not be trusted,")
+        print("  so they were vetoed rather than shown. Upside sorts the candidate list, so")
+        print("  an implausible one would otherwise appear FIRST.")
+        for rejection in result.data_quality_rejections:
+            print(f"  {rejection.ticker:<8} {rejection.reason}")
+            for line in _wrap(rejection.detail, width=68):
+                print(f"      {line}")
+
     if result.snapshot_failures:
         print()
         print(f"  Snapshot failures: {len(result.snapshot_failures)} ticker(s) could not "

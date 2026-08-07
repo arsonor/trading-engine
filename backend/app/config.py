@@ -234,6 +234,32 @@ class Settings(BaseSettings):
     live_snapshot_concurrency: int = Field(default=8, ge=1, le=64)
     live_snapshot_max_per_minute: int = Field(default=700, ge=1)
 
+    # --- Data-quality suppression (post-4C hotfix) --------------------------------
+    # A candidate whose computed upside exceeds this is REJECTED as a data-quality risk
+    # filter, not surfaced. It does not change Stage 1/2/3 arithmetic — docs/CLAUDE.md §4.3
+    # provides for exactly this kind of veto.
+    #
+    # Measured basis: the scanner is a feasibility screen for a ~5% intraday move, and
+    # `scan_upside_min` is 5.5%. An upside of 540% (FFAI, 7 Aug 2026) does not mean a
+    # better opportunity — it means the nearest resistance sits in a price regime the stock
+    # has left. FFAI fell 32.06 -> 4.38 in twenty sessions; its 50-day average is 7x the
+    # price because that is where it used to trade, not because anything attracts it there.
+    #
+    # 100% is deliberately generous: a genuine post-crash retrace toward a 20-day high can
+    # legitimately offer 50-80%, and the point is to remove the meaningless tail, not to
+    # second-guess the strategy. These candidates sort to the TOP of a list ranked by
+    # upside, so the tail is what the end user sees first.
+    scan_upside_max: float = Field(
+        default=100.0, gt=0,
+        description="Reject candidates whose upside% exceeds this — implausible reference.",
+    )
+    # Ratio of 20-day high to prior close above which a ticker's resistance levels are
+    # treated as belonging to an abandoned price regime.
+    scan_price_regime_break_ratio: float = Field(
+        default=3.0, gt=1,
+        description="Reject when high_20d / price_close_yesterday exceeds this.",
+    )
+
     # --- Data-integrity guards (Phase 4C) -----------------------------------------
     # Accumulated pre-market volume above this multiple of volume_avg_20d is more likely a
     # data fault than a real event. Flagged, not silently dropped — a genuine 30x morning

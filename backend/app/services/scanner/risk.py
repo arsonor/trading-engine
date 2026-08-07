@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from app.config import get_settings
 from app.services.scanner.candidate import STAGE_RISK, Candidate, Rejection, StageOutcome
 from app.services.scanner.profiles import ThresholdProfile
 
@@ -22,6 +23,13 @@ logger = logging.getLogger(__name__)
 TAPE_NEUTRAL = "neutral"
 TAPE_RISK_ON = "risk_on"
 TAPE_RISK_OFF = "risk_off"
+
+# Data-quality rejection reasons. Named and distinct from ordinary stage rejections so
+# "3 candidates suppressed for implausible reference data" is reportable information
+# rather than a silent drop.
+REASON_IMPLAUSIBLE_UPSIDE = "implausible upside"
+REASON_PRICE_REGIME_BREAK = "price regime break"
+DATA_QUALITY_REASONS = frozenset({REASON_IMPLAUSIBLE_UPSIDE, REASON_PRICE_REGIME_BREAK})
 
 
 @dataclass(frozen=True)
@@ -208,6 +216,64 @@ def apply_risk_filters(
             )
             continue
 
+        quality = _reject_implausible_reference(candidate)
+        if quality is not None:
+            outcome.rejections.append(quality)
+            continue
+
         outcome.survivors.append(candidate)
 
     return outcome
+
+
+def _reject_implausible_reference(candidate: Candidate) -> Rejection | None:
+    """Veto a candidate whose resistance levels describe a price regime it has left.
+
+    **Why this is a rejection rather than a flag.** Phase 4C recorded these as integrity
+    findings and let the candidate through. That is the wrong shape for this particular
+    problem: `upside_pct` is the sort key for the candidate list, so a ticker with a
+    fabricated-looking 540% upside does not appear somewhere in the middle where a warning
+    might be read — it appears **first**. The end user's opening impression of the product
+    would be its least defensible row.
+
+    **Why it is a risk filter and not stage arithmetic.** `docs/CLAUDE.md` §4.3 provides
+    for risk filters that block an alert regardless of the stage outcome. Stage 3 still
+    computes upside exactly as before; this only decides whether the result is fit to show.
+    Nothing here touches how a candidate is scored or ranked.
+
+    **Why it stays even though the data turned out to be correct.** The 4C hypothesis was
+    that FMP served unadjusted history; measurement disproved that (see
+    `app/services/scanner/integrity.py`). These are real collapses. But a real collapse
+    produces an upside figure with no thesis behind it just as reliably as bad data would,
+    and the next cause — genuinely stale data, a bad split feed, a corporate action nobody
+    anticipated — will produce the same shape. The filter catches the shape.
+    """
+    settings = get_settings()
+
+    upside = candidate.upside_pct
+    if upside is not None and upside > settings.scan_upside_max:
+        return Rejection(
+            candidate.ticker,
+            STAGE_RISK,
+            REASON_IMPLAUSIBLE_UPSIDE,
+            f"upside {upside:.1f}% exceeds the {settings.scan_upside_max:g}% ceiling. "
+            f"Nearest resistance {candidate.nearest_resistance} "
+            f"({candidate.resistance_source}) is far above the current price, so this is a "
+            f"number without a thesis rather than a better opportunity.",
+        )
+
+    close = candidate.price_close_yesterday
+    high = candidate.high_20d
+    if close and high and close > 0:
+        ratio = high / close
+        if ratio > settings.scan_price_regime_break_ratio:
+            return Rejection(
+                candidate.ticker,
+                STAGE_RISK,
+                REASON_PRICE_REGIME_BREAK,
+                f"20-day high {high:,.2f} is {ratio:.1f}x the prior close {close:,.2f} "
+                f"(ceiling {settings.scan_price_regime_break_ratio:g}x). The stock has left "
+                f"the price regime its resistance levels describe.",
+            )
+
+    return None

@@ -420,24 +420,42 @@ paginates by week; no daily call cap, 750/min, bandwidth is the real limit.
 
 ---
 
-### Phase 4B (V2) — Universe expansion + nightly refresh at scale **← NEXT**
-**Depends on:** 4A's measured numbers. No live pre-market session needed.
+### Phase 4B (V2) — Universe expansion + nightly refresh at scale — ✅ DONE (7 August 2026)
+**Depends on:** 4A's measured numbers.
 
-- [ ] Two-step universe build: `company-screener` pre-filter (over-inclusive — it cannot
-      see float, so anything it wrongly excludes is never seen) → `shares-float-all` →
-      exact `float < 75M` applied locally in SQL
-- [ ] **Universe size is discovered nightly, never hardcoded.** 554 is one day's output of a
-      filter that moves with price, volume, float, listings — and immediately with any
-      threshold edit. Record the count and warn on a material move or a configured ceiling;
-      bandwidth becomes a real constraint past ~3,500 tickers.
-- [ ] Nightly `reference_data` refresh at real scale, budget- and bandwidth-aware,
+- [x] Two-step universe build: `company-screener` pre-filter → `shares-float-all` → exact
+      `float < 75M` applied locally in SQL
+- [x] **Universe size discovered nightly, never hardcoded**, with change detection
+- [x] Nightly `reference_data` refresh at real scale, budget- and bandwidth-aware,
       idempotent, resumable
-- [ ] **Populate `premarket_volume_profile`** (5-min buckets × ~20 sessions), paginated by
-      week, with `sessions_sampled` recorded and thin-history tickers flagged not averaged
-- [ ] **Shared, config-driven settled-bar helper** used by both the profile builder and
-      (in 4C) the live path
-- [ ] Raise `FMP_DAILY_BUDGET`; add bandwidth tracking; update `docs/CLAUDE.md` §6
-- [ ] Round-trip migration tests on populated data for any schema change
+- [x] **`premarket_volume_profile` populated** — 5-min buckets × 20 sessions, paginated by
+      week, `sessions_sampled` recorded
+- [x] **Shared, config-driven settled-bar helper** (`app/services/bars.py`), used by the
+      profile builder and later by 4C's live path
+- [x] `FMP_DAILY_BUDGET` raised to 20,000 (runaway protection, not a vendor limit — Premium
+      has no daily cap); bandwidth tracking added; `docs/CLAUDE.md` §6 updated
+- [x] Round-trip migration test on populated data; RLS holds on the new table
+
+**Measured:** 3,948 maintained universe → **694 Stage-1 eligible**. 695 profiles built, 691
+with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 calls / 453 MB —
+**0.53 GB per 30 days, 1.1% of the allowance.** Same-day reference refresh: 0 calls, 75 s.
+
+**Four things found by measuring rather than assuming:**
+1. **The screener's `volume` is session-so-far, not a daily average** — 1,880 rows at 04:22
+   pre-market versus 159 at 09:33. Filtering the universe on it would have made membership
+   depend on *when the cron happened to fire*: a non-deterministic universe with no code path
+   explaining it. Liquidity is now filtered locally against `volume_avg_20d`, where the spec
+   always meant it to live.
+2. **Unbounded EOD history costs 19.2 GB/month.** The deepest metric needed is SMA-200;
+   bounding the request to 400 days cuts it to 4.2 GB.
+3. **The float cap must not be baked into the universe build.** `float < 75M` is a
+   per-profile, user-editable threshold — hardcoding it meant a dashboard edit would do
+   nothing until someone rebuilt the universe, and it silently broke the demo profile. The
+   universe uses a wide configured cap; Stage 1 applies each profile's own.
+4. **A real concurrency bug**, hit during the build: two profile runs raced on
+   delete-then-insert and died on the unique constraint, leaving a profile half-written. On
+   Render a slow nightly job meeting the next one reproduces this. Fixed with
+   `ON CONFLICT DO UPDATE`.
 
 ---
 
@@ -469,23 +487,55 @@ paginates by week; no daily call cap, 750/min, bandwidth is the real limit.
 30 → **30 candidates**. 48 tickers not trading yet; 14 integrity findings across 7 tickers.
 
 **Still open — carried into observation and Phase 5:**
+
+> **Order matters.** The split-adjustment hotfix is **blocking** — do not remove `--dry-run`
+> until it lands. Sequence: hotfix → re-run nightly refresh → verify the 7 known-bad tickers
+> → observe several sessions → promote. Prompts for all three items are in `docs/PROMPT.md`.
+
+- [x] **✅ RESOLVED (8 August 2026) — implausible reference data is now suppressed.**
+      **The premise was wrong, and measuring it was the whole value of the hotfix.**
+      `historical-price-eod/full` is **already split-adjusted**. FFAI's June bars return
+      42.42 with volume 97,942, while the raw tape (`historical-price-eod/non-split-adjusted`)
+      shows 0.2828 with volume 14,691,299 — price and volume ratios both exactly **150.0**,
+      which only holds if `full` is the adjusted series. **Five of the seven flagged tickers
+      had no split at all.**
+
+      These are **real collapses**: FFAI fell 32.06 → 4.38 in twenty sessions, WETO
+      67.07 → 5.77, CAPR 22.50 → 4.18. The reference data was correct all along and the
+      540% upside is arithmetically right — it is *strategically* meaningless, because a
+      50-day average seven times the price is where the stock used to trade, not something
+      pulling it back. So there was nothing to fix in the data, and a filter was the only
+      available answer.
+
+      Delivered: `scan_upside_max` (100%) and `scan_price_regime_break_ratio` (3×) as
+      **risk filters** (`docs/CLAUDE.md` §4.3), rejecting with named reasons
+      (`implausible upside`, `price regime break`) counted separately in `scan_runs` and
+      reported in the scan output. Stage arithmetic untouched. The 4C guard was renamed
+      `split_distortion` → `price_regime_break`, since it identified the right tickers for
+      the wrong reason.
+
+      **Measured on a live pass:** 30 → **29 candidates**, FFAI suppressed. The top row is
+      now BCAR at 95.6% rather than FFAI at 540%. Note 14 integrity findings across 7
+      tickers but only **1** suppression — the other six never reached Stage 3, so they
+      were already being rejected on gap or RVOL.
+- [ ] **Consider tightening `scan_upside_max`.** 100% was chosen deliberately generous, but
+      the top surviving row is now BCAR at 95.6% — just under the ceiling. Whether a ~2×
+      upside is a real target or the same problem one notch down is a strategy question for
+      live observation, not something to guess at now.
 - [ ] **Promote the cron out of `--dry-run`.** It runs the full pipeline and writes
-      `scan_runs` but persists and broadcasts nothing. Remove the flag once several
-      sessions show a sane candidate count. 30/morning is promising, not yet proven
-- [ ] **First weeks of live observation**: alerts per morning, threshold calibration
-- [ ] **Tier the early cadence.** Bandwidth measured at ~47% of the 50 GB allowance, not
-      the ~15% 4A projected (671 tickers at ~15 KB, versus 554 at ~9.6 KB assumed).
-      15-minute passes until 07:00 bring it to ~40%, and those passes are the least
-      valuable — 48 tickers had no settled bars early on
-- [ ] **Make the volume-profile build incremental across days.** It is incremental within
-      a day (5 calls, 9 s) but a fresh night still rebuilds all 20 sessions per ticker:
-      ~2,776 calls, ~140 MB. Roughly 4× more than needed
-- [ ] **Split-distorted reference data.** The guard flags it; nothing fixes it. FFAI's
-      20-day high is 6.9× its prior close, so its resistance levels and the 540% upside
-      shown are fiction. Needs adjusted history or a rejection rule — a decision about
-      alert quality, not a bug fix
-- [ ] News/catalyst tagging → **Phase 5**, deliberately: adding a second new data source
-      in the same phase makes a bad alert harder to diagnose
+      `scan_runs` but persists and broadcasts nothing. Remove the flag once the hotfix has
+      landed and several sessions show a sane candidate count. 30/morning is promising, not
+      yet proven.
+- [ ] **First weeks of live observation**: alerts per morning, threshold calibration.
+- [ ] **Tier the early cadence.** Bandwidth measured at ~47% of the 50 GB allowance, not the
+      ~15% 4A projected (671 tickers at ~15 KB, versus 554 at ~9.6 KB assumed — both inputs
+      wrong in the same direction). 15-minute passes until 07:00 bring it to ~40%, and those
+      passes are the least valuable: 48 tickers had no settled bars that early.
+- [ ] **Make the volume-profile build incremental across days.** It is incremental *within* a
+      day (5 calls, 9 s) but a fresh night still rebuilds all 20 sessions per ticker:
+      ~2,776 calls, ~140 MB. Roughly 4× more than needed.
+- [ ] News/catalyst tagging → **Phase 5**, deliberately: adding a second new data source in
+      the same phase makes a bad alert harder to diagnose.
 
 ---
 
@@ -493,31 +543,36 @@ paginates by week; no daily call cap, 750/min, bandwidth is the real limit.
 Sector relative strength, bid-ask spread, short interest (slow signal), halt-risk flag,
 gap-and-go history.
 
-### Phase 6 (V3 — requires FMP Premium) — Accurate RVOL, Backtesting & Calibration
-`extended=true` pre-market bars → measure real pre-market accumulated volume; build the
-per-ticker pre-market volume profiles; switch RVOL to `normalized`; historical replay
-harness; outcome labelling (+5% within first hour?); per-signal hit rates; fitted
-confidence weights; threshold sensitivity sweep; results published in dashboard.
+### Phase 6 (V3) — Backtesting & Calibration
+No new subscription — same Premium key, deeper work. Historical replay harness over stored
+`scan_runs` (**not** re-fetched history, which has since settled upward — that is what the
+alert-provenance fields exist for); outcome labelling (did it reach +5% within the first
+hour?); per-signal hit rates; fitted confidence weights replacing the provisional ones;
+threshold sensitivity sweep to justify or revise 3% / 15% / 10% / 5.5%; results published in
+the dashboard.
 
-### Phase 7 — Hardening (before reliance)
-Auth on dashboard; push/email delivery at 09:25 ET; FMP usage monitoring; scan-failure
-alerting; MCP server decision.
+> Until this completes, the confidence score is a documented assumption, not a model, and
+> the UI says so.
+
+### Phase 7 — Hardening (before the end user relies on it)
+Auth on the dashboard; push/email delivery at 09:25 ET; FMP usage and bandwidth monitoring;
+scan-failure alerting (a silent failed scan is the worst bug this app can have).
 
 ---
 
 ## Sequencing rules
 
-1. Phases 1–3 complete **entirely on the free tier** — no subscription needed until Phase 4.
-2. Build the budget guard **before** any other FMP call path.
-3. Probe accessible symbols before designing around them.
-4. CI never touches live FMP. Fixtures always.
-5. One phase per Claude Code session; verify "done when" before advancing.
-5b. **Phase 3.5 runs before Phase 4**, on the free tier, while waiting on FMP support.
-   Schema cleanup is cheapest with zero users, and Phase 4 should begin on a clean
-   schema — the live snapshot provider is the code most likely to trip over a column
-   stored as `symbol` but exposed as `ticker`.
-6. FMP support questions #1–2: **answered** (see top of this file). Remaining
-   pre-Starter check: none — subscribe when V1 ships.
+1. CI never touches live FMP. Fixtures always.
+2. One phase per Claude Code session; verify "done when" before advancing.
+3. Probe before building. Every FMP and Tiingo capability claim taken on trust in this
+   project has needed correction roughly half the time — see
+   `docs/TIINGO_VS_FMP_EVALUATION.md` §11 for the five that failed.
+4. Every schema change: reversible migration, RLS on new tables (CI enforces it), and a
+   round-trip test on **populated** data. Empty-database round-tripping is how the
+   downgrade bug shipped.
+5. `pg_dump` before running any downgrade against a real database.
+6. Measurements are reported with their conditions. A same-day re-run is not an incremental
+   nightly build; a hypothesis that fits the data is not a tested hypothesis.
 
 ---
 
@@ -525,21 +580,22 @@ alerting; MCP server decision.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| ~~Free-tier symbol sample differs from docs~~ **CONFIRMED** | V1 universe is 43 symbols, and `batch-quote`/`stock-list`/`company-screener` are 402-restricted | Probe measured it (Phase 1); universe lives in the `universe` table, not in code |
-| 250/day exhausted mid-pipeline | Partial refresh | Budget guard + resumable jobs; 2-calls/ticker design |
-| Starter RVOL approximation too weak in practice | Alert quality suffers at V2 | Flag approximate RVOL on every alert; treat this observation as the V3 upgrade trigger |
-| Render cron UTC/DST drift | Wrong-hour scans | Explicit ET conversion + DST tests (Phase 2) |
-| Supabase RLS on public tables | Supabase flags any table in `public` without Row-Level Security as a critical issue — without it, anyone holding the project URL + anon key can read/write via the auto-generated Data API | This project never uses the Supabase Data API (the backend connects directly as `postgres`, which bypasses RLS). Fix: enable RLS with **no policies** on every public table — denies the Data API, leaves the app unaffected. Every future migration must do the same for new tables |
-| Silent scan failure | Looks like a quiet market | `scan_runs` + distinct UI states + failure alerting |
-| Demo profile confused for production | Misleading alerts | Profile name stamped on every scan run and alert |
+| **Split-distorted reference data** | Fabricated resistance → huge upside → sorts to the top of the candidate list. Live and unfixed | Blocking hotfix: adjusted history + rejection rule (`docs/PROMPT.md`) |
+| Bandwidth growth with universe size | 47% of 50 GB at 671 tickers; scales linearly | Tiered cadence (→ ~40%); bandwidth tracking in the guard; 400-day EOD bound |
+| Render cron UTC/DST drift | Wrong-hour scans twice a year | Explicit ET conversion, generous UTC schedule + ET gate, DST tests |
+| Silent scan failure | Looks like a quiet market | `scan_runs` failure taxonomy + distinct UI states + failure alerting (Phase 7) |
+| Demo profile confused for production | Misleading alerts | Profile name stamped on every scan run and alert; demo output badged in the UI |
+| Supabase RLS on public tables | Without RLS, anyone with the project URL + anon key can read/write via the auto-generated Data API | RLS enabled with **no policies** on every public table — denies the Data API, leaves the app unaffected (backend connects as `postgres`, which bypasses RLS). A CI test fails if any table lacks it |
+| Over-trusting the confidence score | User treats provisional weights as validated | Labelled provisional in API and UI until Phase 6 |
 
 ---
 
 ## Legacy notes
 
 - `backup.sql` moved out of the repo; `*.sql` gitignored; never restore into Supabase.
-- **Alpaca removal is Phase 3.5** — settled. Earlier drafts variously said "after Phase 2",
-  "once the scanner proves out" and "after V2 goes live"; those are superseded.
-- Migrations are the highest-risk surface in this project (two production issues in three
-  phases). Every schema change gets a round-trip test on POPULATED data, and
-  `pg_dump` before any downgrade is run against a real database.
+- Alpaca, the v1 rule engine and the MCP server were removed in Phase 3.5 (three separate
+  commits, 29 July 2026).
+- Starter was never purchased — V1 (free) → V2 (Premium). Any reference to a Starter
+  subscription in older sections is historical.
+- Migrations are the highest-risk surface in this project: two production incidents in three
+  phases (pgBouncer prepared statements, and a downgrade that failed on populated data).

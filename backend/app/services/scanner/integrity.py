@@ -16,11 +16,25 @@ Three guards, each from a specific measurement rather than a general worry:
    more often a data fault than a real event. Flagged, never dropped: a genuine 30x morning
    is precisely what the scanner exists to find, so the operator decides, not this module.
 
-3. **Split distortion.** Measured on FFAI, 7 August 2026: close 4.63, 20-day high 32.17,
-   SMA-200 94.32. A 20-day high seven times the close is the signature of unadjusted
-   history across a reverse split, and it produces a resistance level — and therefore an
-   "upside" — that does not exist. Left unflagged this is the worst kind of bad alert: it
-   looks like the best opportunity on the list.
+3. **Price-regime break.** A 20-day high several times the current close.
+
+   **This guard was introduced in Phase 4C under the name `split_distortion`, and that
+   diagnosis was wrong.** It was assumed that FMP returned unadjusted history and that a
+   reverse split was leaving pre-split levels in `reference_data`. Measured 8 August 2026
+   against the seven flagged tickers, that is false: `historical-price-eod/full` is
+   ALREADY split-adjusted. FFAI's June bars come back at 42.42 with volume 97,942 while
+   the raw tape (`historical-price-eod/non-split-adjusted`) shows 0.2828 with volume
+   14,691,299 — price and volume ratios both exactly 150.0, which only holds if `full` is
+   the adjusted series. Five of the seven had no split at all.
+
+   What the guard actually detects is a **real collapse**: FFAI fell 32.06 -> 4.38 in
+   twenty sessions, WETO 67.07 -> 5.77. The reference data is correct; the resistance
+   levels are simply from a price regime that no longer exists, so "540% upside to the
+   50-day average" is arithmetically right and strategically meaningless. There is no
+   magnet at the 50-day average — it is merely where the stock used to be.
+
+   The finding is kept because the tickers it identifies are still the wrong ones to
+   surface. Only the explanation changed.
 """
 
 from __future__ import annotations
@@ -35,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 GUARD_VOLUME_DECREASED = "volume_decreased"
 GUARD_VOLUME_IMPLAUSIBLE = "volume_implausible"
-GUARD_SPLIT_DISTORTION = "split_distortion"
+GUARD_PRICE_REGIME_BREAK = "price_regime_break"
 
 
 @dataclass
@@ -102,16 +116,18 @@ def check_volume_plausibility(
     )
 
 
-def check_split_distortion(
+def check_price_regime_break(
     candidate: Candidate, multiple: float = 3.0
 ) -> IntegrityFinding | None:
-    """Flag reference data whose highs are impossibly far above the last close.
+    """Flag a ticker whose 20-day high is far above its current price.
 
-    A 20-day high several times the prior close cannot happen in twenty sessions of
-    ordinary trading; it means the historical bars were not adjusted for a split, so every
-    resistance level derived from them — and the `upside_pct` the user is shown — is
-    fiction. Detected against `high_20d` rather than the SMAs because twenty sessions is a
-    short enough window that no legitimate move reaches this ratio.
+    Measured, not assumed: this is a REAL collapse, not bad data (see the module
+    docstring). The consequence is the same either way — every resistance level for the
+    ticker sits in a price regime the stock has left, so the computed `upside_pct` is a
+    number without a thesis behind it.
+
+    Detected against `high_20d` rather than the SMAs because twenty sessions is short
+    enough that only a genuine collapse reaches this ratio.
     """
     close = candidate.price_close_yesterday
     high = candidate.high_20d
@@ -124,9 +140,9 @@ def check_split_distortion(
 
     return IntegrityFinding(
         candidate.ticker,
-        GUARD_SPLIT_DISTORTION,
-        f"20-day high {high:,.2f} is {ratio:.1f}x the prior close {close:,.2f}. Twenty "
-        f"sessions cannot produce that spread; the EOD history is almost certainly "
-        f"unadjusted across a split, which makes every resistance level and the resulting "
-        f"upside% fictional. Refresh reference data for this ticker before trusting it.",
+        GUARD_PRICE_REGIME_BREAK,
+        f"20-day high {high:,.2f} is {ratio:.1f}x the prior close {close:,.2f} — the stock "
+        f"has collapsed out of the price regime its resistance levels describe. The data is "
+        f"correct; the resulting upside% is arithmetically right but has no thesis behind "
+        f"it, since there is no magnet at a level the stock merely used to trade at.",
     )

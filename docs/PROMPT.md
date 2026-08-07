@@ -603,6 +603,187 @@ the comments in `render.yaml`) and DST-safe.
     tiered early in the session
 ````
 
+## Hotfix (post-4C) — Split-adjusted reference data + upside sanity suppression
+
+**Status:** ✅ DONE (8 August 2026) — no longer blocks promoting the cron out of `--dry-run`.
+**Depends on:** Phase 4C (pushed, deployed green)
+
+> **⚠ Part 1's premise was disproved by measurement, and that is the main finding.**
+> `historical-price-eod/full` is **already split-adjusted** — FFAI's June bars come back at
+> 42.42 / 97,942 volume against a raw tape of 0.2828 / 14,691,299, both ratios exactly
+> 150.0. Five of the seven flagged tickers never split. The reference data was correct; the
+> tickers had genuinely collapsed (FFAI 32.06 → 4.38 in twenty sessions).
+>
+> So **Part 1 was a no-op** — there was no adjusted series to switch to, because we were
+> already on it — and **Part 2 became the entire fix**, and a more necessary one: when the
+> arithmetic and the data are both right, only a strategy filter can help.
+>
+> Delivered: `scan_upside_max` / `scan_price_regime_break_ratio` as risk filters with named,
+> separately-counted rejection reasons. Live pass: 30 → 29 candidates, FFAI suppressed, top
+> row now BCAR at 95.6% instead of FFAI at 540%. The 4C guard was renamed
+> `split_distortion` → `price_regime_break`.
+
+````
+# Hotfix — Split-adjusted reference data + upside sanity suppression
+
+## Context
+Read `docs/FMP_PREMIUM_FINDINGS.md` and `docs/CLAUDE.md` §4.3 first.
+
+Phase 4C's first live pass surfaced a data-quality problem the guards flagged but did not
+prevent. `historical-price-eod/full` returns **unadjusted** prices, so any ticker that has
+had a reverse split carries pre-split price levels in its reference data. FFAI's 20-day high
+is 32.17 against a prior close of 4.67 — 6.9×, which no normal price action produces — making
+its `sma_50` of 30.94 fiction and its computed upside **540%**.
+
+14 findings across 7 tickers on a single pass: ADVB, CAPR, CLRO, FFAI, LABT, VEEE, WETO
+(WETO at 20.6×). That is ~1% of the universe, but they land at the top of the list, not
+randomly through it.
+
+**This is structural for this strategy, not an edge case.** Sub-$5 low-float companies do
+reverse splits routinely to maintain listing compliance, and Stage 1 selects for exactly that
+universe. It will recur every month.
+
+## Part 1 — Use split-adjusted history for reference data
+
+Every Stage-3 input is affected: `high_yesterday`, `high_20d`, `sma_50`, `sma_200`, and
+`price_close_yesterday`.
+
+- Establish what FMP actually provides for adjusted vs unadjusted EOD series — inspect the
+  endpoint's fields and any adjusted variant, and **measure it against the 7 known-bad
+  tickers** rather than trusting the documentation. This project's record on unverified
+  vendor claims is poor; the known-bad set is the cheapest regression test available.
+- Switch reference-data computation to the adjusted series.
+- If FMP does not expose a usable adjusted series, **say so plainly and propose
+  alternatives** (detect ratio discontinuities in the daily series and adjust locally, or
+  consume a split calendar). Do NOT silently ship a partial fix.
+- Re-run the nightly refresh and verify: FFAI's `high_20d / price_close_yesterday` ratio
+  should fall to a plausible range, and its upside should stop being 540%.
+
+## Part 2 — Suppress implausible candidates, do not merely flag them
+
+The sanity guard currently records a finding and prints it alongside the candidate table —
+but the candidate still reaches the alert list. Change it to reject.
+
+- A candidate whose upside exceeds a configurable ceiling, or whose reference data trips the
+  ratio guard, is rejected as a **data-quality rejection**: a named rejection reason recorded
+  in `scan_runs` alongside the existing reasons, not silently dropped.
+- This is a **risk filter**, which `docs/CLAUDE.md` §4.3 explicitly provides for. It does
+  **not** change Stage 1/2/3 arithmetic — do not touch the stage math.
+- **Keep the guard even after Part 1.** Adjusted data fixes the known cause; the guard is
+  what catches the next unknown one. Part 1 without Part 2 means trusting the feed.
+- The threshold goes in config, with the measured basis documented.
+
+## Part 3 — Make it visible
+
+- Report data-quality rejections in the scan output and in `scan_runs`, **distinct from
+  ordinary stage rejections**. "3 candidates suppressed for implausible reference data" is
+  information; silently dropping them is not.
+- Consider surfacing a count on the dashboard's scan-status panel — same principle as
+  distinguishing a failed scan from a quiet market. **Propose rather than implement** if it
+  grows the phase.
+
+## Constraints
+- Do NOT change stage arithmetic, thresholds, or the alert contract's meaning.
+- Do NOT run against production Supabase.
+- Reversible migration + round-trip test on populated data if the schema changes.
+- CI stays offline; record fixtures for any new endpoint shape.
+
+## Definition of done
+1. Reference data for the 7 known-bad tickers is plausible after a refresh — report
+   before/after ratios for each
+2. FFAI no longer produces a 540% upside; state what it produces instead
+3. If FMP has no adjusted series, that is reported with evidence and a proposed alternative
+4. Implausible candidates are rejected with a named data-quality reason, visible in
+   `scan_runs`
+5. A test pins the guard using FFAI-shaped synthetic data
+6. A live pass reports how many candidates the guard now suppresses
+7. Tests pass offline; ruff clean
+````
+
+---
+
+## Scheduled follow-ups (post-4C, neither blocking)
+
+Both are small, both were disclosed in the 4C report, and both can run in either order
+after the hotfix. Neither blocks promoting the cron out of `--dry-run`.
+
+### Follow-up A — Tier the early-session cadence
+
+````
+# Follow-up — Tiered scan cadence for the early pre-market session
+
+## Context
+Phase 4C measured live bandwidth at **~47% of the 50 GB / 30-day allowance**, not the ~15%
+Phase 4A projected. 4A assumed 554 tickers at ~9.6 KB mean payload; reality is 671 at ~15 KB
+— both inputs were wrong in the same direction. Current figures: ~10.2 MB per pass, ~14.1 GB
+per month live, ~23.6 GB total with the nightly cycle.
+
+Still comfortable, but no longer a rounding error, and it grows with the universe.
+
+## The observation that makes this cheap
+4C measured **48 tickers with no settled bars at all** early in the session. Pre-07:00 passes
+are therefore both the most expensive per unit of information and the least informative —
+the market is genuinely quiet, not the feed incomplete (independently confirmed by the
+Tiingo probe, which measured ~10× more actively-trading tickers at 09:24 than at 04:16).
+
+## Scope
+- Make the scan cadence **time-dependent and config-driven**: e.g. every 15 minutes from
+  04:00–07:00 ET, every 5 minutes from 07:00–09:25. Projected to bring bandwidth to ~40%.
+- The cadence boundary and both intervals belong in config, not literals — the right split
+  is an empirical question that live observation will refine.
+- The **09:25 authoritative pass must be unaffected**. Verify explicitly.
+- Keep the generous UTC cron schedule and the ET gate exactly as they are; the gating logic
+  is what makes this DST-safe, and it is where the cadence rule belongs.
+- Report measured bandwidth before and after.
+
+## Constraints
+- No change to stage logic, thresholds, or the alert contract.
+- DST tests must still pass — a time-dependent cadence is one more thing that can drift.
+
+## Definition of done
+1. Cadence is config-driven and time-dependent; the 09:25 pass is provably unaffected
+2. Measured bandwidth reported before and after, projected against 50 GB / 30 days
+3. DST tests pass; tests pass offline; ruff clean
+````
+
+### Follow-up B — Make the profile build genuinely incremental
+
+````
+# Follow-up — Incremental pre-market volume profile rebuild
+
+## Context
+Phase 4B's stated intent was an incremental nightly profile update — add the newest session,
+drop the oldest. The reported "5 calls, 9 seconds" was a **same-day re-run**, which is a
+different thing: a fresh night still rebuilds all 20 sessions per ticker, at ~2,776 calls and
+~140 MB. Disclosed in the 4C report.
+
+Not harmful — roughly 4× more work than needed, on a nightly job with time to spare. Worth
+fixing before the universe grows.
+
+## Scope
+- Genuinely incremental across days: fetch only sessions not already in
+  `premarket_volume_profile`, recompute the rolling average, and drop sessions outside the
+  window.
+- `sessions_sampled` must stay accurate after an incremental update — it is what downstream
+  code uses to decide whether a profile is trustworthy enough for normalized RVOL.
+- Preserve idempotence and the `ON CONFLICT DO UPDATE` concurrency fix from 4B (two nightly
+  runs overlapping on Render is a realistic scenario, and it already bit once).
+- A `--rebuild` flag should still force a full reconstruction.
+- Report actual calls and bytes for: a fresh incremental night, a same-day re-run, and a
+  forced full rebuild — three distinct numbers, so the claim is unambiguous this time.
+
+## Constraints
+- No change to the profile's meaning or bucket definition — the settled-bar rule and the
+  5-minute buckets stay exactly as they are.
+- Round-trip migration test on populated data if the schema changes.
+
+## Definition of done
+1. A fresh night costs materially less than a full rebuild — all three figures reported
+2. `sessions_sampled` is correct after incremental updates, pinned by a test
+3. Concurrent runs still cannot corrupt a profile
+4. Tests pass offline; ruff clean
+````
+
 ---
 
 ## ~~Phase 4A (Starter)~~ — SUPERSEDED, kept for reference only

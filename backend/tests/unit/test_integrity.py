@@ -3,18 +3,18 @@
 Each guard exists because of a specific observed failure, not a general worry. The tests
 name the observation so nobody later "simplifies" a guard away as speculative.
 
-None of these reject a candidate. They observe and record — the scanner's job is to
-surface opportunities, and a guard that silently swallowed a real 30x morning would be a
-worse bug than the one it prevents.
+None of these reject a candidate; they observe and record. Suppression lives in
+`risk.py`, where a rejection is a named, reported outcome rather than a silent drop —
+see `tests/unit/test_risk_data_quality.py`.
 """
 
 from app.services.scanner.candidate import Candidate
 from app.services.scanner.integrity import (
-    GUARD_SPLIT_DISTORTION,
+    GUARD_PRICE_REGIME_BREAK,
     GUARD_VOLUME_DECREASED,
     GUARD_VOLUME_IMPLAUSIBLE,
     VolumeMonotonicityGuard,
-    check_split_distortion,
+    check_price_regime_break,
     check_volume_plausibility,
 )
 
@@ -91,35 +91,41 @@ def test_volume_sanity_needs_an_average_to_compare_against():
     assert check_volume_plausibility(candidate(avg_vol=None), 10_000_000) is None
 
 
-# ------------------------------------------------------------------ split distortion
+# ------------------------------------------------------------------ price regime break
+
+# This guard shipped in 4C as `split_distortion`, on the hypothesis that FMP served
+# unadjusted history. Measurement disproved that: `historical-price-eod/full` IS split
+# adjusted (FFAI's June bars come back at 42.42 / 97,942 volume against a raw tape of
+# 0.2828 / 14,691,299 — both ratios exactly 150.0), and five of the seven flagged tickers
+# had no split at all. What it detects is a real collapse. The tickers were right; the
+# explanation was wrong.
 
 
 def test_normal_reference_data_is_not_flagged():
-    assert check_split_distortion(candidate(close=100.0, high_20d=115.0)) is None
+    assert check_price_regime_break(candidate(close=100.0, high_20d=115.0)) is None
 
 
-def test_unadjusted_split_history_is_flagged():
-    """Measured on FFAI, 7 August 2026: prior close 4.63, 20-day high 32.17, SMA-200 94.32.
-
-    Twenty sessions cannot produce a 7x spread. The history is unadjusted across a reverse
-    split, which makes every resistance level — and the `upside_pct` shown to the user —
-    fiction. Unflagged, this reads as the single best opportunity on the list.
-    """
-    finding = check_split_distortion(candidate("FFAI", close=4.63, high_20d=32.17))
+def test_a_collapsed_price_is_flagged():
+    """FFAI, measured 7-8 August 2026: prior close 4.63 against a 20-day high of 32.17,
+    having traded at 32.06 twenty sessions earlier. The data is correct — the stock fell
+    86% — but its resistance levels describe a price regime it has left."""
+    finding = check_price_regime_break(candidate("FFAI", close=4.63, high_20d=32.17))
 
     assert finding is not None
-    assert finding.guard == GUARD_SPLIT_DISTORTION
+    assert finding.guard == GUARD_PRICE_REGIME_BREAK
     assert "6.9x" in finding.detail
-    assert "unadjusted" in finding.detail
+    # The wording must NOT claim bad data; that hypothesis was measured and rejected.
+    assert "unadjusted" not in finding.detail
+    assert "data is correct" in finding.detail
 
 
-def test_split_guard_is_quiet_without_the_inputs():
-    assert check_split_distortion(candidate(close=None, high_20d=30.0)) is None
-    assert check_split_distortion(candidate(close=10.0, high_20d=None)) is None
+def test_price_regime_guard_is_quiet_without_the_inputs():
+    assert check_price_regime_break(candidate(close=None, high_20d=30.0)) is None
+    assert check_price_regime_break(candidate(close=10.0, high_20d=None)) is None
 
 
-def test_split_guard_threshold_is_a_parameter():
+def test_price_regime_threshold_is_a_parameter():
     """A volatile small cap can legitimately double in twenty sessions; the default of 3x
     is well clear of that, and the boundary is adjustable rather than assumed."""
-    assert check_split_distortion(candidate(close=10.0, high_20d=25.0), multiple=3.0) is None
-    assert check_split_distortion(candidate(close=10.0, high_20d=25.0), multiple=2.0) is not None
+    assert check_price_regime_break(candidate(close=10.0, high_20d=25.0), multiple=3.0) is None
+    assert check_price_regime_break(candidate(close=10.0, high_20d=25.0), multiple=2.0) is not None
