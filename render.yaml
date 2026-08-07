@@ -124,7 +124,7 @@ services:
     runtime: python
     plan: starter
     region: frankfurt
-    schedule: "*/5 9-14 * * 1-5"
+    schedule: "*/5 8-14 * * 1-5"
     buildCommand: |
       cd backend && pip install -e .
     startCommand: |
