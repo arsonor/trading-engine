@@ -312,6 +312,11 @@ export interface components {
              */
             status: "completed" | "failed" | "skipped" | "running";
             profile?: string | null;
+            /**
+             * @description What the run was permitted to write. `observation` records the run but persists no alerts, so a healthy observation run legitimately produces zero alerts - do not read that as a quiet market. Null for runs recorded before this field existed.
+             * @enum {string|null}
+             */
+            mode?: "live" | "observation" | "dry_run" | null;
             /** @default false */
             is_demo: boolean;
             /** Format: date-time */

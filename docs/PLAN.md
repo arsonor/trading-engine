@@ -522,10 +522,27 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       the top surviving row is now BCAR at 95.6% — just under the ceiling. Whether a ~2×
       upside is a real target or the same problem one notch down is a strategy question for
       live observation, not something to guess at now.
-- [ ] **Promote the cron out of `--dry-run`.** It runs the full pipeline and writes
-      `scan_runs` but persists and broadcasts nothing. Remove the flag once the hotfix has
-      landed and several sessions show a sane candidate count. 30/morning is promising, not
-      yet proven.
+- [x] **✅ FIXED (8 August 2026) — the observation window was recording nothing.**
+      Phase 4C specified "full pipeline, `scan_runs` recorded, no alerts persisted" and
+      implemented it by reusing `--dry-run`, which has meant *touch nothing* since Phase 2.
+      The cron ran a full live scan every five minutes and discarded the result: **zero
+      `scan_runs` rows for the entire observation window**, and no basis on which to judge
+      the thresholds. The `render.yaml` comment described behaviour the code did not have.
+
+      The capability already existed as `--no-persist` — the cron simply used the wrong
+      flag. Renamed to **`--no-alerts`** (the old name is a deprecated alias, since
+      "persist *what*?" is the ambiguity that caused this), and the three modes are now
+      explicit and recorded on the `scan_runs` row: `live` / `observation` / `dry_run`.
+      `--dry-run` keeps its original meaning and wins when both are given.
+
+      The mode is surfaced in the CLI header, on the API's `ScanRun`, in the OpenAPI
+      contract, and as a "no alerts" badge on the Scans page — because during observation a
+      perfectly healthy run produces zero alerts by design, which is otherwise
+      indistinguishable from a quiet market.
+- [ ] **Promote the cron to live.** Delete `--no-alerts` from `render.yaml` once several
+      sessions of `scan_runs` show a sane candidate count and plausible content.
+      30/morning is promising, not yet proven — and until this hotfix deploys there is
+      still no observation data at all.
 - [ ] **First weeks of live observation**: alerts per morning, threshold calibration.
 - [ ] **Tier the early cadence.** Bandwidth measured at ~47% of the 50 GB allowance, not the
       ~15% 4A projected (671 tickers at ~15 KB, versus 554 at ~9.6 KB assumed — both inputs

@@ -603,6 +603,93 @@ the comments in `render.yaml`) and DST-safe.
     tiered early in the session
 ````
 
+## Hotfix (post-4C) — Separate `--no-alerts` from `--dry-run`
+
+**Status:** ✅ DONE (8 August 2026)
+**Depends on:** Phase 4C
+
+> **The capability already existed**, as `--no-persist` — "run and record the scan, but do
+> not persist or broadcast alerts". The cron used the wrong flag. Verified empirically
+> before changing anything: `--dry-run` left `scan_runs` at 36 rows, `--no-persist` took it
+> to 37.
+>
+> Renamed to `--no-alerts` anyway (with `--no-persist` kept as a deprecated alias), because
+> "persist *what*?" is precisely the ambiguity that caused the bug. Modes are now explicit —
+> `live` / `observation` / `dry_run` — recorded on the `scan_runs` row, stated in the CLI
+> header, exposed on the API and in the OpenAPI contract, and badged on the Scans page.
+
+````
+# Hotfix — Add `--no-alerts` so the cron can be observed
+
+## The bug
+The production cron runs `run_scan.py --profile production --dry-run` and writes **nothing**.
+Every five minutes it performs a full live scan, then discards the result:
+
+    Dry run          : no scan_runs row will be written
+
+The two-stage go-live in Phase 4C was specified as "full pipeline, `scan_runs` recorded, no
+alerts persisted or broadcast". `--dry-run` does not do that — it was introduced in Phase 2
+with the meaning "touch nothing in the database", and that is still its behaviour. The flag
+was reused for a different purpose without checking its semantics.
+
+Consequence: `scan_runs` has no rows since the Phase 4C deploy. There is nothing to observe,
+and no basis on which to decide whether the thresholds are right. The `render.yaml` comment
+block currently documents behaviour the code does not have.
+
+## The fix
+
+These are two genuinely different modes and need two flags.
+
+1. **`--dry-run` — leave exactly as it is.** "Touch nothing." It is the correct semantics
+   for local testing and is used elsewhere; do not redefine it.
+
+2. **Add `--no-alerts`** to `scripts/run_scan.py`:
+   - Runs the full pipeline against live data.
+   - **Writes the `scan_runs` row normally** — status, per-stage counts, rejection reasons,
+     timings, calls, bytes, integrity findings. This is the whole point.
+   - Skips **only** alert persistence and the WebSocket broadcast.
+   - The two flags may be combined; `--dry-run` wins (it is the stricter one).
+
+3. **Make the mode unmistakable in the output.** The existing dry-run line was clear enough
+   that the bug was caught from a single log line — preserve that quality. Each mode states
+   plainly what will and will not be written, e.g.:
+   - `Mode: observation (--no-alerts) - scan_runs WILL be written; alerts will NOT be`
+   - `Mode: dry run - NOTHING will be written`
+   - `Mode: live - scan_runs and alerts will be written and broadcast`
+
+4. **Record the mode on the `scan_runs` row itself**, alongside the existing profile name.
+   A run that produced no alerts because it was in observation mode must be distinguishable
+   from one that produced none because the market was quiet. Same principle as the
+   failure-vs-quiet-market distinction already in the design — apply it here.
+
+5. **Update `render.yaml`:**
+   - `startCommand` → `--profile production --no-alerts`
+   - Rewrite the `--dry-run IS DELIBERATE` comment block: it describes the intended
+     behaviour, not the actual behaviour. Say which flag now does what, and that promoting
+     to live means deleting `--no-alerts`.
+
+6. **Consider the dashboard**: if the Scans tab hides observation-mode runs, they are
+   invisible for the purpose they exist to serve. Check, and surface the mode if it is not
+   already shown. Propose rather than implement if it grows the phase.
+
+## Constraints
+- No change to stage arithmetic, thresholds, the alert contract, or scan behaviour — this
+  changes only what is *written*.
+- A migration for the mode column needs the usual: reversible, RLS, round-trip test on
+  populated data.
+- CI stays offline.
+
+## Definition of done
+1. `run_scan.py --profile production --no-alerts` writes a `scan_runs` row and no alerts
+2. `run_scan.py --dry-run` still writes nothing
+3. Both flags together behave as `--dry-run`, with a test
+4. The mode is stated in the CLI output and stored on the `scan_runs` row
+5. `render.yaml` uses `--no-alerts` and its comment block matches actual behaviour
+6. Tests pass offline; ruff clean; migration round-trips on populated data
+````
+
+---
+
 ## Hotfix (post-4C) — Split-adjusted reference data + upside sanity suppression
 
 **Status:** ✅ DONE (8 August 2026) — no longer blocks promoting the cron out of `--dry-run`.

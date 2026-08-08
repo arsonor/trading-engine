@@ -166,6 +166,14 @@ class ScanRunOut(BaseModel):
         ..., description="completed | failed | skipped | running. Never conflate these."
     )
     profile: Optional[str] = None
+    # What the run was permitted to write: live | observation | dry_run. NULL for runs
+    # recorded before the column existed.
+    #
+    # Surfaced because the Scans panel exists to answer "is the scanner working?", and
+    # during the observation stage a perfectly healthy run produces zero alerts by design.
+    # Without the mode, that is indistinguishable from a quiet market — the same conflation
+    # the failure taxonomy already works to avoid.
+    mode: Optional[str] = None
     is_demo: bool = False
     started_at: datetime
     finished_at: Optional[datetime] = None
@@ -179,6 +187,7 @@ class ScanRunOut(BaseModel):
             id=run.id,
             status=run.status,
             profile=run.profile,
+            mode=run.mode,
             is_demo=bool(run.profile and run.profile != PRODUCTION_PROFILE),
             started_at=run.started_at,
             finished_at=run.finished_at,

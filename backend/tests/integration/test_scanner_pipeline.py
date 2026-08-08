@@ -18,7 +18,12 @@ from sqlalchemy import select
 from app.models.scan_run import ScanRun, ScanRunStatus
 from app.services.scanner.candidate import STAGE_2, STAGE_3, STAGE_RISK
 from app.services.scanner.clock import FixedClock
-from app.services.scanner.pipeline import Scanner
+from app.services.scanner.pipeline import (
+    MODE_DRY_RUN,
+    MODE_LIVE,
+    MODE_OBSERVATION,
+    Scanner,
+)
 from app.services.scanner.profiles import demo_profile, production_profile
 from app.services.scanner.rvol import NormalizedRvol, SimpleRvol
 from app.services.scanner.snapshot import FixtureSnapshotProvider
@@ -256,13 +261,16 @@ async def test_a_run_row_exists_before_the_work_starts(
     )
 
     run_id = await scanner._open_run(
-        type("R", (), {"as_of_et": SCAN_AT, "is_final_pass": True})()
+        type("R", (), {"as_of_et": SCAN_AT, "is_final_pass": True, "mode": MODE_LIVE})()
     )
 
     async with test_session_factory() as session:
         run = await session.get(ScanRun, run_id)
     assert run.status == ScanRunStatus.RUNNING
     assert run.finished_at is None
+    # The mode is on the row from the moment it opens: a run that dies mid-flight still
+    # has to say what it was permitted to write.
+    assert run.mode == MODE_LIVE
 
 
 async def test_missing_snapshot_provider_fails_loudly(
@@ -459,3 +467,44 @@ async def test_risk_filter_vetoes_a_thin_name(
     assert result.counts.stage_3 == 2
     assert result.counts.risk_passed == 0
     assert result.rejections_at(STAGE_RISK)[0].reason == "insufficient dollar volume"
+
+
+# ===================================================== scan modes (post-4C hotfix)
+
+
+async def test_observation_mode_writes_the_run_but_no_alerts(scanner, golden_reference_data):
+    """THE regression test for the Phase 4C flag conflation.
+
+    `--dry-run` was reused to mean "record the scan but skip alerts". It does not — it has
+    meant "touch nothing" since Phase 2 — so the production cron discarded every scan for
+    the whole observation window and `scan_runs` gained no rows to decide thresholds from.
+    """
+    result = await scanner.run(no_alerts=True)
+
+    assert result.mode == MODE_OBSERVATION
+    assert result.scan_run_id is not None, "the run MUST be recorded in observation mode"
+
+
+async def test_dry_run_still_writes_nothing(scanner, golden_reference_data):
+    """`--dry-run` keeps its original meaning. It is used for local testing and must not
+    be redefined by this hotfix."""
+    result = await scanner.run(dry_run=True)
+
+    assert result.mode == MODE_DRY_RUN
+    assert result.scan_run_id is None
+
+
+async def test_dry_run_wins_when_both_flags_are_given(scanner, golden_reference_data):
+    """The stricter flag governs — resolving to observation would write a row the caller
+    explicitly asked not to write."""
+    result = await scanner.run(dry_run=True, no_alerts=True)
+
+    assert result.mode == MODE_DRY_RUN
+    assert result.scan_run_id is None
+
+
+async def test_a_default_run_is_live(scanner, golden_reference_data):
+    result = await scanner.run()
+
+    assert result.mode == MODE_LIVE
+    assert result.scan_run_id is not None

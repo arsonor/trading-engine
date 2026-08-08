@@ -28,7 +28,13 @@ from app.models.scan_run import ScanRunStatus
 from app.services.alerts import ScannerAlertService
 from app.services.scanner.candidate import STAGE_2, STAGE_3, STAGE_RISK
 from app.services.scanner.clock import FixedClock, SystemClock, describe, parse_scan_time
-from app.services.scanner.pipeline import Scanner, ScanResult
+from app.services.scanner.pipeline import (
+    MODE_LIVE,
+    Scanner,
+    ScanResult,
+    describe_mode,
+    resolve_mode,
+)
 from app.services.scanner.profiles import available_profiles
 from app.services.scanner.rvol import get_rvol_calculator
 from app.services.scanner.settings_store import ScannerSettingsStore
@@ -44,7 +50,7 @@ def _wrap(text: str, width: int = 74) -> list[str]:
     return textwrap.wrap(text, width=width)
 
 
-def _print_header(scanner: Scanner, provider, clock, args) -> None:
+def _print_header(scanner: Scanner, provider, clock, args, mode: str) -> None:
     profile = scanner.profile
     print()
     if profile.is_demo:
@@ -67,8 +73,7 @@ def _print_header(scanner: Scanner, provider, clock, args) -> None:
     print(f"  Risk filters     : {profile.risk_summary()}")
     print(f"  Snapshot source  : {provider.source} ({getattr(provider, 'name', 'n/a')})")
     print(f"  RVOL mode        : {get_settings().rvol_mode}")
-    if args.dry_run:
-        print("  Dry run          : no scan_runs row will be written")
+    print(f"  Mode             : {describe_mode(mode)}")
 
 
 def _print_result(result: ScanResult, verbose: bool) -> None:
@@ -234,17 +239,26 @@ async def main(args: argparse.Namespace) -> int:
         rvol_calculator=get_rvol_calculator(),
     )
 
-    _print_header(scanner, provider, clock, args)
+    # `--no-persist` is the deprecated spelling; honour it so existing invocations keep
+    # working rather than silently switching to live mode.
+    no_alerts = args.no_alerts or args.no_persist
+    mode = resolve_mode(args.dry_run, no_alerts)
+    if args.no_persist and not args.no_alerts:
+        print("  NOTE: --no-persist is deprecated; use --no-alerts (same behaviour).")
+
+    _print_header(scanner, provider, clock, args, mode)
 
     result = await scanner.run(
         tickers=[t.strip().upper() for t in args.tickers.split(",")] if args.tickers else None,
         dry_run=args.dry_run,
+        no_alerts=no_alerts,
         ignore_window=args.ignore_window,
     )
     _print_result(result, args.verbose)
 
-    # Persist + broadcast unless this is a dry run or --no-persist was passed.
-    if not args.dry_run and not args.no_persist and result.succeeded:
+    # Alerts are written only in live mode. Observation deliberately records the run and
+    # nothing else; dry run records nothing at all.
+    if mode == MODE_LIVE and result.succeeded:
         report = await ScannerAlertService().persist_scan_result(result)
         print()
         print("Alert delivery")
@@ -273,12 +287,19 @@ if __name__ == "__main__":
     parser.add_argument("--at", help='Scan moment in ET, e.g. "2026-07-28 08:45 ET"')
     parser.add_argument("--tickers", help="Restrict the scan to these tickers")
     parser.add_argument(
-        "--dry-run", action="store_true", help="Do not write a scan_runs row or persist alerts"
+        "--dry-run",
+        action="store_true",
+        help="Touch nothing: no scan_runs row, no alerts. Local testing.",
+    )
+    parser.add_argument(
+        "--no-alerts",
+        action="store_true",
+        help="Observation mode: record the scan_runs row, but persist and broadcast no alerts",
     )
     parser.add_argument(
         "--no-persist",
         action="store_true",
-        help="Run and record the scan, but do not persist or broadcast alerts",
+        help="Deprecated alias for --no-alerts (the name was ambiguous: persist WHAT?)",
     )
     parser.add_argument(
         "--ignore-window",

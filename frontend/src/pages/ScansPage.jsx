@@ -38,6 +38,17 @@ function ScanRunRow({ run }) {
               {run.is_demo && <span className="ml-1 font-semibold text-amber-700">DEMO</span>}
             </span>
           )}
+          {/* During the observation stage a completely healthy run produces zero alerts
+              BY DESIGN. Without this badge that is indistinguishable from a quiet market,
+              which is the same conflation the status pill exists to prevent. */}
+          {run.mode === 'observation' && (
+            <span
+              className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700 ring-1 ring-sky-300"
+              title="Observation mode: the scan ran and was recorded, but no alerts were persisted or broadcast."
+            >
+              no alerts
+            </span>
+          )}
         </div>
         <span className="font-mono text-[11px] text-slate-500">
           {new Date(run.started_at).toLocaleString()}

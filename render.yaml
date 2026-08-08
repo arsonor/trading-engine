@@ -104,21 +104,33 @@ services:
   # from `extended=true` pre-market bars.
   #
   # ---------------------------------------------------------------------------
-  # `--dry-run` IS DELIBERATE. Do not remove it without reading this.
+  # `--no-alerts` IS DELIBERATE. Do not remove it without reading this.
   # ---------------------------------------------------------------------------
-  # The scan runs in full and writes `scan_runs`, but persists and broadcasts NO alerts.
-  # This is stage 1 of a two-stage go-live, and it exists because nobody yet knows how many
-  # candidates a real morning produces. If the answer turns out to be 200, the thresholds
-  # need tuning BEFORE the end user ever opens a dashboard full of noise — and tuning from
-  # `scan_runs` history is far easier than tuning from a user who has stopped trusting the
-  # tool.
+  # The scan runs in full and WRITES the `scan_runs` row — status, per-stage counts,
+  # rejection reasons, timings, calls, bytes, integrity findings — but persists and
+  # broadcasts NO alerts. That is stage 1 of a two-stage go-live: nobody yet knows how many
+  # candidates a real morning produces. If it turns out to be 200, the thresholds need
+  # tuning BEFORE the end user opens a dashboard full of noise, and tuning from `scan_runs`
+  # history is far easier than tuning from a user who has stopped trusting the tool.
   #
-  # Promote to stage 2 by deleting `--dry-run` once several sessions of `scan_runs` show a
-  # sane candidate count and plausible content. Check with:
-  #   SELECT started_at, stage_counts_json->'counts' FROM scan_runs ORDER BY started_at DESC;
+  # THIS BLOCK USED TO SAY `--dry-run`, AND THAT WAS A BUG — it is why the correction is
+  # spelled out rather than quietly edited. `--dry-run` has meant "touch nothing" since
+  # Phase 2; reusing it here made the cron run a full live scan every five minutes and
+  # discard the result, so `scan_runs` gained no rows for the whole observation window and
+  # the comment described behaviour the code did not have. The two modes are now separate
+  # flags, and the mode is recorded on the row itself:
+  #
+  #   --no-alerts   observation — scan_runs written, alerts NOT persisted or broadcast
+  #   --dry-run     nothing written at all; local testing only
+  #   (neither)     live — scan_runs written, alerts persisted and broadcast
+  #
+  # Promote to stage 2 by deleting `--no-alerts` once several sessions look sane:
+  #   SELECT started_at, mode, status, stage_counts_json->'counts'
+  #   FROM scan_runs ORDER BY started_at DESC;
   #
   # Zero candidates is a legitimate outcome and is recorded as a SUCCESSFUL scan of a quiet
-  # market, not a failure. The dashboard shows it as such.
+  # market, not a failure — and `mode` now distinguishes "found nothing" from "was not
+  # allowed to write anything". The dashboard shows it as such.
   - type: cron
     name: trading-engine-premarket-scan
     runtime: python
@@ -128,7 +140,7 @@ services:
     buildCommand: |
       cd backend && pip install -e .
     startCommand: |
-      cd backend && python scripts/run_scan.py --profile production --dry-run
+      cd backend && python scripts/run_scan.py --profile production --no-alerts
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.12"
@@ -167,3 +179,66 @@ services:
         value: "50"
       - key: SCAN_PROFILE
         value: production
+
+  # ---------------------------------------------------------------------------
+  # Nightly reference-data refresh
+  # ---------------------------------------------------------------------------
+  # WHY THIS EXISTS: Phase 4B built the universe, reference data and volume profiles as
+  # CLI scripts, but nothing ever scheduled them. Without this service the pre-market scan
+  # runs every morning against data that never changes: `volume_avg_20d`, `sma_50`,
+  # `sma_200`, `high_20d` and `price_close_yesterday` all silently age, and
+  # `premarket_volume_profile` stops reflecting the last 20 sessions. The scan would keep
+  # succeeding and keep reporting candidates — computed from stale levels. That is the
+  # failure mode this project cares most about: wrong, not broken.
+  #
+  # ORDER IS A DEPENDENCY, NOT A PREFERENCE. `&&` is deliberate:
+  #   build_universe        -> screener + shares-float-all -> `universe`
+  #   refresh_reference_data-> EOD history per ticker      -> `reference_data`  (needs universe)
+  #   build_volume_profiles -> extended=true intraday       -> profiles          (needs Stage-1 set)
+  # If one step fails the chain stops, which is correct: better yesterday's complete data
+  # than today's half-built data.
+  #
+  # SCHEDULE: 23:00 UTC = 19:00 EDT / 18:00 EST, three-plus hours after the 16:00 ET close,
+  # so EOD data has settled. Runs Mon-Fri, which covers Tue-Sat mornings; Friday night's
+  # run is what Monday's pre-market uses, and that is correct — Friday's close IS Monday's
+  # `price_close_yesterday`.
+  #
+  # Unlike the scan cron this schedule needs no ET gating: it is a once-daily job with a
+  # multi-hour window on either side, so the DST hour-shift is harmless.
+  #
+  # DURATION: measured against Supabase at ~1.22 s per FMP call — reference refresh ~3,900
+  # calls (~80 min), profiles ~2,800 calls (~55 min). Budget ~2.5 h. It must finish well
+  # before the 08:00 UTC pre-market window; starting at 23:00 UTC leaves ~9 hours.
+  - type: cron
+    name: trading-engine-nightly-refresh
+    runtime: python
+    plan: starter
+    region: frankfurt
+    schedule: "0 23 * * 1-5"
+    buildCommand: |
+      cd backend && pip install -e .
+    startCommand: |
+      cd backend && python scripts/build_universe.py && python scripts/refresh_reference_data.py && python scripts/build_volume_profiles.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10.12"
+      - key: APP_ENV
+        value: production
+      # TRANSACTION pooler (6543), same as the scan cron. No migrations here, so no
+      # MIGRATION_DATABASE_URL.
+      - key: DATABASE_URL
+        sync: false
+      - key: FMP_API_KEY
+        sync: false
+      - key: FMP_BASE_URL
+        value: https://financialmodelingprep.com
+      # A full nightly cycle measured ~6,900 calls. The ceiling is runaway protection —
+      # Premium has no daily cap — so it sits well above the expected figure but low enough
+      # to stop a loop before it burns the 50 GB/30-day bandwidth allowance.
+      - key: FMP_DAILY_BUDGET
+        value: "20000"
+      # Both sides of the RVOL division must use the same settle window: profiles are built
+      # from settled bars here, and the live scan applies the identical rule. If these two
+      # values ever diverge, RVOL is biased by construction and nothing surfaces the fault.
+      - key: BAR_SETTLE_MINUTES
+        value: "7"

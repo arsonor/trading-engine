@@ -71,6 +71,45 @@ from app.services.scanner.stages import (
 
 logger = logging.getLogger(__name__)
 
+# What a run is allowed to write. Three states, because two of them were conflated once
+# already and the observation window produced nothing for it.
+#
+#   live        scan_runs written, alerts persisted and broadcast
+#   observation scan_runs written, NO alerts — the two-stage go-live's first stage
+#   dry_run     nothing written at all — local testing
+#
+# `--dry-run` has meant "touch nothing" since Phase 2. Phase 4C reused it for observation
+# without checking, so the cron ran a full live scan every five minutes and discarded the
+# result: `scan_runs` gained no rows and there was nothing to observe. The modes are named
+# and recorded on the row now so that a run which produced no alerts BECAUSE IT WAS NOT
+# ALLOWED TO is distinguishable from one that found nothing — the same distinction the
+# design already draws between a failed scan and a quiet market.
+MODE_LIVE = "live"
+MODE_OBSERVATION = "observation"
+MODE_DRY_RUN = "dry_run"
+
+
+def resolve_mode(dry_run: bool, no_alerts: bool) -> str:
+    """`--dry-run` wins: it is the stricter of the two."""
+    if dry_run:
+        return MODE_DRY_RUN
+    return MODE_OBSERVATION if no_alerts else MODE_LIVE
+
+
+def describe_mode(mode: str) -> str:
+    """One line stating exactly what will and will not be written.
+
+    The Phase 4C bug was caught from a single log line, which is the quality worth
+    preserving: each mode says what it does, not what it is called.
+    """
+    return {
+        MODE_LIVE: "live — scan_runs AND alerts will be written and broadcast",
+        MODE_OBSERVATION: (
+            "observation (--no-alerts) — scan_runs WILL be written; alerts will NOT be"
+        ),
+        MODE_DRY_RUN: "dry run (--dry-run) — NOTHING will be written",
+    }.get(mode, mode)
+
 
 @dataclass
 class StageCounts:
@@ -113,6 +152,8 @@ class ScanResult:
     duration_s: float = 0.0
     error: str | None = None
     dry_run: bool = False
+    # What this run was permitted to write. See MODE_* above.
+    mode: str = MODE_LIVE
     # Set when the funnel's shape indicates a misconfiguration rather than a quiet
     # market. Callers must show this INSTEAD of the quiet-market message.
     misconfiguration: str | None = None
@@ -204,6 +245,7 @@ class Scanner:
         *,
         tickers: list[str] | None = None,
         dry_run: bool = False,
+        no_alerts: bool = False,
         ignore_window: bool = False,
     ) -> ScanResult:
         """Execute one scan. Expected failures are recorded, not raised."""
@@ -214,6 +256,7 @@ class Scanner:
             as_of_et=as_of,
             is_final_pass=is_final_pass(as_of),
             dry_run=dry_run,
+            mode=resolve_mode(dry_run, no_alerts),
         )
 
         if self._profile.is_demo:
@@ -367,6 +410,9 @@ class Scanner:
                 started_at=datetime.utcnow(),
                 status=ScanRunStatus.RUNNING,
                 profile=self._profile.name,
+                # Written up front, not only on completion: a run that dies mid-flight
+                # leaves a `running` row, and that row still has to say what it was doing.
+                mode=result.mode,
                 stage_counts_json={
                     "as_of_et": result.as_of_et.isoformat(),
                     "is_final_pass": result.is_final_pass,
@@ -394,6 +440,7 @@ class Scanner:
             run.status = result.status
             run.error = result.error
             run.api_calls_used = result.api_calls_used
+            run.mode = result.mode
             run.stage_counts_json = {
                 "as_of_et": result.as_of_et.isoformat(),
                 "is_final_pass": result.is_final_pass,

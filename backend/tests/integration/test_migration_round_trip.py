@@ -39,6 +39,7 @@ WATCHLIST_DROP = "544a7fbf3445"  # watchlist dropped
 RLS = "dbdf5784db31"  # RLS enabled on all public tables
 PHASE_4B = "b008d4bf3a18"  # api_budget.bytes_used + universe_runs
 PHASE_4C = "ae74a2cbe20c"  # alerts decision-time provenance
+SCAN_MODE = "3d1177ad1103"  # scan_runs.mode
 
 # Revision-specific tests name the revision they exercise instead of using "head" or
 # a relative "-1". Both of those silently retarget the moment a new migration lands on
@@ -770,6 +771,56 @@ async def test_phase_4c_provenance_round_trips_on_populated_alerts(scratch_db):
         )}
         assert "bars_settled_through" not in cols
         assert await conn.fetchval("SELECT gap_pct FROM alerts WHERE ticker = 'ADBE'") == 7.0
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", "head", database_url=url)
+
+
+async def test_scan_mode_round_trips_on_populated_scan_runs(scratch_db):
+    """Adding `scan_runs.mode` to a table that already has rows, and dropping it again.
+
+    Nullable with no default, so neither direction needs a backfill. Historical rows keep
+    NULL rather than being defaulted to `live`: their mode was never recorded, and
+    asserting one would invent a fact about runs nobody observed.
+    """
+    url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
+    _run_alembic("upgrade", f"{SCAN_MODE}-1", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO scan_runs (started_at, finished_at, status, profile, "
+            "api_calls_used) VALUES (now(), now(), 'completed', 'production', 42)"
+        )
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", SCAN_MODE, database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        row = await conn.fetchrow(
+            "SELECT api_calls_used, mode FROM scan_runs WHERE profile = 'production'"
+        )
+        assert row["api_calls_used"] == 42, "the pre-existing run survives untouched"
+        assert row["mode"] is None, "history is not retro-labelled with a mode it never had"
+
+        # And the column accepts what the scanner writes.
+        await conn.execute("UPDATE scan_runs SET mode = 'observation'")
+        assert await conn.fetchval("SELECT mode FROM scan_runs LIMIT 1") == "observation"
+    finally:
+        await conn.close()
+
+    _run_alembic("downgrade", f"{SCAN_MODE}-1", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        cols = {c["column_name"] for c in await conn.fetch(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'scan_runs'"
+        )}
+        assert "mode" not in cols
+        assert await conn.fetchval("SELECT api_calls_used FROM scan_runs LIMIT 1") == 42
     finally:
         await conn.close()
 
