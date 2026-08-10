@@ -157,7 +157,7 @@ services:
         value: https://financialmodelingprep.com
       # Keep the cron's budget accounting identical to the API's.
       - key: FMP_DAILY_BUDGET
-        value: "20000"
+        value: "80000"
       # Time-of-day-normalized RVOL, against the profiles Phase 4B built. The scanner
       # degrades to simple RVOL per ticker (flagged on the alert) when a profile is
       # missing or thin, so a newly-listed name is not silently dropped.
@@ -236,7 +236,7 @@ services:
       # Premium has no daily cap — so it sits well above the expected figure but low enough
       # to stop a loop before it burns the 50 GB/30-day bandwidth allowance.
       - key: FMP_DAILY_BUDGET
-        value: "20000"
+        value: "80000"
       # Both sides of the RVOL division must use the same settle window: profiles are built
       # from settled bars here, and the live scan applies the identical rule. If these two
       # values ever diverge, RVOL is biased by construction and nothing surfaces the fault.
