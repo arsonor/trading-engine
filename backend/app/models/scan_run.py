@@ -20,6 +20,13 @@ class ScanRunStatus:
     FAILED = "failed"
     # Woke up outside the 04:00-09:25 ET window and did no work. Distinct from both
     # "completed with zero candidates" and "failed".
+    #
+    # These rows ARE written (~18 per session, since the cron is scheduled generously in
+    # UTC and gated on ET). They were not, for two phases, while four separate places —
+    # this docstring, the pipeline status table, render.yaml and the /status endpoint —
+    # documented that they were. A status constant that never appears is worse than no
+    # constant: it invites `where status = 'skipped'`, and an empty result then reads as
+    # "the cron never woke up". Writing the row is what makes that query answerable.
     SKIPPED = "skipped"
 
 

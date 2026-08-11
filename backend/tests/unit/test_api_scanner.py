@@ -5,7 +5,7 @@ quiet-market-vs-outage distinction into the UI, and a client that cannot tell th
 will eventually trust neither.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -237,7 +237,11 @@ async def test_a_run_stuck_in_running_is_treated_as_failed(client: AsyncClient, 
     assert body["is_healthy"] is False
 
 
-async def test_skipped_run_is_healthy_but_distinct(client: AsyncClient, db_session):
+async def test_only_skipped_runs_is_healthy_but_distinct_from_never_run(
+    client: AsyncClient, db_session
+):
+    """The cron is demonstrably alive but has never woken inside the window. Healthy —
+    and NOT `never_run`, which is a different problem with a different fix."""
     db_session.add(
         ScanRun(
             started_at=datetime(2026, 7, 28, 20, 0),
@@ -251,6 +255,80 @@ async def test_skipped_run_is_healthy_but_distinct(client: AsyncClient, db_sessi
     body = (await client.get("/api/v1/scanner/status")).json()
     assert body["state"] == "skipped"
     assert body["is_healthy"] is True
+    assert body["last_run"] is None
+    # The wake-up is still visible — that is where "did the cron fire?" is answered.
+    assert [r["status"] for r in body["recent_runs"]] == ["skipped"]
+
+
+async def test_the_mornings_scan_is_not_buried_by_the_afternoons_skipped_wake_ups(
+    client: AsyncClient, db_session
+):
+    """The cron wakes every 5 minutes until 14:55 UTC, so ~18 `skipped` rows follow the
+    09:25 pass every session. If the newest row drove the status, the dashboard would
+    read "outside scan window" — with no stage counts — from 09:30 ET until the next
+    morning, hiding the very result the panel exists to show."""
+    db_session.add(
+        ScanRun(
+            started_at=datetime(2026, 7, 28, 13, 25),
+            finished_at=datetime(2026, 7, 28, 13, 25, 30),
+            status=ScanRunStatus.COMPLETED,
+            profile="production",
+            stage_counts_json={"counts": {"universe": 694}},
+        )
+    )
+    # More skipped wake-ups than /status reads rows, so a Python-side filter over the
+    # ten most recent rows would report "no scan has ever run".
+    for minute in range(0, 90, 5):
+        db_session.add(
+            ScanRun(
+                started_at=datetime(2026, 7, 28, 13, 30) + timedelta(minutes=minute),
+                finished_at=datetime(2026, 7, 28, 13, 30, 1) + timedelta(minutes=minute),
+                status=ScanRunStatus.SKIPPED,
+                profile="production",
+            )
+        )
+    await db_session.commit()
+
+    body = (await client.get("/api/v1/scanner/status")).json()
+
+    assert body["state"] == "ok_no_candidates"
+    assert body["is_healthy"] is True
+    assert body["last_run"]["status"] == "completed"
+    assert body["last_run"]["stage_counts"]["counts"]["universe"] == 694
+    assert body["last_successful_run"]["status"] == "completed"
+    # The heartbeats are not hidden, just demoted.
+    assert body["recent_runs"][0]["status"] == "skipped"
+
+
+async def test_a_failure_is_not_masked_by_later_skipped_wake_ups(
+    client: AsyncClient, db_session
+):
+    """The inverse risk of demoting `skipped`: an outage must not scroll off the panel
+    because the cron kept waking up harmlessly afterwards."""
+    db_session.add(
+        ScanRun(
+            started_at=datetime(2026, 7, 28, 13, 25),
+            finished_at=datetime(2026, 7, 28, 13, 25, 5),
+            status=ScanRunStatus.FAILED,
+            profile="production",
+            error="FeatureRequiresIntraday: needs extended=true bars",
+        )
+    )
+    for minute in range(0, 90, 5):
+        db_session.add(
+            ScanRun(
+                started_at=datetime(2026, 7, 28, 13, 30) + timedelta(minutes=minute),
+                status=ScanRunStatus.SKIPPED,
+                profile="production",
+            )
+        )
+    await db_session.commit()
+
+    body = (await client.get("/api/v1/scanner/status")).json()
+
+    assert body["state"] == "failed"
+    assert body["is_healthy"] is False
+    assert "outage" in body["detail"].lower()
 
 
 async def test_scan_runs_list(client: AsyncClient, scanner_alert):

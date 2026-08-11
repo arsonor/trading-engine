@@ -262,6 +262,14 @@ class Scanner:
         if self._profile.is_demo:
             logger.warning("DEMO PROFILE ACTIVE — %s", self._profile.describe())
 
+        # The row opens BEFORE the window gate, not after it. A gate-skipped wake-up is an
+        # audit event: it is the only durable evidence that the cron fired at all. Without
+        # it, "the cron fired and correctly skipped" and "the cron never fired" are the
+        # same empty query result, and only Render's logs — which expire — can tell them
+        # apart. That is exactly the question the 09:25 investigation had to answer.
+        if not dry_run:
+            result.scan_run_id = await self._open_run(result)
+
         if not ignore_window and not is_within_scan_window(as_of):
             result.status = ScanRunStatus.SKIPPED
             result.error = (
@@ -271,9 +279,6 @@ class Scanner:
             result.duration_s = time_module.monotonic() - started
             await self._record(result)
             return result
-
-        if not dry_run:
-            result.scan_run_id = await self._open_run(result)
 
         try:
             await self._execute(result, tickers)
@@ -426,8 +431,8 @@ class Scanner:
     async def _record(self, result: ScanResult) -> None:
         """Close out the `scan_runs` row with counts, status and any error.
 
-        Dry runs and window-skipped runs have no row: the cron fires generously in UTC,
-        so recording every out-of-window wake-up would bury the real scans in noise.
+        Only a dry run has no row. A window-skipped wake-up does get one — see `run()`.
+        The counts on it are all zero, which is truthful: no work was attempted.
         """
         if result.dry_run or result.scan_run_id is None:
             return

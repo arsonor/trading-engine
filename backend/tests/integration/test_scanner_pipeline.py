@@ -310,9 +310,19 @@ async def test_a_scan_outside_the_window_is_skipped_not_run(
     assert result.status == ScanRunStatus.SKIPPED
     assert result.candidates == []
     assert "outside the 04:00-09:25 ET scan window" in result.error
-    # No row: an out-of-window wake-up is noise, not an audit event.
+
+    # The row IS written. It is the only durable evidence that the cron fired: without
+    # it, "fired and correctly skipped" and "never fired" are the same empty query.
     async with test_session_factory() as session:
-        assert (await session.execute(select(ScanRun))).scalars().all() == []
+        rows = (await session.execute(select(ScanRun))).scalars().all()
+
+    assert len(rows) == 1
+    assert rows[0].status == ScanRunStatus.SKIPPED
+    assert rows[0].finished_at is not None
+    assert "outside the 04:00-09:25 ET scan window" in rows[0].error
+    # Zero work attempted, and the counts say so rather than being absent.
+    assert rows[0].stage_counts_json["counts"]["universe"] == 0
+    assert rows[0].api_calls_used == 0
 
 
 async def test_the_authoritative_0925_pass_runs_when_the_scheduler_is_late(
@@ -357,6 +367,25 @@ async def test_a_run_one_minute_past_the_window_is_still_skipped(
 
     assert result.status == ScanRunStatus.SKIPPED
     assert result.candidates == []
+
+
+async def test_a_skipped_wake_up_writes_no_row_in_dry_run(
+    test_session_factory, golden_snapshot_provider, golden_reference_data
+):
+    """`--dry-run` still means touch nothing — the skipped row is not an exception."""
+    scanner = Scanner(
+        session_factory=test_session_factory,
+        snapshot_provider=golden_snapshot_provider,
+        profile=production_profile(),
+        clock=FixedClock(datetime(2026, 7, 28, 15, 0)),
+        rvol_calculator=SimpleRvol(),
+    )
+
+    result = await scanner.run(dry_run=True)
+
+    assert result.status == ScanRunStatus.SKIPPED
+    async with test_session_factory() as session:
+        assert (await session.execute(select(ScanRun))).scalars().all() == []
 
 
 async def test_ignore_window_allows_manual_runs_at_any_hour(

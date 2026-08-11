@@ -187,6 +187,12 @@ one that pushes the definitive alert set.
 > value shown and the value decided on must be the same value. This is a resolution
 > choice, not a grace period: 09:26:00 is still outside.
 
+Wake-ups outside the window write a `scan_runs` row with `status='skipped'` and zero
+counts. They are the cron's heartbeat: without them, "the cron fired and correctly
+skipped" and "the cron never fired" are the same empty query, and only Render's logs —
+which expire — can separate them. `/status` computes health from the last run that
+attempted work, so the heartbeat never hides a morning's result.
+
 ---
 
 ## 5. Database Schema (v2)

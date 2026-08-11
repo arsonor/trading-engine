@@ -603,6 +603,128 @@ the comments in `render.yaml`) and DST-safe.
     tiered early in the session
 ````
 
+## Hotfix (post-4C) — The 09:25 authoritative pass never runs
+
+**Status:** ✅ DONE (11 August 2026)
+**Depends on:** Phase 4C
+**Size:** small — a comparison resolution, plus the `skipped` row it exposes
+
+> **Fixed by truncating to whole minutes**, in one place: `clock.at_minute()`. The window
+> gate, the final-pass check and `describe()` — the log header — all route through it, so
+> the value printed *is* the value compared and the self-contradictory line cannot recur.
+> A run at 09:25:10 ET is now inside the window and marked `is_final_pass`; 09:26:00 is
+> still outside. Both bounds truncate, so 03:59:58 is not admitted as 04:00 either.
+>
+> **`SKIPPED` resolved by writing the row**, not by deleting the constant. Four places
+> already documented that behaviour — the model docstring, the pipeline status table,
+> `render.yaml` and `/status` — and only `_record()` disagreed. The row is the only
+> durable answer to "did the cron fire?": Render's logs expire, and that was exactly the
+> question this investigation had to answer. `_open_run()` therefore moved *above* the
+> gate. No migration needed — the status is a string constant, not a DB enum.
+>
+> **Consequence handled:** ~18 heartbeat rows follow the 09:25 pass every session, so
+> `/status` would have read "outside scan window", with no stage counts, from 09:30 ET
+> until the next morning. Health is now computed from the last run that *attempted* work,
+> queried directly rather than filtered out of the ten most recent rows. Skipped rows stay
+> visible in `recent_runs`. `state='skipped'` survives for the one case that is genuinely
+> it: the cron is alive but has never yet woken inside the window — distinct from
+> `never_run`.
+
+````
+# Hotfix — Window boundary rejects the authoritative 09:25 pass
+
+## The bug
+
+Observed across two consecutive live sessions (10 and 11 August 2026): the cron run
+scheduled at 13:25 UTC never produces a `scan_runs` row. Every other pass does. The last
+recorded pass of the day is 13:20 UTC = 09:20 ET.
+
+`docs/CLAUDE.md` §4.5 designates **09:25 ET as the authoritative pass** — the final
+confirmation run that applies Stage 3 and issues the definitive alert set five minutes
+before the open. It has never executed in production.
+
+The log from that run contradicts itself:
+
+    Scan time : 2026-08-11 09:25 EDT (UTC-04)
+    SCAN SKIPPED — 2026-08-11 09:25 EDT is outside the 04:00-09:25 ET scan window
+
+It reports 09:25 as outside a window whose stated upper bound is 09:25.
+
+## Root cause
+
+Render's scheduler has 10–45 s of startup latency (measured: runs scheduled at :00 begin
+between :00:10 and :00:45). The pass scheduled at 13:25:00 UTC therefore starts around
+13:25:10 UTC = **09:25:10 ET**.
+
+The gate compares full timestamps, so `09:25:10 > 09:25:00` → outside → skip. The header
+renders the same instant at minute resolution, so it prints "09:25". Both are internally
+consistent; together they are nonsense to a reader, and the effect is that the single most
+important pass of the day is silently discarded.
+
+## The fix — compare at minute resolution
+
+**Do not add a grace period or a fudge constant.** Truncate the comparison to whole minutes
+so a run at 09:25:10 ET is treated as 09:25 and falls **inside** the window.
+
+This is the same correction made in Phase 2 for percentage thresholds, and for the same
+reason. There, `105 × 1.055 − 105` produced 5.499999999999996 and rejected a candidate whose
+card displayed "5.50%" against a documented 5.5% bar; rounding first made the displayed
+number and the decision agree. Apply the identical principle: **the value shown and the
+value decided on must be the same value.**
+
+Minute-resolution comparison is also what the spec means. §4.5 states a window of
+04:00–09:25, not 04:00:00–09:25:00.000. It makes the behaviour independent of scheduler
+latency rather than tolerant of a particular amount of it.
+
+Apply the same truncation to **both** bounds, so a run starting at 07:59:58 ET is not
+admitted as 08:00 when the window opens at 04:00 — the lower bound has the same class of
+edge, currently masked because the 08:00 UTC run starts *after* 04:00 ET rather than before.
+
+## Second defect, exposed by the same investigation
+
+`ScanRunStatus.SKIPPED` exists in `app/models/scan_run.py` and its docstring is explicit:
+*"Woke up outside the 04:00-09:25 ET window and did no work. Distinct from both 'completed
+with zero candidates' and 'failed'."*
+
+But a query across two full sessions returns **zero** rows with that status, against ~18
+gate-rejected runs per day. The `running` row is documented as opening before work starts
+(so a process killed mid-scan leaves a trace) — yet gate-skipped runs leave nothing.
+
+Establish which is true and reconcile them:
+- If skipped runs should record a row, open it before the gate check so `status='skipped'`
+  is written. The database then distinguishes "cron fired and correctly skipped" from "cron
+  never fired" — currently only Render's logs can tell those apart, and they expire.
+- If the intended design is to write nothing, **remove `SKIPPED` from the model** and say so
+  in the docstring. A status constant that can never appear is a false affordance: it
+  invites a reader to write `where status = 'skipped'` and conclude, from an empty result,
+  that the cron never woke up.
+
+State which you chose and why. Do not leave the code and its own documentation disagreeing.
+
+## Constraints
+- Do NOT change stage arithmetic, thresholds, the alert contract, or the ET/DST conversion
+  logic — only the resolution at which the boundary is compared.
+- DST tests must still pass. Add a test at the exact boundary: a run at 09:25:10 ET is
+  **inside**; one at 09:26:00 ET is **outside**.
+- A migration is only needed if the skipped-row decision requires one; usual rules apply
+  (reversible, RLS, round-trip on populated data).
+- CI stays offline.
+
+## Definition of done
+1. A run starting at 09:25:10 ET executes the full scan and is marked the final pass
+2. A run starting at 09:26:00 ET is still correctly outside the window
+3. Boundary tests pin both, at both ends of the window
+4. DST tests still pass
+5. The `SKIPPED` inconsistency is resolved one way or the other, with the reasoning recorded
+6. The self-contradictory log message can no longer occur — the time shown and the time
+   decided on are the same value
+7. Tests pass offline; ruff clean
+8. Report: confirm on the next live session that a 13:25 UTC row appears and carries
+   `is_final_pass = true`
+````
+
+---
+
 ## Hotfix (post-4C) — Separate `--no-alerts` from `--dry-run`
 
 **Status:** ✅ DONE (8 August 2026)

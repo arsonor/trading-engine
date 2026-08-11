@@ -121,8 +121,27 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
         .scalars()
         .all()
     )
-    last_run = recent[0] if recent else None
-    last_success = next((r for r in recent if r.status == ScanRunStatus.COMPLETED), None)
+
+    # `skipped` rows are the cron's heartbeat, not scans: ~18 of them follow the 09:25
+    # pass every session. Taking `recent[0]` as "the last scan" would make the dashboard
+    # read "outside scan window", with no stage counts, from 09:30 ET until the following
+    # morning — the morning's actual result buried under its own heartbeat. So the state
+    # is computed from the last run that ATTEMPTED work, and each of these is its own
+    # query rather than a scan of `recent`: ten heartbeats is less than one session, so
+    # filtering the list in Python would report `None` for both by mid-morning.
+    last_wake_up = recent[0] if recent else None
+    last_run = await db.scalar(
+        select(ScanRun)
+        .where(ScanRun.status != ScanRunStatus.SKIPPED)
+        .order_by(ScanRun.started_at.desc())
+        .limit(1)
+    )
+    last_success = await db.scalar(
+        select(ScanRun)
+        .where(ScanRun.status == ScanRunStatus.COMPLETED)
+        .order_by(ScanRun.started_at.desc())
+        .limit(1)
+    )
 
     session_date = await db.scalar(
         select(func.max(Alert.session_date)).where(Alert.session_date.isnot(None))
@@ -136,11 +155,21 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
             or 0
         )
 
-    if last_run is None:
+    if last_wake_up is None:
         state, detail, healthy = (
             STATE_NEVER_RUN,
             "The scanner has never run. No data has been collected yet.",
             False,
+        )
+    elif last_run is None:
+        # The cron is demonstrably alive but has not yet had a chance to scan — a fresh
+        # deployment, or a restore whose only rows are heartbeats. Healthy, and NOT
+        # "never run": those are different problems with different fixes.
+        state, detail, healthy = (
+            STATE_SKIPPED,
+            "The scanner has woken up but every wake-up so far fell outside the "
+            "04:00-09:25 ET window, so no scan has run yet.",
+            True,
         )
     elif last_run.status == ScanRunStatus.FAILED:
         state, detail, healthy = (
@@ -148,12 +177,6 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
             f"The last scan FAILED: {last_run.error or 'no error recorded'}. "
             f"This is an outage — not a quiet market.",
             False,
-        )
-    elif last_run.status == ScanRunStatus.SKIPPED:
-        state, detail, healthy = (
-            STATE_SKIPPED,
-            "The last wake-up fell outside the 04:00-09:25 ET scan window, so no scan ran.",
-            True,
         )
     elif last_run.status == ScanRunStatus.RUNNING:
         state, detail, healthy = (

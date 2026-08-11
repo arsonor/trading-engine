@@ -605,13 +605,23 @@ components:
         - state
       properties:
         last_run:
-          $ref: '#/components/schemas/ScanRun'
+          allOf:
+            - $ref: '#/components/schemas/ScanRun'
+          description: >
+            The most recent run that ATTEMPTED work. Out-of-window wake-ups
+            (status skipped) are excluded: they carry no stage counts and roughly
+            18 of them follow the 09:25 pass each session, so the newest row is
+            usually a heartbeat rather than a scan. They remain in recent_runs.
         last_successful_run:
           $ref: '#/components/schemas/ScanRun'
         is_healthy:
           type: boolean
         state:
           type: string
+          description: >
+            skipped means the cron is alive but has not yet woken inside the
+            04:00-09:25 ET window — distinct from never_run, which means nothing
+            has fired at all.
           enum:
             - never_run
             - ok_with_candidates

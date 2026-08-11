@@ -200,6 +200,11 @@ class ScanRunOut(BaseModel):
 class ScannerStatus(BaseModel):
     """Everything the scan-status panel needs to distinguish quiet from broken."""
 
+    # The last run that ATTEMPTED work. Out-of-window wake-ups (`skipped`) are excluded:
+    # they carry no counts and there are ~18 of them after each session, so treating the
+    # newest row as "the last scan" would hide every morning's result from 09:30 ET
+    # onwards. They remain visible in `recent_runs` — that is where "did the cron fire?"
+    # is answered.
     last_run: Optional[ScanRunOut] = None
     last_successful_run: Optional[ScanRunOut] = None
     is_healthy: bool = Field(
@@ -209,8 +214,9 @@ class ScannerStatus(BaseModel):
     state: str = Field(
         "unknown",
         description=(
-            "never_run | ok_with_candidates | ok_no_candidates | failed | stale. "
-            "'ok_no_candidates' is a healthy quiet market; 'failed' is an outage."
+            "never_run | ok_with_candidates | ok_no_candidates | failed | skipped. "
+            "'ok_no_candidates' is a healthy quiet market; 'failed' is an outage; "
+            "'skipped' means the cron is alive but has never yet woken inside the window."
         ),
     )
     detail: str = ""

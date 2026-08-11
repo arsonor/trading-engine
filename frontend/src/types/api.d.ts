@@ -332,10 +332,14 @@ export interface components {
         };
         /** @description Everything the scan-status panel needs to distinguish a quiet market from a broken scanner. state is the field that carries that distinction. */
         ScannerStatus: {
+            /** @description The most recent run that ATTEMPTED work. Out-of-window wake-ups (status skipped) are excluded: they carry no stage counts and roughly 18 of them follow the 09:25 pass each session, so the newest row is usually a heartbeat rather than a scan. They remain in recent_runs. */
             last_run?: components["schemas"]["ScanRun"];
             last_successful_run?: components["schemas"]["ScanRun"];
             is_healthy: boolean;
-            /** @enum {string} */
+            /**
+             * @description skipped means the cron is alive but has not yet woken inside the 04:00-09:25 ET window — distinct from never_run, which means nothing has fired at all.
+             * @enum {string}
+             */
             state: "never_run" | "ok_with_candidates" | "ok_no_candidates" | "failed" | "skipped" | "unknown";
             detail?: string;
             /** Format: date */

@@ -97,6 +97,10 @@ def _print_result(result: ScanResult, verbose: bool) -> None:
     if result.status == ScanRunStatus.SKIPPED:
         print()
         print(f"  SCAN SKIPPED — {result.error}")
+        # The row id is printed here too: a skipped wake-up now RECORDS itself, and an
+        # operator reading this output should be able to go and find that row.
+        if result.scan_run_id:
+            print(f"  Recorded as scan_runs.id = {result.scan_run_id} (status=skipped)")
         return
 
     print()
