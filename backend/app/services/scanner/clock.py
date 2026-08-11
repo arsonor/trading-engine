@@ -10,6 +10,10 @@ Two rules govern every timestamp in the scanner:
    year it would fire outside the scan window entirely. The cron is therefore scheduled
    generously in UTC and the real work is gated on a computed ET timestamp.
 
+3. **Window decisions are made at minute resolution.** Every comparison against the
+   window bounds goes through `at_minute()`, so the timestamp printed in a log is
+   literally the timestamp that was compared. See `at_minute()` for why.
+
 `test_scanner_clock.py` pins that drift with the same UTC instant landing on different
 sides of the window boundary in January and July.
 """
@@ -77,19 +81,40 @@ def to_utc(moment: datetime) -> datetime:
     return to_et(moment).astimezone(timezone.utc)
 
 
+def at_minute(moment: datetime) -> datetime:
+    """The ET moment with seconds and microseconds discarded.
+
+    **The value shown and the value decided on must be the same value.** Render's
+    scheduler starts a job 10–45 s after its scheduled minute, so the 13:25 UTC cron —
+    the authoritative 09:25 ET pass — actually begins around 09:25:10 ET. Comparing full
+    timestamps made `09:25:10 > 09:25:00` true, and the single most important pass of the
+    day was silently skipped while the log header, rendered at minute resolution, printed
+    "09:25" and claimed it was outside a window ending at 09:25.
+
+    Truncating is the fix, not a grace period: §4.5 specifies a window of 04:00–09:25,
+    not 04:00:00.000–09:25:00.000, and truncation is independent of how late the
+    scheduler happens to be rather than tolerant of one particular amount of lateness.
+    Same correction, and the same reason, as rounding percentages before comparing them
+    against a threshold in Phase 2.
+    """
+    return to_et(moment).replace(second=0, microsecond=0)
+
+
 def is_within_scan_window(moment: datetime) -> bool:
     """Whether an ET moment falls in the 04:00–09:25 pre-market scan window.
 
-    Inclusive at both ends: 04:00 opens the window and 09:25 is the final pass, which
-    must run.
+    Inclusive at both ends, at minute resolution: 04:00 opens the window and 09:25 is
+    the final pass, which must run. Both bounds are truncated, so 07:59:58 ET is 07:59
+    and does not sneak past a bound it has not yet reached — the lower bound has the
+    same class of edge as the upper one, currently masked only because the 08:00 UTC run
+    starts after 04:00 ET rather than before it.
     """
-    et = to_et(moment)
-    return SCAN_WINDOW_START <= et.time() <= SCAN_WINDOW_END
+    return SCAN_WINDOW_START <= at_minute(moment).time() <= SCAN_WINDOW_END
 
 
 def is_final_pass(moment: datetime) -> bool:
     """Whether this is the 09:25 confirmation run whose alert set is definitive."""
-    return to_et(moment).time() >= FINAL_PASS_TIME
+    return at_minute(moment).time() >= FINAL_PASS_TIME
 
 
 def minutes_since_window_open(moment: datetime) -> int:
@@ -146,6 +171,10 @@ def parse_scan_time(raw: str) -> datetime:
 
 
 def describe(moment: datetime) -> str:
-    """Human-readable ET stamp with the offset, so EST/EDT is always visible in logs."""
-    et = to_et(moment)
+    """Human-readable ET stamp with the offset, so EST/EDT is always visible in logs.
+
+    Goes through `at_minute` rather than formatting with `%H:%M`, so this string cannot
+    drift away from what the window gate decided on: same function, same value.
+    """
+    et = at_minute(moment)
     return f"{et.strftime('%Y-%m-%d %H:%M')} {et.tzname()} (UTC{et.strftime('%z')[:3]})"

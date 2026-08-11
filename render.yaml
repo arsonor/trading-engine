@@ -100,6 +100,13 @@ services:
   # the window. Tightening this schedule to "the right" UTC hours would reintroduce the
   # twice-yearly one-hour drift that the ET gate exists to eliminate.
   #
+  # SCHEDULER LATENCY IS THE GATE'S PROBLEM, NOT THE SCHEDULE'S. Render starts a job
+  # 10–45 s after its scheduled minute, so the 13:25 UTC entry — the authoritative 09:25
+  # ET pass — actually begins around 09:25:10 ET. It was rejected as "outside" a window
+  # ending at 09:25 and never ran in production. The fix is in the gate, which now
+  # compares at minute resolution; do NOT try to fix it here by moving the schedule
+  # earlier, which would only trade this failure for a differently-timed one.
+  #
   # LIVE as of Phase 4C: `--fixture` is gone and `FmpLiveSnapshotProvider` supplies Stage 2
   # from `extended=true` pre-market bars.
   #

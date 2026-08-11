@@ -179,6 +179,14 @@ one that pushes the definitive alert set.
 > a correctness bug, not a cosmetic one. Schedule generously in UTC and gate the actual
 > work on a computed ET timestamp.
 
+> **The window bounds are minutes, not instants.** 04:00–09:25 means exactly that, so
+> the gate truncates to whole minutes before comparing (`clock.at_minute`). Render starts
+> a job 10–45 s after its scheduled minute; comparing full timestamps made the 09:25
+> authoritative pass begin at 09:25:10 and be rejected as outside a window ending at
+> 09:25, while the log header — rendered at minute resolution — printed "09:25". The
+> value shown and the value decided on must be the same value. This is a resolution
+> choice, not a grace period: 09:26:00 is still outside.
+
 ---
 
 ## 5. Database Schema (v2)

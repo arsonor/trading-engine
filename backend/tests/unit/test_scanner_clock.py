@@ -14,6 +14,7 @@ from app.services.scanner.clock import (
     ET,
     FixedClock,
     SystemClock,
+    at_minute,
     describe,
     is_final_pass,
     is_within_scan_window,
@@ -121,6 +122,54 @@ def test_scan_window_boundaries_are_inclusive(moment, expected):
 def test_final_pass_starts_at_0925():
     assert is_final_pass(et(2026, 7, 28, 9, 24)) is False
     assert is_final_pass(et(2026, 7, 28, 9, 25)) is True
+
+
+# --------------------------------------------------- minute-resolution comparison
+
+
+@pytest.mark.parametrize(
+    "moment,expected",
+    [
+        # THE BUG: Render starts a job 10-45 s after its scheduled minute, so the 13:25
+        # UTC cron — the authoritative 09:25 ET pass — begins at 09:25:10 and was rejected
+        # by a full-timestamp comparison against 09:25:00. It ran on no production day.
+        (et(2026, 7, 28, 9, 25, 10), True),
+        (et(2026, 7, 28, 9, 25, 45), True),
+        (et(2026, 7, 28, 9, 25, 59, 999999), True),
+        # The minute after is still out. Truncation is not a grace period.
+        (et(2026, 7, 28, 9, 26, 0), False),
+        # The lower bound has the same edge, in the other direction: 03:59:58 is 03:59
+        # and must not be admitted as 04:00.
+        (et(2026, 7, 28, 3, 59, 58), False),
+        (et(2026, 7, 28, 4, 0, 10), True),
+    ],
+)
+def test_window_bounds_are_compared_at_minute_resolution(moment, expected):
+    assert is_within_scan_window(moment) is expected
+
+
+def test_the_authoritative_pass_is_final_even_when_the_scheduler_is_late():
+    assert is_final_pass(et(2026, 7, 28, 9, 25, 10)) is True
+    assert is_final_pass(et(2026, 7, 28, 9, 24, 59)) is False
+
+
+def test_the_time_shown_and_the_time_decided_on_are_the_same_value():
+    """The self-contradictory log line — "09:25 ... is outside the 04:00-09:25 window" —
+    was possible because the header truncated and the gate did not. Both go through
+    `at_minute` now, so the string in the log IS the value that was compared."""
+    late = et(2026, 7, 28, 9, 25, 10)
+
+    assert describe(late) == "2026-07-28 09:25 EDT (UTC-04)"
+    assert at_minute(late) == et(2026, 7, 28, 9, 25)
+    assert is_within_scan_window(at_minute(late)) is is_within_scan_window(late)
+
+
+def test_at_minute_preserves_the_dst_offset():
+    """Truncation must not resolve a zone differently — the offset comes from the wall
+    clock, and dropping seconds cannot move a moment across a transition."""
+    assert at_minute(et(2026, 1, 15, 8, 45, 30)).tzname() == "EST"
+    assert at_minute(et(2026, 7, 15, 8, 45, 30)).tzname() == "EDT"
+    assert at_minute(utc(2026, 7, 28, 13, 25, 10)) == et(2026, 7, 28, 9, 25)
 
 
 def test_minutes_since_window_open_indexes_volume_profile_buckets():
