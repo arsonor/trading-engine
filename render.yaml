@@ -147,7 +147,7 @@ services:
     buildCommand: |
       cd backend && pip install -e .
     startCommand: |
-      cd backend && python scripts/run_scan.py --profile production --no-alerts
+      cd backend && python scripts/run_scan.py --profile production
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.12"
