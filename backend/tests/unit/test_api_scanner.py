@@ -221,6 +221,138 @@ async def test_status_reports_candidates_when_alerts_exist(
     assert body["alert_count"] == 1
 
 
+# ------------------------------------------------- session total vs scan result
+
+
+async def _add_session_alert(db_session, ticker: str, *, is_final_pass: bool, minute: int):
+    db_session.add(
+        Alert(
+            ticker=ticker,
+            session_date=SESSION,
+            timestamp=datetime(2026, 7, 28, 9, minute),
+            scan_timestamp=datetime(2026, 7, 28, 9, minute),
+            profile="production",
+            gap_pct=5.0,
+            confidence_score=0.5,
+            is_final_pass=is_final_pass,
+        )
+    )
+
+
+async def _add_run(db_session, *, hour: int, minute: int, is_final_pass: bool):
+    """A completed run stamped with the ET moment it decided on, as the pipeline does."""
+    db_session.add(
+        ScanRun(
+            started_at=datetime(2026, 7, 28, hour + 4, minute),  # ET -> UTC, summer
+            finished_at=datetime(2026, 7, 28, hour + 4, minute, 30),
+            status=ScanRunStatus.COMPLETED,
+            profile="production",
+            stage_counts_json={
+                "as_of_et": f"2026-07-28T{hour:02d}:{minute:02d}:00-04:00",
+                "is_final_pass": is_final_pass,
+                "counts": {"universe": 3964, "risk_filters": 2},
+            },
+        )
+    )
+
+
+async def test_session_total_is_never_reported_as_the_last_scans_result(
+    client: AsyncClient, db_session
+):
+    """The bug this split exists to prevent: 37 tickers qualified at some point in the
+    morning, 11 were still qualifying at 09:25, and the panel headlined 37 as what the
+    last scan found — directly above a funnel that ended in 11."""
+    await _add_session_alert(db_session, "CNFA", is_final_pass=True, minute=25)
+    await _add_session_alert(db_session, "CNFB", is_final_pass=True, minute=25)
+    await _add_session_alert(db_session, "FADE", is_final_pass=False, minute=10)
+    await _add_run(db_session, hour=9, minute=25, is_final_pass=True)
+    await db_session.commit()
+
+    body = (await client.get("/api/v1/scanner/status")).json()
+
+    assert body["alert_count"] == 3
+    assert body["confirmed_count"] == 2
+    assert body["final_pass_complete"] is True
+    # Both numbers present, each labelled — never one standing in for the other.
+    assert "2 candidate(s) confirmed at the 09:25 ET pass" in body["detail"]
+    assert "3 seen across the session" in body["detail"]
+
+
+async def test_nothing_is_confirmed_before_the_final_pass(client: AsyncClient, db_session):
+    """At 06:40 there is no confirmed set at all. Reporting `confirmed_count` of 0 as a
+    result would say "none survived" about a question nobody has asked yet."""
+    await _add_session_alert(db_session, "PROV", is_final_pass=False, minute=10)
+    await _add_run(db_session, hour=6, minute=40, is_final_pass=False)
+    await db_session.commit()
+
+    body = (await client.get("/api/v1/scanner/status")).json()
+
+    assert body["final_pass_complete"] is False
+    assert body["confirmed_count"] == 0
+    assert body["alert_count"] == 1
+    assert "provisional" in body["detail"]
+    assert "Nothing is confirmed until the 09:25 ET pass" in body["detail"]
+
+
+async def test_a_final_pass_that_confirmed_nothing_says_so(client: AsyncClient, db_session):
+    """Distinct from the case above, and the reason `final_pass_complete` exists: the
+    09:25 pass ran and every candidate had faded by then."""
+    await _add_session_alert(db_session, "FADE", is_final_pass=False, minute=10)
+    await _add_run(db_session, hour=9, minute=25, is_final_pass=True)
+    await db_session.commit()
+
+    body = (await client.get("/api/v1/scanner/status")).json()
+
+    assert body["final_pass_complete"] is True
+    assert body["confirmed_count"] == 0
+    assert "No candidate survived to the 09:25 ET confirmation pass" in body["detail"]
+    assert "1 qualified earlier in the session and faded" in body["detail"]
+
+
+async def test_a_past_sessions_alerts_are_not_reported_as_awaiting_confirmation(
+    client: AsyncClient, db_session
+):
+    """It is 06:00 the next morning and today has produced nothing yet, so the list on
+    screen is yesterday's. Yesterday's 09:25 pass has been and gone; saying otherwise
+    would mark a finished session as still pending."""
+    await _add_session_alert(db_session, "CNFA", is_final_pass=True, minute=25)
+    db_session.add(
+        ScanRun(
+            started_at=datetime(2026, 7, 29, 10, 0),
+            finished_at=datetime(2026, 7, 29, 10, 0, 30),
+            status=ScanRunStatus.COMPLETED,
+            profile="production",
+            stage_counts_json={
+                "as_of_et": "2026-07-29T06:00:00-04:00",
+                "is_final_pass": False,
+                "counts": {"universe": 3964},
+            },
+        )
+    )
+    await db_session.commit()
+
+    body = (await client.get("/api/v1/scanner/status")).json()
+
+    assert body["session_date"] == "2026-07-28"
+    assert body["final_pass_complete"] is True
+    assert body["confirmed_count"] == 1
+
+
+async def test_a_quiet_session_before_the_final_pass_does_not_claim_to_be_final(
+    client: AsyncClient, db_session
+):
+    """Zero candidates at 06:40 is "none yet", not "none all morning"."""
+    await _add_run(db_session, hour=6, minute=40, is_final_pass=False)
+    await db_session.commit()
+
+    body = (await client.get("/api/v1/scanner/status")).json()
+
+    assert body["state"] == "ok_no_candidates"
+    assert body["is_healthy"] is True
+    assert "quiet" in body["detail"].lower()
+    assert "yet this session" in body["detail"]
+
+
 async def test_a_run_stuck_in_running_is_treated_as_failed(client: AsyncClient, db_session):
     """A process that died mid-scan must not look healthy."""
     db_session.add(

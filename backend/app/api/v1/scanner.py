@@ -7,10 +7,17 @@ because the frontend and the published contract both use it.
 The `/status` endpoint carries the distinction this whole phase turns on: a scan that
 found nothing and a scan that broke are different `state` values with different copy, so
 the dashboard cannot accidentally render them the same way.
+
+It carries a second one now: **a session total is not a scan result.** Alerts dedup per
+`(ticker, session_date)` across the morning's ~66 passes, so the alert count is "distinct
+tickers that qualified at any point since 04:00", while the funnel on the same panel
+reports the last pass alone. Reporting the first under a per-scan label made the panel
+contradict itself — 37 in the headline over a funnel ending in 11. Both numbers are
+useful; they are now returned as separate, separately labelled fields.
 """
 
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -41,6 +48,70 @@ STATE_OK_WITH_CANDIDATES = "ok_with_candidates"
 STATE_OK_NO_CANDIDATES = "ok_no_candidates"
 STATE_FAILED = "failed"
 STATE_SKIPPED = "skipped"
+
+
+def _run_session_date(stage_counts: dict | None) -> date | None:
+    """The ET session a `scan_runs` row belongs to, or None if it cannot be told.
+
+    `started_at` is UTC, so a 04:00-09:25 ET session straddles no UTC date in summer but
+    the derivation is still not free — the pipeline already stamps the ET moment it
+    decided on into `stage_counts_json`, so that is what is read here.
+    """
+    if not stage_counts:
+        return None
+    raw = stage_counts.get("as_of_et")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw).date()
+    except ValueError:  # pragma: no cover - only a hand-edited row gets here
+        return None
+
+
+def _final_pass_complete(last_run: ScanRun | None, session_date: date | None) -> bool:
+    """Whether the authoritative 09:25 ET pass has already run for the session on screen.
+
+    This is the difference between "0 of 37 survived to 09:25" and "nothing is confirmed
+    yet, it is 06:40" — two very different things to tell someone deciding what to trade,
+    and indistinguishable from a confirmed count of zero. The pipeline stamps
+    `is_final_pass` onto every run's `stage_counts_json`, so the answer is durable rather
+    than recomputed from the clock at request time.
+    """
+    if last_run is None:
+        return False
+
+    stage_counts = last_run.stage_counts_json
+    run_date = _run_session_date(stage_counts)
+    if run_date is not None and session_date is not None and run_date != session_date:
+        # The alerts on screen belong to an earlier session, which is over: its 09:25
+        # pass has been and gone. Reading this morning's 06:00 run as "yesterday's
+        # candidates are not confirmed yet" would be false.
+        return True
+
+    return bool((stage_counts or {}).get("is_final_pass"))
+
+
+def _candidate_detail(alert_count: int, confirmed_count: int, final_pass_done: bool) -> str:
+    """State both numbers, each labelled for what it is.
+
+    Never collapse them into one. The session total is genuinely useful — it is simply
+    not the last scan's result, and a headline that says otherwise is contradicted by the
+    funnel rendered directly beneath it.
+    """
+    if not final_pass_done:
+        return (
+            f"{alert_count} provisional candidate(s) so far this session. "
+            f"Nothing is confirmed until the 09:25 ET pass."
+        )
+    if confirmed_count:
+        return (
+            f"{confirmed_count} candidate(s) confirmed at the 09:25 ET pass · "
+            f"{alert_count} seen across the session."
+        )
+    return (
+        f"No candidate survived to the 09:25 ET confirmation pass. "
+        f"{alert_count} qualified earlier in the session and faded."
+    )
 
 
 @router.get("/alerts", response_model=ScannerAlertListResponse)
@@ -146,7 +217,13 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
     session_date = await db.scalar(
         select(func.max(Alert.session_date)).where(Alert.session_date.isnot(None))
     )
+    # Two counts, because they answer two different questions. `alert_count` is every
+    # ticker that qualified at any point since 04:00 — one row per (ticker, session),
+    # updated in place. `confirmed_count` is how many of them still qualified at the
+    # authoritative 09:25 pass, which is the number a user at 09:26 is actually asking
+    # for. The rest faded: their gap closed, RVOL fell away, or they hit resistance.
     alert_count = 0
+    confirmed_count = 0
     if session_date is not None:
         alert_count = (
             await db.scalar(
@@ -154,6 +231,16 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
             )
             or 0
         )
+        confirmed_count = (
+            await db.scalar(
+                select(func.count(Alert.id)).where(
+                    Alert.session_date == session_date, Alert.is_final_pass.is_(True)
+                )
+            )
+            or 0
+        )
+
+    final_pass_done = _final_pass_complete(last_run, session_date)
 
     if last_wake_up is None:
         state, detail, healthy = (
@@ -187,14 +274,21 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
     elif alert_count:
         state, detail, healthy = (
             STATE_OK_WITH_CANDIDATES,
-            f"Last scan completed and surfaced {alert_count} candidate(s).",
+            _candidate_detail(alert_count, confirmed_count, final_pass_done),
+            True,
+        )
+    elif final_pass_done:
+        state, detail, healthy = (
+            STATE_OK_NO_CANDIDATES,
+            "Last scan completed successfully and found no candidates. "
+            "The scanner is working; the market is quiet.",
             True,
         )
     else:
         state, detail, healthy = (
             STATE_OK_NO_CANDIDATES,
-            "Last scan completed successfully and found no candidates. "
-            "The scanner is working; the market is quiet.",
+            "Last scan completed successfully and no candidate has qualified yet this "
+            "session. The scanner is working; the market is quiet so far.",
             True,
         )
 
@@ -206,6 +300,8 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
         detail=detail,
         session_date=session_date,
         alert_count=alert_count,
+        confirmed_count=confirmed_count,
+        final_pass_complete=final_pass_done,
         recent_runs=[ScanRunOut.from_model(r) for r in recent],
     )
 

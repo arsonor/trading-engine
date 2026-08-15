@@ -285,7 +285,7 @@ export interface components {
              */
             is_demo: boolean;
             /**
-             * @description True when produced by the authoritative 09:25 ET confirmation run.
+             * @description True when the authoritative 09:25 ET confirmation pass last updated this alert — the ticker was still a candidate at 09:25. The row is updated in place on every pass, so false means it qualified earlier in the session and then faded. This is what separates the confirmed list from the faded one; clients must not infer it from the suggested_entry_window string.
              * @default false
              */
             is_final_pass: boolean;
@@ -344,8 +344,21 @@ export interface components {
             detail?: string;
             /** Format: date */
             session_date?: string | null;
-            /** @default 0 */
+            /**
+             * @description Distinct tickers that qualified at ANY point in the session. Alerts dedup per (ticker, session) across the morning's ~66 passes, so this is a session total and NOT the last scan's result — pair it with confirmed_count rather than presenting it under a per-scan label.
+             * @default 0
+             */
             alert_count: number;
+            /**
+             * @description How many of them still qualified at the authoritative 09:25 ET pass. The remainder faded. Meaningless until final_pass_complete is true.
+             * @default 0
+             */
+            confirmed_count: number;
+            /**
+             * @description Whether the 09:25 ET confirmation pass has run for this session. False means nothing is confirmed YET, which is a different statement from a confirmed count of zero.
+             * @default false
+             */
+            final_pass_complete: boolean;
             recent_runs?: components["schemas"]["ScanRun"][];
         };
         ThresholdSettings: {

@@ -101,7 +101,13 @@ class ScannerAlert(BaseModel):
 
     profile: Optional[str] = None
     is_demo: bool = False
-    is_final_pass: bool = False
+    # "Confirmed" versus "faded", and the reason the dashboard can separate the two lists
+    # without parsing the entry-window string. The row is updated in place on every pass,
+    # so this reflects the LAST pass that saw the ticker qualify: true means it was still
+    # a candidate at 09:25, false means it stopped being one somewhere before then.
+    is_final_pass: bool = Field(
+        False, description="True when the 09:25 ET confirmation pass last updated this alert."
+    )
     is_read: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -221,7 +227,24 @@ class ScannerStatus(BaseModel):
     )
     detail: str = ""
     session_date: Optional[date] = None
-    alert_count: int = 0
+    # A session total is NOT a scan result. Alerts dedup per (ticker, session) across the
+    # morning's ~66 passes, so `alert_count` is "qualified at some point since 04:00" while
+    # `confirmed_count` is "still qualified at 09:25". The panel reported the first under a
+    # per-scan label and was contradicted by its own funnel; both travel separately now.
+    alert_count: int = Field(
+        0, description="Distinct tickers that qualified at ANY point in the session."
+    )
+    confirmed_count: int = Field(
+        0,
+        description="How many of them still qualified at the authoritative 09:25 ET pass. "
+                    "The remainder faded. Meaningless until final_pass_complete is true.",
+    )
+    final_pass_complete: bool = Field(
+        False,
+        description="Whether the 09:25 ET confirmation pass has run for this session. "
+                    "False means nothing is confirmed YET — which is not the same "
+                    "statement as a confirmed count of zero.",
+    )
     recent_runs: list[ScanRunOut] = Field(default_factory=list)
 
 
