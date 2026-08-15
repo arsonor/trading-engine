@@ -581,3 +581,70 @@ async def test_a_default_run_is_live(scanner, golden_reference_data):
 
     assert result.mode == MODE_LIVE
     assert result.scan_run_id is not None
+
+
+# ============================================== per-pass cost (tiered-cadence follow-up)
+
+
+async def _spend_budget(session_factory, *, calls: int, byte_count: int) -> None:
+    """Simulate FMP usage the way the client records it."""
+    from app.services.fmp.budget import DailyBudgetGuard
+
+    guard = DailyBudgetGuard(session_factory)
+    await guard.reserve("test", cost=calls)
+    await guard.record_bytes(byte_count)
+
+
+async def test_a_pass_records_what_it_cost(
+    test_session_factory, golden_snapshot_provider, golden_reference_data
+):
+    """The tiered-cadence question is "what does each pass actually cost?", and until now
+    nothing answered it: `api_calls_used` was written as 0 by every run ever recorded, and
+    bytes were tracked per UTC day, which cannot separate a 04:05 pass from a 09:25 one."""
+    spent_before_this_pass = 4_000
+    await _spend_budget(test_session_factory, calls=7, byte_count=spent_before_this_pass)
+
+    class SpendingProvider:
+        """Stands in for the live fan-out, which bills as it fetches."""
+
+        source = "test"
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        async def get_snapshots(self, *args, **kwargs):
+            await _spend_budget(test_session_factory, calls=3, byte_count=1_500)
+            return await self._inner.get_snapshots(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    scanner = Scanner(
+        session_factory=test_session_factory,
+        snapshot_provider=SpendingProvider(golden_snapshot_provider),
+        profile=production_profile(),
+        clock=FixedClock(SCAN_AT),
+        rvol_calculator=SimpleRvol(),
+    )
+
+    result = await scanner.run()
+
+    assert result.status == ScanRunStatus.COMPLETED
+    # A DELTA over the daily counters, not the day's running total — otherwise every pass
+    # after the first would report the whole morning's spend as its own.
+    assert result.bytes_used == 1_500
+    assert result.api_calls_used == 3
+
+    async with test_session_factory() as session:
+        row = (await session.execute(select(ScanRun))).scalars().one()
+
+    assert row.api_calls_used == 3
+    assert row.stage_counts_json["bytes_used"] == 1_500
+
+
+async def test_a_fixture_pass_costs_nothing(scanner, golden_reference_data):
+    """Offline runs bill nothing, so the delta is zero rather than absent or wrong."""
+    result = await scanner.run()
+
+    assert result.bytes_used == 0
+    assert result.api_calls_used == 0

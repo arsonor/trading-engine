@@ -149,6 +149,11 @@ class ScanResult:
     rejections: list[Rejection] = field(default_factory=list)
     tape: MarketTape | None = None
     api_calls_used: int = 0
+    # Bytes this pass pulled from FMP. On Premium bandwidth is the binding constraint,
+    # and the per-pass figure is the one the tiered-cadence decision turns on: the
+    # fan-out returns every 5-minute bar since 04:00, so a pass at 04:05 and a pass at
+    # 09:25 are not the same size, and pass counts alone overstate what thinning saves.
+    bytes_used: int = 0
     duration_s: float = 0.0
     error: str | None = None
     dry_run: bool = False
@@ -280,6 +285,11 @@ class Scanner:
             await self._record(result)
             return result
 
+        # Bracket the work with the budget counters, so this pass's own cost is known.
+        # A failed pass still spent whatever it spent before it died, which is why the
+        # closing read happens after the except rather than inside the try.
+        spend_before = await self._budget_counters()
+
         try:
             await self._execute(result, tickers)
             result.status = ScanRunStatus.COMPLETED
@@ -288,10 +298,51 @@ class Scanner:
             result.error = f"{type(exc).__name__}: {exc}"
             logger.exception("Scan failed at %s", describe(as_of))
 
+        self._apply_spend(result, spend_before, await self._budget_counters())
         result.duration_s = time_module.monotonic() - started
         await self._record(result)
         self._log_outcome(result)
         return result
+
+    async def _budget_counters(self) -> tuple[int, int] | None:
+        """Today's (calls, bytes) totals, or None if they cannot be read.
+
+        Read from the shared `api_budget` counters rather than from the FMP client, so
+        the scanner does not have to reach inside whichever provider it was handed — a
+        fixture run simply reports a delta of zero.
+
+        Best-effort by design: instrumentation must never be the reason a pass fails.
+        """
+        try:
+            from app.services.fmp.budget import DailyBudgetGuard
+
+            guard = DailyBudgetGuard(self._session_factory)
+            return await guard.calls_used_today(), await guard.bytes_used_today()
+        except Exception:  # noqa: BLE001 - see docstring
+            logger.debug("Could not read the FMP budget counters for this pass", exc_info=True)
+            return None
+
+    @staticmethod
+    def _apply_spend(
+        result: ScanResult, before: tuple[int, int] | None, after: tuple[int, int] | None
+    ) -> None:
+        """Record what this pass cost, as a delta over the daily counters.
+
+        The delta is honest only because nothing else touches FMP during the scan window:
+        the nightly refresh runs at night, and passes do not overlap. The counters are
+        keyed on the UTC day, and 04:00-09:25 ET is 08:00-13:25 UTC, so a pass can never
+        straddle the rollover that would make a delta negative.
+
+        `api_calls_used` has been on `scan_runs` since the v2 schema and was written as 0
+        by every run ever recorded, because nothing populated it. Both figures matter for
+        the tiered-cadence decision: bytes are the binding constraint on Premium, and the
+        per-pass byte curve is what says whether thinning early passes saves what the
+        pass count suggests it should.
+        """
+        if before is None or after is None:
+            return
+        result.api_calls_used = max(after[0] - before[0], 0)
+        result.bytes_used = max(after[1] - before[1], 0)
 
     async def _execute(self, result: ScanResult, tickers: list[str] | None) -> None:
         if self._snapshots is None:
@@ -460,6 +511,10 @@ class Scanner:
                 "snapshot_source": getattr(self._snapshots, "source", None),
                 "rvol_mode": self._rvol.mode,
                 "duration_s": round(result.duration_s, 3),
+                # In the JSON blob rather than a new column: this is observability that
+                # has to earn a schema change first, and the cadence question it exists
+                # to answer needs a handful of sessions, not a permanent index.
+                "bytes_used": result.bytes_used,
                 # Live-path observability. Without these a morning where 200 of 694
                 # tickers failed to fetch is indistinguishable from a genuinely quiet one —
                 # both just report few candidates.
