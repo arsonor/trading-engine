@@ -1035,6 +1035,20 @@ after the hotfix. Neither blocks promoting the cron out of `--dry-run`.
 
 ### Follow-up A — Tier the early-session cadence
 
+**Status:** ready to run, and now measured rather than assumed
+**Revised:** 15 August 2026, after profiling five live sessions
+
+> **The original brief's premise was wrong, and the measurement is what caught it.** It
+> argued the early session is uninformative because 48 tickers had no settled bars and
+> the Tiingo probe saw 10× more trading tickers at 09:24 than 04:16. The scanner's own
+> funnel does not behave that way: candidate yield is **flat from 04:15 to 08:40**, around
+> 6–7 survivors a pass, and a 05:00 pass surfaces as many as an 08:00 one.
+>
+> Yield turned out to be the wrong measure. Scans are stateless and alerts dedup per
+> ticker, so a run of passes each reporting 20 candidates can be one candidate set
+> re-reported 20 times. **Churn is the deciding number**, and it says what yield hid — see
+> the table in the brief. The conclusion survives; the reasoning behind it is now real.
+
 ````
 # Follow-up — Tiered scan cadence for the early pre-market session
 
@@ -1044,32 +1058,83 @@ Phase 4A projected. 4A assumed 554 tickers at ~9.6 KB mean payload; reality is 6
 — both inputs were wrong in the same direction. Current figures: ~10.2 MB per pass, ~14.1 GB
 per month live, ~23.6 GB total with the nightly cycle.
 
-Still comfortable, but no longer a rounding error, and it grows with the universe.
+Still comfortable, but no longer a rounding error, and it grows with the universe: at the
+current cadence the allowance is exhausted somewhere around 1,400 tickers.
 
-## The observation that makes this cheap
-4C measured **48 tickers with no settled bars at all** early in the session. Pre-07:00 passes
-are therefore both the most expensive per unit of information and the least informative —
-the market is genuinely quiet, not the feed incomplete (independently confirmed by the
-Tiingo probe, which measured ~10× more actively-trading tickers at 09:24 than at 04:16).
+## What the sessions actually show
+Profiled from `scan_runs` across 10–14 August 2026 (5 sessions, 328 completed passes) with
+`scripts/cadence_profile.py`. "First sightings" counts tickers a pass surfaced that no
+earlier pass that morning had; "still confirmed" counts how many of those were still
+candidates at the session's final pass.
+
+| Window        | Passes/session | First sightings | Still confirmed | Keep rate |
+|---------------|---------------:|----------------:|----------------:|----------:|
+| 04:00–04:10   | 3              | 0               | 0               | —         |
+| 04:15–04:20   | 2              | 32              | 8               | 25%       |
+| **04:25–06:55** | **32**       | **50**          | **7**           | **14%**   |
+| 07:00–07:55   | 12             | 34              | 8               | 24%       |
+| 08:00–08:40   | 9              | 26              | 9               | 35%       |
+| **08:45–09:25** | **10**       | **33**          | **24**          | **73%**   |
+
+Three findings drive the design:
+
+1. **04:00, 04:05 and 04:10 found nothing in 15 of 15 session-passes.** Not a quiet market
+   — a structural impossibility. With the ~7-minute settling window the 04:00 bar is not
+   trusted until 04:12, so those passes cannot produce a candidate by construction.
+2. **Half the session's passes carry a seventh of its information.** The 32 passes between
+   04:25 and 06:55 yield 1.4 confirmed-relevant first sightings per session between them.
+3. **The last 40 minutes are the opposite.** 10 passes, 73% keep rate — this is the
+   confirmation window and it must stay at 5 minutes.
+
+Even finding 2 overstates the early passes. A ticker first seen at 05:40 and still
+confirmed at 09:25 *stayed* a candidate throughout, so any later pass would have caught it.
+Early sighting changes nothing about whether a candidate reaches the user.
+
+## Why this is safe
+**Scans are stateless.** The 09:25 pass recomputes every ticker from all bars since 04:00,
+independent of what ran before it. No cadence change can alter the confirmed set. Cadence
+governs only dashboard freshness before 09:25 and the completeness of the faded record.
 
 ## Scope
-- Make the scan cadence **time-dependent and config-driven**: e.g. every 15 minutes from
-  04:00–07:00 ET, every 5 minutes from 07:00–09:25. Projected to bring bandwidth to ~40%.
-- The cadence boundary and both intervals belong in config, not literals — the right split
-  is an empirical question that live observation will refine.
-- The **09:25 authoritative pass must be unaffected**. Verify explicitly.
-- Keep the generous UTC cron schedule and the ET gate exactly as they are; the gating logic
-  is what makes this DST-safe, and it is where the cadence rule belongs.
-- Report measured bandwidth before and after.
+- **Open the window at 04:15, not 04:00.** Three passes per session that provably cannot
+  find anything. This stands on its own and can ship first.
+- Make the cadence **time-dependent and config-driven**, to this measured shape:
+
+  | From  | Until | Interval |
+  |-------|-------|----------|
+  | 04:15 | 07:00 | 60 min (04:15 itself always runs — it is the discovery pass) |
+  | 07:00 | 08:00 | 30 min |
+  | 08:00 | 08:30 | 15 min |
+  | 08:30 | 09:25 | 5 min  |
+
+  19 passes rather than 66. Boundaries and intervals in config, not literals.
+- The **09:25 authoritative pass must be unaffected** — guaranteed by statelessness, but
+  test it explicitly anyway.
+- Keep the generous UTC cron schedule and the ET gate exactly as they are; the gate is what
+  makes this DST-safe and it is where the cadence rule belongs.
+- Report measured bandwidth before and after, from the per-pass `bytes_used` now recorded
+  on every run.
+
+## The cost, stated plainly
+Of 175 first sightings, 119 faded before the final pass. Those are the "spiked at 05:10 and
+died" rows, and **Phase 6 outcome labelling is the customer for them**. Coarsening the early
+session loses a share of that training data permanently — it cannot be reconstructed later,
+since re-fetched history has settled upward. This is the one real trade, and it should be
+made deliberately rather than discovered in Phase 6.
 
 ## Constraints
 - No change to stage logic, thresholds, or the alert contract.
 - DST tests must still pass — a time-dependent cadence is one more thing that can drift.
+- `scan_runs` heartbeat rows rise from ~18 to ~62 per session as more wake-ups skip. `/status`
+  already computes health from the last run that attempted work, but check the Scans page,
+  which shows the ten most recent runs and will otherwise show nothing but heartbeats.
 
 ## Definition of done
-1. Cadence is config-driven and time-dependent; the 09:25 pass is provably unaffected
-2. Measured bandwidth reported before and after, projected against 50 GB / 30 days
-3. DST tests pass; tests pass offline; ruff clean
+1. The window opens at 04:15; the three dead passes are gone, with a test
+2. Cadence is config-driven and time-dependent; the 09:25 pass is provably unaffected
+3. Measured bandwidth reported before and after, projected against 50 GB / 30 days
+4. The Scans page still answers "is the scanner working?" under the heavier heartbeat rate
+5. DST tests pass; tests pass offline; ruff clean
 ````
 
 ### Follow-up B — Make the profile build genuinely incremental
