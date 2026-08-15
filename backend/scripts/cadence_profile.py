@@ -22,6 +22,18 @@ argument for it rests on two curves:
 The Tiingo probe measured 04:16-05:12 and 08:38-09:29 and nothing in between, which is
 exactly where the proposed 07:00 and 08:00 boundaries sit. This closes that hole with
 data the scanner has been collecting all along.
+
+**Yield is not the deciding number, churn is.** Scans are stateless and alerts dedup per
+(ticker, session), so a pass only earns its place if it surfaces a ticker the *next* pass
+would not have surfaced anyway. A run of passes all reporting 20 candidates is one
+candidate set being re-reported, not twenty passes' worth of information. So this also
+reports, per clock time, how many tickers appear for the FIRST time in that pass — and
+how many of those were still candidates at the session's final pass, which is the only
+sighting that reaches the user as a confirmed candidate.
+
+Simulated and fixture runs are excluded by default (`snapshot_source`): `--at` reruns
+during development land in `scan_runs` next to real passes and will otherwise skew any
+clock time they happen to cluster on.
 """
 
 import argparse
@@ -43,6 +55,17 @@ STAGE_2_KEY = "stage_2_momentum"
 STAGE_3_KEY = "stage_3_room_to_run"
 RISK_KEY = "risk_filters"
 
+# `--at` reruns against fixtures write real `scan_runs` rows. They are development
+# artefacts, not passes the market ever saw, and they cluster on whatever clock time was
+# convenient that afternoon.
+SOURCE_LIVE = "fmp-live"
+
+
+def _candidates(run: ScanRun) -> set[str]:
+    """The tickers this pass surfaced, as stored on the run."""
+    tickers = (run.stage_counts_json or {}).get("candidates")
+    return {t for t in tickers if isinstance(t, str)} if isinstance(tickers, list) else set()
+
 
 @dataclass
 class Bucket:
@@ -53,6 +76,23 @@ class Bucket:
     stage_2: list[int] = field(default_factory=list)
     survivors: list[int] = field(default_factory=list)
     bytes_used: list[int] = field(default_factory=list)
+    # Tickers seen for the first time in this pass, and how many of those were still
+    # candidates at the session's final pass. The second number is the one that says
+    # whether an early sighting ever reached the user as a confirmed candidate.
+    first_seen: list[int] = field(default_factory=list)
+    first_seen_confirmed: list[int] = field(default_factory=list)
+
+    @property
+    def mean_first_seen(self) -> float:
+        return sum(self.first_seen) / len(self.first_seen) if self.first_seen else 0.0
+
+    @property
+    def total_first_seen(self) -> int:
+        return sum(self.first_seen)
+
+    @property
+    def total_first_seen_confirmed(self) -> int:
+        return sum(self.first_seen_confirmed)
 
     @property
     def mean_stage_2(self) -> float:
@@ -83,14 +123,17 @@ def _as_of(run: ScanRun) -> datetime | None:
         return None
 
 
-async def profile_cadence(since: date | None, csv_path: str | None) -> int:
+async def profile_cadence(
+    since: date | None, csv_path: str | None, include_simulated: bool
+) -> int:
     async with async_session_maker() as db:
         stmt = select(ScanRun).where(ScanRun.status == ScanRunStatus.COMPLETED)
         rows = (await db.execute(stmt.order_by(ScanRun.started_at))).scalars().all()
 
-    buckets: dict[str, Bucket] = defaultdict(Bucket)
-    sessions: set[date] = set()
+    # One ordered timeline per session, so "first seen" means first in that morning.
+    timeline: dict[date, list[tuple[datetime, ScanRun]]] = defaultdict(list)
     skipped_undated = 0
+    skipped_simulated = 0
 
     for run in rows:
         as_of = _as_of(run)
@@ -99,41 +142,71 @@ async def profile_cadence(since: date | None, csv_path: str | None) -> int:
             continue
         if since is not None and as_of.date() < since:
             continue
+        source = (run.stage_counts_json or {}).get("snapshot_source")
+        if not include_simulated and source != SOURCE_LIVE:
+            skipped_simulated += 1
+            continue
+        timeline[as_of.date()].append((as_of, run))
 
-        counts = (run.stage_counts_json or {}).get("counts") or {}
-        bucket = buckets[as_of.strftime("%H:%M")]
-        bucket.passes += 1
-        bucket.sessions.add(as_of.date())
-        bucket.stage_2.append(int(counts.get(STAGE_2_KEY) or 0))
-        bucket.survivors.append(int(counts.get(RISK_KEY) or counts.get(STAGE_3_KEY) or 0))
-        # Absent on every run recorded before per-pass byte tracking shipped. Left out
-        # rather than counted as zero — "not measured" and "cost nothing" are different.
-        measured_bytes = (run.stage_counts_json or {}).get("bytes_used")
-        if isinstance(measured_bytes, int):
-            bucket.bytes_used.append(measured_bytes)
-        sessions.add(as_of.date())
+    buckets: dict[str, Bucket] = defaultdict(Bucket)
+    sessions: set[date] = set()
+
+    for session_date, passes in timeline.items():
+        passes.sort(key=lambda pair: pair[0])
+        sessions.add(session_date)
+        confirmed = _candidates(passes[-1][1]) if passes else set()
+        seen_so_far: set[str] = set()
+
+        for as_of, run in passes:
+            counts = (run.stage_counts_json or {}).get("counts") or {}
+            bucket = buckets[as_of.strftime("%H:%M")]
+            bucket.passes += 1
+            bucket.sessions.add(session_date)
+            bucket.stage_2.append(int(counts.get(STAGE_2_KEY) or 0))
+            bucket.survivors.append(int(counts.get(RISK_KEY) or counts.get(STAGE_3_KEY) or 0))
+            # Absent on every run recorded before per-pass byte tracking shipped. Left
+            # out rather than counted as zero — "not measured" and "cost nothing" are
+            # different claims.
+            measured_bytes = (run.stage_counts_json or {}).get("bytes_used")
+            if isinstance(measured_bytes, int):
+                bucket.bytes_used.append(measured_bytes)
+
+            fresh = _candidates(run) - seen_so_far
+            bucket.first_seen.append(len(fresh))
+            bucket.first_seen_confirmed.append(len(fresh & confirmed))
+            seen_so_far |= _candidates(run)
 
     if not buckets:
         print("No completed scan_runs with an ET stamp were found.")
         if skipped_undated:
             print(f"  ({skipped_undated} run(s) had no as_of_et and were ignored.)")
+        if skipped_simulated:
+            print(f"  ({skipped_simulated} simulated run(s) excluded; --include-simulated keeps them.)")
         return 1
 
     print(f"\n{len(sessions)} session(s), {sum(b.passes for b in buckets.values())} completed pass(es)")
     print(f"Sessions: {', '.join(sorted(s.isoformat() for s in sessions))}\n")
 
-    header = f"{'ET':>6}  {'passes':>6}  {'stage2 mean':>11}  {'productive':>10}  {'survivors':>9}  {'MB/pass':>7}"
+    header = (
+        f"{'ET':>6}  {'passes':>6}  {'stage2':>7}  {'survivors':>9}  "
+        f"{'new':>5}  {'new kept':>8}  {'MB/pass':>7}"
+    )
     print(header)
     print("-" * len(header))
 
     for clock in sorted(buckets):
         b = buckets[clock]
-        productive = f"{b.productive_passes}/{b.passes}"
         megabytes = f"{b.mean_bytes / 1_000_000:.2f}" if b.bytes_used else "  --"
+        kept = f"{b.total_first_seen_confirmed}/{b.total_first_seen}"
         print(
-            f"{clock:>6}  {b.passes:>6}  {b.mean_stage_2:>11.2f}  {productive:>10}  "
-            f"{b.mean_survivors:>9.2f}  {megabytes:>7}"
+            f"{clock:>6}  {b.passes:>6}  {b.mean_stage_2:>7.2f}  {b.mean_survivors:>9.2f}  "
+            f"{b.mean_first_seen:>5.2f}  {kept:>8}  {megabytes:>7}"
         )
+
+    print(
+        "\nnew      = tickers surfaced for the FIRST time in that pass, per pass\n"
+        "new kept = how many of those were still candidates at the session's final pass"
+    )
 
     measured = sum(len(b.bytes_used) for b in buckets.values())
     if not measured:
@@ -173,7 +246,16 @@ def _write_csv(path: str, buckets: dict[str, Bucket]) -> None:
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(
-            ["et", "passes", "stage_2_mean", "productive_passes", "survivors_mean", "bytes_mean"]
+            [
+                "et",
+                "passes",
+                "stage_2_mean",
+                "productive_passes",
+                "survivors_mean",
+                "first_seen",
+                "first_seen_confirmed",
+                "bytes_mean",
+            ]
         )
         for clock in sorted(buckets):
             b = buckets[clock]
@@ -184,6 +266,8 @@ def _write_csv(path: str, buckets: dict[str, Bucket]) -> None:
                     round(b.mean_stage_2, 3),
                     b.productive_passes,
                     round(b.mean_survivors, 3),
+                    b.total_first_seen,
+                    b.total_first_seen_confirmed,
                     round(b.mean_bytes, 1) if b.bytes_used else "",
                 ]
             )
@@ -195,6 +279,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--since", help="Only sessions on or after this date (YYYY-MM-DD).")
     parser.add_argument("--csv", help="Also write the table to this CSV path.")
+    parser.add_argument(
+        "--include-simulated",
+        action="store_true",
+        help="Keep fixture/--at reruns. They are development artefacts, not real passes.",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     configure_logging(args.verbose)
@@ -204,6 +293,7 @@ if __name__ == "__main__":
             profile_cadence(
                 date.fromisoformat(args.since) if args.since else None,
                 args.csv,
+                args.include_simulated,
             )
         )
     )
