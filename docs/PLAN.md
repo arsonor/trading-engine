@@ -518,10 +518,6 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       now BCAR at 95.6% rather than FFAI at 540%. Note 14 integrity findings across 7
       tickers but only **1** suppression — the other six never reached Stage 3, so they
       were already being rejected on gap or RVOL.
-- [ ] **Consider tightening `scan_upside_max`.** 100% was chosen deliberately generous, but
-      the top surviving row is now BCAR at 95.6% — just under the ceiling. Whether a ~2×
-      upside is a real target or the same problem one notch down is a strategy question for
-      live observation, not something to guess at now.
 - [x] **✅ FIXED (8 August 2026) — the observation window was recording nothing.**
       Phase 4C specified "full pipeline, `scan_runs` recorded, no alerts persisted" and
       implemented it by reusing `--dry-run`, which has meant *touch nothing* since Phase 2.
@@ -539,26 +535,73 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       contract, and as a "no alerts" badge on the Scans page — because during observation a
       perfectly healthy run produces zero alerts by design, which is otherwise
       indistinguishable from a quiet market.
-- [ ] **Promote the cron to live.** Delete `--no-alerts` from `render.yaml` once several
-      sessions of `scan_runs` show a sane candidate count and plausible content.
-      30/morning is promising, not yet proven — and until this hotfix deploys there is
-      still no observation data at all.
-- [ ] **First weeks of live observation**: alerts per morning, threshold calibration.
+- [x] **Promote the cron to live** — ✅ **DONE.** `--no-alerts` removed from `render.yaml`.
+      Alerts now persist and broadcast from every pass. Promoted after three observation
+      sessions (10–14 August 2026) showed a stable pipeline, sane candidate counts and zero
+      failures.
+- [x] **09:25 authoritative pass** — ✅ **DONE.** It had never executed in production:
+      Render's 10–45 s scheduler latency meant the 13:25 UTC run started at 09:25:10 ET, and
+      a full-timestamp comparison put it outside a window ending at 09:25:00. The log read
+      "09:25 is outside the 04:00-09:25 window". Fixed by comparing at **minute resolution**
+      — the same correction made in Phase 2 for percentage thresholds, and for the same
+      reason: the value displayed and the value decided on must be the same value. Verified
+      12 August: 13:25 completes with real work (65 → 30 → 30), 13:30 skips. Boundary exact.
+- [x] **`skipped` runs now recorded** — ✅ **DONE**, alongside the boundary fix.
+      `ScanRunStatus.SKIPPED` was defined and documented but never written, so querying for
+      it returned nothing and could not distinguish "cron fired and correctly skipped" from
+      "cron never fired". Run accounting is now complete: **84 scheduled = 66 completed + 18
+      skipped**, skips exiting in ~0.05 s against ~65 s for real work.
+- [x] **Tighten `scan_upside_max`?** — ✅ **CLOSED, no change needed.** The question was
+      whether a ~2× upside survivor (BCAR at 95.6%, just under the 100% ceiling) meant the
+      collapsed-stock pathology had merely moved one notch down. It has not: the confidence
+      score's upside factor **saturates** at `upside_min × score_upside_saturation_multiple`
+      = 5.5 × 3.0 = **16.5%**, above which it clamps to 1.0. BCAR at 95.6% therefore scores
+      identically on that factor to a stock with 17% headroom — being collapsed buys no
+      ranking advantage, and the dashboard sorts by confidence, not upside.
+      Three independent barriers now apply: `price_regime_break` rejects the extreme cases
+      outright, the factor saturates, and `score_data_quality` applies
+      `score_penalty_null_upside`. `scan_upside_max = 100` stays generous as a backstop
+      against absurdity rather than the primary defence — tightening it would risk excluding
+      a legitimate post-crash retrace for no ranking benefit.
+      *(RVOL and liquidity saturate too, liquidity on a log scale, so no single factor can
+      dominate through sheer magnitude.)*
+- [x] **Threshold calibration** — not needed on current evidence. Three sessions produced
+      1–32 candidates per pass with a coherent intraday ramp, tracking market conditions
+      rather than emitting a constant. Thresholds stay at 3–15% gap, RVOL > 10%, upside
+      ≥ 5.5%.
+- [ ] **First weeks of live observation.** Now that alerts persist: watch alerts per morning
+      and their content. Candidate counts at the authoritative pass ranged **~7 (Tue) to 30
+      (Wed)** — a 4× spread across ordinary sessions. On a busy morning the end user sees a
+      long list, which makes the **confidence ranking** the thing he actually relies on —
+      and that ranking is provisional until Phase 6.
 - [ ] **Tier the early cadence.** Bandwidth measured at ~47% of the 50 GB allowance, not the
       ~15% 4A projected (671 tickers at ~15 KB, versus 554 at ~9.6 KB assumed — both inputs
-      wrong in the same direction). 15-minute passes until 07:00 bring it to ~40%, and those
-      passes are the least valuable: 48 tickers had no settled bars that early.
+      wrong in the same direction). **Now profiled rather than assumed** (15 August, 5
+      sessions, 328 passes, `scripts/cadence_profile.py`): candidate *yield* is flat from
+      04:15 to 08:40, so the original "early passes are uninformative" argument was wrong.
+      *Churn* is the deciding number — the 32 passes from 04:25 to 06:55 produce 1.4
+      confirmed-relevant first sightings per session between them, against a 73% keep rate
+      in the last 40 minutes. Target shape: 04:15 → hourly → 07:00 → 30 min → 08:00 →
+      15 min → 08:30 → 5 min → 09:25, i.e. 19 passes rather than 66. Safe because scans are
+      stateless: the 09:25 pass recomputes from all bars since 04:00, so no cadence change
+      can alter the confirmed set. The one real cost is Phase 6 training data — 119 of 175
+      first sightings faded, and those rows cannot be reconstructed later.
+- [ ] **Open the scan window at 04:15, not 04:00.** Separable from the tiering and worth
+      doing alone: the 04:00, 04:05 and 04:10 passes produced zero candidates in 15 of 15
+      session-passes, structurally — with the ~7-minute settling window the 04:00 bar is not
+      trusted until 04:12, so those passes cannot produce one.
 - [ ] **Make the volume-profile build incremental across days.** It is incremental *within* a
       day (5 calls, 9 s) but a fresh night still rebuilds all 20 sessions per ticker:
       ~2,776 calls, ~140 MB. Roughly 4× more than needed.
-- [ ] News/catalyst tagging → **Phase 5**, deliberately: adding a second new data source in
-      the same phase makes a bad alert harder to diagnose.
+- [ ] **Persist candidate detail, not just tickers.** `stage_counts_json.candidates` stores
+      plain ticker strings, so each candidate's gap, RVOL, upside and confidence exist only
+      in the CLI output and (now) the `alerts` table. Phase 6 replays stored `scan_runs`, so
+      any pass whose candidates were not promoted to alerts is unreconstructable.
 
 ---
 
 ### Phase 5 (V2/V3) — Enrichment
-Sector relative strength, bid-ask spread, short interest (slow signal), halt-risk flag,
-gap-and-go history.
+News/catalyst tagging, Sector relative strength, bid-ask spread, short interest (slow signal), halt-risk flag, gap-and-go history.
 
 ### Phase 6 (V3) — Backtesting & Calibration
 No new subscription — same Premium key, deeper work. Historical replay harness over stored
@@ -598,13 +641,15 @@ scan-failure alerting (a silent failed scan is the worst bug this app can have).
 | Risk | Impact | Mitigation |
 |---|---|---|
 | ~~Split-distorted reference data~~ **DISPROVED** | — | `historical-price-eod/full` is already split-adjusted (verified: price and volume ratios both exactly 150.0 against the non-split-adjusted series). The flagged tickers were real collapses, not data errors |
-| **Extreme-upside candidates from collapsed stocks** | A stock down 85% has all historical levels far above it → huge upside → outranks genuine setups | `scan_upside_max` (100%) and `scan_price_regime_break_ratio` (3×) reject as risk filters with named reasons. **Open:** whether the confidence score's upside factor saturates — if it is linear, the same pathology survives the ceiling and reappears in the ranking |
+| ~~Extreme-upside candidates from collapsed stocks~~ **CONTAINED** | A stock down 85% has all historical levels far above it → huge upside → could outrank genuine setups | **Three independent barriers.** (1) `price_regime_break` (3×) and `scan_upside_max` (100%) reject the extremes as named risk-filter rejections. (2) The confidence score's upside factor **saturates at 16.5%** (5.5 × 3.0), so extra headroom buys no ranking advantage — and the dashboard sorts by confidence. (3) `score_data_quality` penalises unmeasured headroom. Verified live 11 Aug: all candidates 1.7–13.5% upside, no collapsed names in the list |
+| **Confidence ranking is unvalidated** | On a busy morning the user sees ~30 candidates and relies on the ordering to pick. The weights are reasoned assumptions, not fitted | Labelled provisional in API and UI; every score exposes its full factor breakdown so the *why* is inspectable. Only Phase 6 backtesting retires `is_provisional` |
 | Bandwidth growth with universe size | 47% of 50 GB at 671 tickers; scales linearly | Tiered cadence (→ ~40%); bandwidth tracking in the guard; 400-day EOD bound |
-| Render cron UTC/DST drift | Wrong-hour scans twice a year | Explicit ET conversion, generous UTC schedule + ET gate, DST tests |
+| Render cron UTC/DST drift | Wrong-hour scans twice a year | Explicit ET conversion, generous UTC schedule + ET gate, DST tests. **Also:** boundary comparisons are minute-resolution, so scheduler latency cannot push a scheduled pass outside its own window — that bug silently cost the authoritative 09:25 pass for three sessions |
 | Silent scan failure | Looks like a quiet market | `scan_runs` failure taxonomy + distinct UI states + failure alerting (Phase 7) |
 | Demo profile confused for production | Misleading alerts | Profile name stamped on every scan run and alert; demo output badged in the UI |
 | Supabase RLS on public tables | Without RLS, anyone with the project URL + anon key can read/write via the auto-generated Data API | RLS enabled with **no policies** on every public table — denies the Data API, leaves the app unaffected (backend connects as `postgres`, which bypasses RLS). A CI test fails if any table lacks it |
 | Over-trusting the confidence score | User treats provisional weights as validated | Labelled provisional in API and UI until Phase 6 |
+| **Alert volume variance** | Candidate counts at the authoritative pass ranged 7–30 across three ordinary sessions. A 30-row list is not a short list | Not a fault — it tracks real market conditions. But it shifts the burden onto the confidence ranking, and the end user should be told plainly that a busy morning yields a long list and the ordering is provisional |
 
 ---
 
