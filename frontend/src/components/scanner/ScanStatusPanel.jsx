@@ -7,6 +7,12 @@
  * checking whether the alert list happens to be empty. An empty list is a normal,
  * frequent, healthy outcome; an outage is not, and a user who cannot tell them apart
  * will eventually trust neither.
+ *
+ * The counts follow the same rule. "Confirmed at 09:25" and "seen this session" are
+ * different numbers — 11 and 37 on the morning this split was written — and the panel
+ * showed the second under a label that claimed the first, directly above a funnel that
+ * contradicted it. Both are shown, each saying what it is, and neither is silently
+ * substituted for the other.
  */
 
 const STATE_PRESENTATION = {
@@ -112,7 +118,19 @@ export default function ScanStatusPanel({ status }) {
               </div>
             )}
             <div>
-              <dt className="inline text-slate-500">Candidates: </dt>
+              <dt className="inline text-slate-500">Confirmed at 09:25: </dt>
+              <dd className="inline font-medium text-slate-800">
+                {status.final_pass_complete ? (
+                  status.confirmed_count ?? 0
+                ) : (
+                  // Before the final pass there is no confirmed set at all. A "0" here
+                  // would read as "nothing survived" rather than "not yet decided".
+                  <span className="text-slate-500">pending</span>
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="inline text-slate-500">Seen this session: </dt>
               <dd className="inline">{status.alert_count}</dd>
             </div>
           </dl>

@@ -84,4 +84,45 @@ describe('ScanStatusPanel', () => {
     render(<ScanStatusPanel status={null} />);
     expect(screen.getByText(/Loading scanner status/)).toBeInTheDocument();
   });
+
+  it('labels the confirmed count and the session total as different numbers', () => {
+    render(
+      <ScanStatusPanel
+        status={{
+          state: 'ok_with_candidates',
+          is_healthy: true,
+          detail: '11 candidate(s) confirmed at the 09:25 ET pass · 37 seen across the session.',
+          alert_count: 37,
+          confirmed_count: 11,
+          final_pass_complete: true,
+          last_run: { id: 3, status: 'completed', started_at: '2026-08-14T13:25:17Z' },
+        }}
+      />
+    );
+
+    expect(screen.getByText(/Confirmed at 09:25:/)).toBeInTheDocument();
+    expect(screen.getByText('11')).toBeInTheDocument();
+    expect(screen.getByText(/Seen this session:/)).toBeInTheDocument();
+    expect(screen.getByText('37')).toBeInTheDocument();
+  });
+
+  it('shows the confirmed count as pending before the 09:25 pass, not as zero', () => {
+    render(
+      <ScanStatusPanel
+        status={{
+          state: 'ok_with_candidates',
+          is_healthy: true,
+          detail: '6 provisional candidate(s) so far this session.',
+          alert_count: 6,
+          confirmed_count: 0,
+          final_pass_complete: false,
+          last_run: { id: 4, status: 'completed', started_at: '2026-08-14T10:40:00Z' },
+        }}
+      />
+    );
+
+    expect(screen.getByText('pending')).toBeInTheDocument();
+    // A "0" here would read as "nothing survived" rather than "not yet decided".
+    expect(screen.queryByText('0')).not.toBeInTheDocument();
+  });
 });
