@@ -193,6 +193,19 @@ skipped" and "the cron never fired" are the same empty query, and only Render's 
 which expire — can separate them. `/status` computes health from the last run that
 attempted work, so the heartbeat never hides a morning's result.
 
+> **A session total is not a scan result.** Alerts dedup per `(ticker, session_date)` and
+> are updated in place across the morning's ~66 passes, so the alert count is "distinct
+> tickers that qualified at some point since 04:00" — not what the last scan found. On 14
+> August 2026 that was 37 against 11 still qualifying at 09:25, and the status panel
+> headlined the 37 as the last scan's result directly above a funnel ending in 11.
+> `/status` therefore returns `alert_count` and `confirmed_count` separately, plus
+> `final_pass_complete`: before 09:25 nothing is confirmed **yet**, which is a different
+> statement from a confirmed count of zero. The dashboard shows the confirmed set first
+> and the faded ones behind a toggle, split on the alert's own `is_final_pass` — never by
+> parsing `suggested_entry_window`, which is prose for a human. Faded candidates are
+> demoted, never dropped: a ticker that spiked at 05:10 and died is real information, and
+> Phase 6 outcome labelling will want it.
+
 ---
 
 ## 5. Database Schema (v2)

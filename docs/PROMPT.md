@@ -603,6 +603,123 @@ the comments in `render.yaml`) and DST-safe.
     tiered early in the session
 ````
 
+## Hotfix (live) — Session total mislabelled as scan result; confirmed vs faded candidates
+
+**Status:** ✅ DONE (15 August 2026)
+**Depends on:** live promotion (done)
+**Size:** small — wording + list separation. No scanner logic.
+**Why now:** this is the first thing the end user actually experiences, and he is now using
+it daily.
+
+> **Both numbers now travel separately.** `/status` returns `confirmed_count` alongside
+> `alert_count`, and the panel labels them "Confirmed at 09:25" and "Seen this session".
+> Neither stands in for the other, and the headline can no longer be contradicted by the
+> funnel printed beneath it.
+>
+> **The third field is the one that makes it honest:** `final_pass_complete`. A confirmed
+> count of 0 means two opposite things at 06:40 and at 09:26, so the panel reads "pending"
+> rather than "0" until the authoritative pass has actually run. It is derived from the
+> `is_final_pass` the pipeline already stamps into `stage_counts_json`, not from the clock
+> at request time — the same rule as everywhere else in this codebase: the value shown is
+> the value that was decided on. A run belonging to a later ET date than the alerts on
+> screen counts as complete, so a finished session is never reported as still pending at
+> 06:00 the next morning.
+>
+> **The cards are split, not filtered.** Confirmed first, faded behind a "show earlier
+> candidates (26)" toggle sorted most-recently-seen first, on the alert's own
+> `is_final_pass` — the API already published it, so nothing parses the entry-window
+> string. Before 09:25 there is no split to make: one "Provisional candidates" list, since
+> calling a 05:10 candidate faded at 06:40 would be false. Verified at 390px with a real
+> mobile viewport: `scrollWidth == clientWidth == 390`, no element overflowing.
+
+````
+# Hotfix — Distinguish confirmed candidates from faded ones
+
+## Bug 1 — The status panel states something untrue
+
+Observed live, 14 August 2026:
+
+    Last scan completed and surfaced 37 candidate(s).
+    Last scan: 14/08/2026 13:25:17
+    Candidates: 37
+
+    Universe: 3964 | Stage 1: 741 | Stage 2: 28 | Stage 3: 11 | Risk filters: 11
+
+The last scan surfaced **11**, not 37. The panel reports a **session total** under a
+**per-scan** label, and the funnel immediately beneath it contradicts the headline.
+
+Alert dedup is per ticker per session (`app/services/alerts/scanner_alerts.py`): one row
+per `(ticker, session_date)`, updated in place across the morning's ~66 passes. So:
+
+- **37** = distinct tickers that qualified at *any* point between 04:00 and 09:25 ET
+- **11** = tickers still qualifying at the **09:25 authoritative pass**
+
+Both numbers are worth showing. Only one of them is "what the last scan found".
+
+**Fix:** state both, each labelled for what it is — e.g. *"11 candidates at the 09:25
+confirmation pass · 37 seen across the session"*. Do not silently swap one for the other:
+the session total is genuinely useful, it is simply not the last scan's result.
+
+## Bug 2 — Confirmed and faded candidates compete for attention
+
+The remaining 26 qualified earlier and then stopped: their gap closed, RVOL fell away, or
+they ran into resistance. The alert card already records which pass last updated it, via
+`suggested_entry_window()`:
+
+- final pass → `09:30-10:00 ET (first 30 minutes of the regular session)`
+- earlier pass → `monitor — provisional at 05:10 ET, confirmed at 09:25 ET`
+
+That distinction is correct and deliberate — a candidate at 05:00 has four hours in which
+to stop being one, so promising an entry window before confirmation would mislead. **But
+it is carried only in small text on each card.** The user opens the dashboard at 09:26 to
+37 cards, of which 26 are effectively expired, and must read each one to work out which 11
+matter. That is precisely the wrong burden at the moment he is deciding what to trade.
+
+**Fix:** separate them in the layout.
+- **Confirmed candidates** (last updated by the authoritative pass) are the primary list,
+  shown first and by default.
+- **Faded candidates** are secondary — collapsed, or behind a "show earlier candidates"
+  toggle, with a count.
+
+Do **not** delete or hide the faded ones. A ticker that spiked at 05:10 and faded is real
+information, and Phase 6 outcome labelling will want it. They simply must not compete with
+the confirmed set.
+
+This is the same principle already applied throughout this codebase — failed scan versus
+quiet market, demo versus production, observation mode versus live. Make the distinction
+that matters visible, rather than requiring the user to reconstruct it.
+
+## Consider (propose rather than implement if it grows the phase)
+
+- Before 09:25 there is no confirmed set at all — every candidate is provisional. The
+  panel should read sensibly mid-session, not just after the final pass.
+- A faded candidate that qualified at 09:20 is a different proposition from one that
+  qualified at 04:30 and has been dead for five hours. Sorting the faded list by last-seen
+  time, most recent first, costs nothing.
+
+## Constraints
+- **No change to scanner logic, stages, thresholds, scoring, or the alert contract's
+  meaning.** This is presentation and wording only.
+- No change to dedup or persistence — one row per (ticker, session) stays correct.
+- If the API must expose which pass last updated an alert, extend the schema and
+  regenerate TS types; do not have the frontend infer it from the entry-window string.
+- Mobile-first: the confirmed/faded split must work on a 390px viewport without
+  horizontal scroll.
+- Existing demo badging, provisional-score labelling and "not financial advice" framing
+  all stay.
+
+## Definition of done
+1. The status panel no longer describes a session total as the last scan's result; both
+   numbers appear, each correctly labelled
+2. Confirmed candidates are visually primary; faded ones are present but secondary
+3. The panel reads sensibly **before** the 09:25 pass, when nothing is confirmed yet
+4. Verified at 390px width
+5. OpenAPI and generated TS types in sync if the API changed
+6. Tests pass offline; ruff and eslint clean
+````
+
+---
+
 ## Hotfix (post-4C) — The 09:25 authoritative pass never runs
 
 **Status:** ✅ DONE (11 August 2026)
