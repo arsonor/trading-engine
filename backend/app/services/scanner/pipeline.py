@@ -52,6 +52,7 @@ from app.services.scanner.integrity import (
     check_price_regime_break,
     check_volume_plausibility,
 )
+from app.services.scanner.observations import ObservationRecorder
 from app.services.scanner.profile_store import load_profiles
 from app.services.scanner.profiles import ThresholdProfile, get_profile
 from app.services.scanner.risk import (
@@ -168,6 +169,13 @@ class ScanResult:
     not_trading: list[str] = field(default_factory=list)
     # Data-integrity guard hits, recorded rather than buried in logs.
     integrity_warnings: list[str] = field(default_factory=list)
+    # Every Stage-1 survivor, carrying whatever the stages computed before each one
+    # stopped advancing. Held on the result so the observation recorder can write the
+    # REJECTED population too — a threshold sweep is a question about the tickers the
+    # scanner threw away, and counts alone cannot answer it. Not serialised into
+    # `stage_counts_json`; it goes to `scan_observations`.
+    stage_1_survivors: list[Candidate] = field(default_factory=list)
+    observations_recorded: int = 0
 
     @property
     def data_quality_rejections(self) -> list[Rejection]:
@@ -226,6 +234,7 @@ class Scanner:
         clock: Clock | None = None,
         rvol_calculator: RvolCalculator | None = None,
         tape_provider: MarketTapeProvider | None = None,
+        observation_recorder: "ObservationRecorder | None" = None,
     ) -> None:
         if session_factory is None:
             from app.core.database import async_session_maker
@@ -237,6 +246,7 @@ class Scanner:
         self._clock = clock or SystemClock()
         self._rvol = rvol_calculator or get_rvol_calculator()
         self._tape = tape_provider or NeutralMarketTape()
+        self._observations = observation_recorder or ObservationRecorder(session_factory)
         # High-water marks live on the Scanner so a long-lived process can compare
         # passes; a one-shot cron simply has nothing to compare against.
         self._volume_guard = VolumeMonotonicityGuard()
@@ -299,6 +309,13 @@ class Scanner:
             logger.exception("Scan failed at %s", describe(as_of))
 
         self._apply_spend(result, spend_before, await self._budget_counters())
+
+        # Before `duration_s` is taken, so the recorded duration includes the cost of
+        # recording. The brief asks for that number; measuring around it would hide it.
+        result.observations_recorded = await self._observations.record(
+            result, result.stage_1_survivors
+        )
+
         result.duration_s = time_module.monotonic() - started
         await self._record(result)
         self._log_outcome(result)
@@ -356,6 +373,10 @@ class Scanner:
             stage1 = await stage_1_liquidity(session, self._profile, tickers)
 
         result.counts.stage_1 = len(stage1)
+        # The same objects the stages enrich in place, so by the end of the pass these
+        # carry each ticker's gap, RVOL and reference values — including for tickers that
+        # were rejected along the way.
+        result.stage_1_survivors = stage1
         # Stage 1 is a SQL filter, so the rejected rows are never materialised; the count
         # difference is the audit trail.
         logger.info(
@@ -515,6 +536,9 @@ class Scanner:
                 # has to earn a schema change first, and the cadence question it exists
                 # to answer needs a handful of sessions, not a permanent index.
                 "bytes_used": result.bytes_used,
+                # 0 on a pass that is neither the final one nor an anchor. That is the
+                # policy working, not a failure — see services/scanner/observations.py.
+                "observations_recorded": result.observations_recorded,
                 # Live-path observability. Without these a morning where 200 of 694
                 # tickers failed to fetch is indistinguishable from a genuinely quiet one —
                 # both just report few candidates.

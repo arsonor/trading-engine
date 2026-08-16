@@ -40,6 +40,7 @@ RLS = "dbdf5784db31"  # RLS enabled on all public tables
 PHASE_4B = "b008d4bf3a18"  # api_budget.bytes_used + universe_runs
 PHASE_4C = "ae74a2cbe20c"  # alerts decision-time provenance
 SCAN_MODE = "3d1177ad1103"  # scan_runs.mode
+SCAN_OBSERVATIONS = "a71f4c9e2d05"  # scan_observations, the Phase 6 evidence table
 
 # Revision-specific tests name the revision they exercise instead of using "head" or
 # a relative "-1". Both of those silently retarget the moment a new migration lands on
@@ -821,6 +822,83 @@ async def test_scan_mode_round_trips_on_populated_scan_runs(scratch_db):
         )}
         assert "mode" not in cols
         assert await conn.fetchval("SELECT api_calls_used FROM scan_runs LIMIT 1") == 42
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", "head", database_url=url)
+
+
+async def test_scan_observations_round_trips_on_populated_scan_runs(scratch_db):
+    """Creating `scan_observations` beside populated `scan_runs`, and dropping it again.
+
+    The table is new and empty on arrival, so the upgrade cannot break existing rows. The
+    two things worth pinning are that the FK accepts a real `scan_runs.id` and that the
+    downgrade does not take the runs with it — `ON DELETE CASCADE` points from
+    observations to runs, and a reader could easily assume it points the other way.
+    """
+    url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
+    _run_alembic("upgrade", f"{SCAN_OBSERVATIONS}-1", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        run_id = await conn.fetchval(
+            "INSERT INTO scan_runs (started_at, finished_at, status, profile, "
+            "api_calls_used) VALUES (now(), now(), 'completed', 'production', 118) "
+            "RETURNING id"
+        )
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", SCAN_OBSERVATIONS, database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO scan_observations (scan_run_id, session_date, observed_at, "
+            "ticker, stage_reached, rejection_reason, gap_pct, is_candidate, "
+            "volume_avg_20d, price_close_yesterday) "
+            "VALUES ($1, $2, $3, 'FLAT', 'stage_2_momentum', 'gap outside band', 1.0, "
+            "false, 1000000, 100.0)",
+            run_id,
+            date(2026, 8, 14),
+            datetime(2026, 8, 14, 9, 25),
+        )
+        row = await conn.fetchrow(
+            "SELECT gap_pct, rvol_pct, rejection_reason FROM scan_observations "
+            "WHERE ticker = 'FLAT'"
+        )
+        assert row["gap_pct"] == 1.0, "the number that caused the rejection is stored"
+        assert row["rvol_pct"] is None, "NULL means never evaluated, not zero"
+
+        # A new public table without RLS is world-writable through the Supabase anon key.
+        assert await conn.fetchval(
+            "SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n "
+            "ON n.oid = c.relnamespace WHERE n.nspname = 'public' "
+            "AND relname = 'scan_observations'"
+        ) is True
+
+        # The unique constraint is what makes a retried write converge.
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await conn.execute(
+                "INSERT INTO scan_observations (scan_run_id, session_date, observed_at, "
+                "ticker, stage_reached) VALUES ($1, $2, $3, 'FLAT', 'stage_2_momentum')",
+                run_id,
+                date(2026, 8, 14),
+                datetime(2026, 8, 14, 9, 25),
+            )
+    finally:
+        await conn.close()
+
+    _run_alembic("downgrade", f"{SCAN_OBSERVATIONS}-1", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        assert await conn.fetchval(
+            "SELECT to_regclass('public.scan_observations') IS NULL"
+        ) is True
+        assert await conn.fetchval(
+            "SELECT api_calls_used FROM scan_runs WHERE id = $1", run_id
+        ) == 118, "dropping the observations must not touch the runs they pointed at"
     finally:
         await conn.close()
 
