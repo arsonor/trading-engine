@@ -41,6 +41,7 @@ PHASE_4B = "b008d4bf3a18"  # api_budget.bytes_used + universe_runs
 PHASE_4C = "ae74a2cbe20c"  # alerts decision-time provenance
 SCAN_MODE = "3d1177ad1103"  # scan_runs.mode
 SCAN_OBSERVATIONS = "a71f4c9e2d05"  # scan_observations, the Phase 6 evidence table
+SESSION_VOLUME = "c92e7b1a4f38"  # premarket_session_volume, incremental profiles
 
 # Revision-specific tests name the revision they exercise instead of using "head" or
 # a relative "-1". Both of those silently retarget the moment a new migration lands on
@@ -899,6 +900,79 @@ async def test_scan_observations_round_trips_on_populated_scan_runs(scratch_db):
         assert await conn.fetchval(
             "SELECT api_calls_used FROM scan_runs WHERE id = $1", run_id
         ) == 118, "dropping the observations must not touch the runs they pointed at"
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", "head", database_url=url)
+
+
+async def test_premarket_session_volume_round_trips_with_a_populated_profile(scratch_db):
+    """Adding per-session curves beside an existing profile, and dropping them again.
+
+    The averages in `premarket_volume_profile` must survive both directions untouched:
+    they are the RVOL denominator, and the scanner keeps running off them whether or not
+    the incremental machinery exists.
+    """
+    url, dsn = scratch_db["sqlalchemy_url"], scratch_db["dsn"]
+    _run_alembic("upgrade", f"{SESSION_VOLUME}-1", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO universe (ticker, is_active, created_at, updated_at) "
+            "VALUES ('INCR', true, now(), now())"
+        )
+        await conn.execute(
+            "INSERT INTO premarket_volume_profile (ticker, bucket_minute, "
+            "avg_cumulative_volume, sessions_sampled, computed_at) "
+            "VALUES ('INCR', 0, 1234.5, 20, now())"
+        )
+    finally:
+        await conn.close()
+
+    _run_alembic("upgrade", SESSION_VOLUME, database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO premarket_session_volume (ticker, session_date, buckets, "
+            "bars_used) VALUES ('INCR', $1, $2, 2)",
+            date(2026, 8, 14),
+            '{"0": 100.0, "5": 150.0}',
+        )
+        # JSON keys are strings on the way out; the model's bucket_map() undoes that.
+        stored = await conn.fetchval(
+            "SELECT buckets FROM premarket_session_volume WHERE ticker = 'INCR'"
+        )
+        assert '"0"' in stored or "'0'" in stored
+
+        assert await conn.fetchval(
+            "SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n "
+            "ON n.oid = c.relnamespace WHERE n.nspname = 'public' "
+            "AND relname = 'premarket_session_volume'"
+        ) is True
+
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await conn.execute(
+                "INSERT INTO premarket_session_volume (ticker, session_date, buckets) "
+                "VALUES ('INCR', $1, $2)",
+                date(2026, 8, 14),
+                "{}",
+            )
+    finally:
+        await conn.close()
+
+    _run_alembic("downgrade", f"{SESSION_VOLUME}-1", database_url=url)
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        assert await conn.fetchval(
+            "SELECT to_regclass('public.premarket_session_volume') IS NULL"
+        ) is True
+        assert await conn.fetchval(
+            "SELECT avg_cumulative_volume FROM premarket_volume_profile "
+            "WHERE ticker = 'INCR'"
+        ) == 1234.5, "the denominator the scanner divides by is untouched"
     finally:
         await conn.close()
 
