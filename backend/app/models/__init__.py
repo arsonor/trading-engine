@@ -2,6 +2,7 @@
 
 from app.models.alert import Alert
 from app.models.api_budget import ApiBudget
+from app.models.premarket_session_volume import PremarketSessionVolume
 from app.models.premarket_volume_profile import PremarketVolumeProfile
 from app.models.reference_data import ReferenceData
 from app.models.scan_observation import ScanObservation
@@ -14,6 +15,7 @@ __all__ = [
     "SETTINGS_ROW_ID",
     "Alert",
     "ApiBudget",
+    "PremarketSessionVolume",
     "PremarketVolumeProfile",
     "ReferenceData",
     "ScanObservation",
