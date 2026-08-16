@@ -1117,10 +1117,32 @@ governs only dashboard freshness before 09:25 and the completeness of the faded 
 
 ## The cost, stated plainly
 Of 175 first sightings, 119 faded before the final pass. Those are the "spiked at 05:10 and
-died" rows, and **Phase 6 outcome labelling is the customer for them**. Coarsening the early
-session loses a share of that training data permanently — it cannot be reconstructed later,
-since re-fetched history has settled upward. This is the one real trade, and it should be
-made deliberately rather than discovered in Phase 6.
+died" rows, and **Phase 6 outcome labelling is the customer for them** — a candidate that
+faded is a negative training example, and coarsening the early session loses a share of them.
+
+Be precise about what "loses" means here, because two different things get confused:
+
+- **Outcomes are re-fetchable.** "Did it reach +5% by 10:30?" is a regular-hours question
+  over liquid bars, measured across 30–60 minutes. Settled history answers it fine.
+- **Decision-time inputs are not.** Three independent reasons, any one of which is enough:
+  4A measured **49.4% of pre-market bars revised upward** within ~7 minutes of closing (the
+  extreme case, AMIX's 04:10 bar, went from 16 to 1,161 — +7,156%), so a replay on settled
+  bars would "detect" candidates nothing could have seen; `reference_data` is one current
+  row per ticker, upserted nightly, so that morning's float, 20-day average volume and
+  20-day high are gone; and `premarket_volume_profile` is likewise unique per
+  `(ticker, bucket_minute)`, so the RVOL denominator is gone too.
+
+**But the loss is smaller than the pass count suggests**, for a reason the churn table
+itself supplies. At 0.2–0.6 new tickers per pass, consecutive early snapshots are
+near-duplicates: 66 of them is not 66 observations, and treating them as independent
+samples would produce confidence intervals far too tight to trust. Phase 6 needs a handful
+of well-spaced anchors — 04:15, 07:00, 08:30 and 09:25 — **all of which the tiered cadence
+keeps**. What actually disappears is transients that both appear and vanish inside a coarse
+gap.
+
+The change that would genuinely serve Phase 6 is orthogonal to this one: storing decision
+time *values* rather than bare tickers. See Follow-up C, which is worth more than this
+brief and does not depend on it.
 
 ## Constraints
 - No change to stage logic, thresholds, or the alert contract.
@@ -1173,6 +1195,89 @@ fixing before the universe grows.
 2. `sessions_sampled` is correct after incremental updates, pinned by a test
 3. Concurrent runs still cannot corrupt a profile
 4. Tests pass offline; ruff clean
+````
+
+### Follow-up C — Persist decision-time detail for Phase 6
+
+**Status:** ready to run
+**Size:** small-to-medium — one table, one write path, no change to any decision
+**Why it outranks Follow-up A:** A is a bandwidth optimisation. This one decides whether
+Phase 6 can answer its questions at all, and every session that passes without it is a
+session whose evidence is gone for good.
+
+````
+# Follow-up — Persist what the scanner saw, not just which tickers it liked
+
+## The problem
+`stage_counts_json` stores candidates as **plain ticker strings** and rejections as
+`{ticker, stage, reason}` with no values. So for any pass, the scanner records *that* CRVO
+was rejected at Stage 2, and never *what its gap and RVOL were*.
+
+Phase 6 is specified as a replay over stored `scan_runs`. Three of its four stated goals
+are blocked or degraded by this:
+
+| Phase 6 goal | Blocked? | Why |
+|---|---|---|
+| Outcome labelling (+5% within the hour?) | No | Regular-hours bars, re-fetchable |
+| Per-signal hit rates, fitted weights | No | The 09:25 alert row already carries features |
+| **Threshold sensitivity sweep** | **Yes** | Needs rejected tickers' *values*; only reasons are stored |
+| Early-vs-late detection value | Partly | Needs intra-session detail, currently tickers only |
+
+The sweep is the one that matters most: `docs/PLAN.md` commits to justifying or revising
+3% / 15% / 10% / 5.5%, and **that question cannot be asked of the data as stored today**,
+at any scan cadence. Widening `gap_min` to 2.5% would surface tickers whose gap was never
+written down.
+
+## Why it cannot be fixed later
+Re-fetching does not recover it. 4A measured 49.4% of pre-market bars revised upward within
+~7 minutes of closing (worst case +7,156%), so settled history is not what the scanner
+decided on. Worse, the denominators are simply gone: `reference_data` is one current row per
+ticker upserted nightly, and `premarket_volume_profile` is unique per
+`(ticker, bucket_minute)`. Neither keeps a single day of history.
+
+**Every session that runs without this is unrecoverable evidence.** That is the whole
+argument for doing it before Follow-up A rather than after.
+
+## Scope
+- A `scan_observations` table: one row per (scan_run, ticker) carrying the Stage-2 inputs
+  and outcome — gap_pct, rvol_pct, rvol_mode, rvol_is_approximate, price, volume,
+  bars_settled_through, provisional_bars_excluded, profile_sessions_sampled, the reference
+  values used as denominators (volume_avg_20d, price_close_yesterday, high_20d, float), the
+  stage reached, and the rejection reason if any.
+- **Written for every Stage-1 survivor** (~741/pass) **at the 09:25 authoritative pass**,
+  which is what makes the sweep possible over the true rejected population.
+- **Written for candidates only** at three earlier anchors — 04:15, 07:00, 08:30 — so the
+  early-versus-late question stays answerable at a granularity that survives the tiered
+  cadence.
+- Nothing else changes: same stages, same thresholds, same alerts, same contract. This is a
+  write path, not a decision path.
+
+## Sizing (why this is affordable)
+| What | Rows/session | Rows/year (250) | ~Size/year |
+|---|---:|---:|---:|
+| Stage-1 survivors at 09:25 | ~741 | ~185,000 | **~19 MB** |
+| Candidates at 3 anchors | ~60 | ~15,000 | ~2 MB |
+
+Roughly 21 MB/year against Supabase's 500 MB. Versioning all of `reference_data` daily
+would cost more and buy less — the per-observation copy of the denominators covers the
+replay case without a second history table.
+
+## Constraints
+- **No change to stage logic, thresholds, scoring, or the alert contract.**
+- Reversible migration, RLS on the new table, round-trip test on populated data.
+- The write must not extend the pass materially or be able to fail it: ~741 rows is one
+  bulk insert, and a failure to record observations must be logged, not raised.
+- Retention: state a policy now (the sizing assumes indefinite; if that changes, say so
+  before the first row is written, not after a year of them).
+
+## Definition of done
+1. `scan_observations` populated at the authoritative pass for every Stage-1 survivor,
+   with the rejection reason and the values behind it
+2. A threshold sweep is demonstrably answerable: a test or script that recomputes the
+   candidate set at a different `gap_min` purely from stored rows
+3. Anchor passes carry candidate detail; the anchors survive a tiered cadence
+4. Pass duration measured before and after; the delta is reported
+5. Migration round-trips on populated data; RLS present; tests pass offline; ruff clean
 ````
 
 ---

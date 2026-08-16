@@ -593,10 +593,19 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
 - [ ] **Make the volume-profile build incremental across days.** It is incremental *within* a
       day (5 calls, 9 s) but a fresh night still rebuilds all 20 sessions per ticker:
       ~2,776 calls, ~140 MB. Roughly 4× more than needed.
-- [ ] **Persist candidate detail, not just tickers.** `stage_counts_json.candidates` stores
-      plain ticker strings, so each candidate's gap, RVOL, upside and confidence exist only
-      in the CLI output and (now) the `alerts` table. Phase 6 replays stored `scan_runs`, so
-      any pass whose candidates were not promoted to alerts is unreconstructable.
+- [ ] **Persist candidate detail, not just tickers.** ⬆ **Do this before tiering the
+      cadence** — see Follow-up C in `docs/PROMPT.md`. `stage_counts_json` stores candidates
+      as plain ticker strings and rejections as `{ticker, stage, reason}` with no values, so
+      the scanner records *that* a ticker was rejected at Stage 2 and never *what its gap and
+      RVOL were*. Phase 6's **threshold sensitivity sweep** — the commitment to justify or
+      revise 3% / 15% / 10% / 5.5% — therefore cannot be asked of the stored data at all, at
+      any cadence.
+      Unfixable in hindsight: 49.4% of pre-market bars revise upward within ~7 minutes, and
+      both denominators are overwritten nightly (`reference_data` is one current row per
+      ticker; `premarket_volume_profile` is unique per `(ticker, bucket_minute)`). Every
+      session that runs without this is evidence gone for good — which is exactly why it
+      outranks a bandwidth optimisation. Sized at ~21 MB/year: Stage-1 survivors at the
+      09:25 pass, candidates at three earlier anchors.
 
 ---
 
