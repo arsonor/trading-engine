@@ -1199,11 +1199,40 @@ fixing before the universe grows.
 
 ### Follow-up C — Persist decision-time detail for Phase 6
 
-**Status:** ready to run
+**Status:** ✅ DONE (16 August 2026)
 **Size:** small-to-medium — one table, one write path, no change to any decision
-**Why it outranks Follow-up A:** A is a bandwidth optimisation. This one decides whether
+**Why it outranked Follow-up A:** A is a bandwidth optimisation. This one decides whether
 Phase 6 can answer its questions at all, and every session that passes without it is a
 session whose evidence is gone for good.
+
+> **The sweep is now demonstrable, which is the only claim worth making.**
+> `test_a_threshold_sweep_is_answerable_from_stored_rows` replays Stage 2's decision at a
+> different RVOL floor from stored rows alone — no re-fetching, no reference-data join, no
+> live scan — recovers the four real survivors exactly, and admits SLOW when the floor
+> drops to 9%. If that test ever stops passing, the Phase 6 commitment is broken again.
+>
+> **Short-circuit evaluation is the one limit, and it is explicit rather than papered
+> over.** A ticker rejected on gap never has RVOL computed, so widening the gap band
+> surfaces tickers whose fate is *unknown*, not *passing*. `sweep_limitations()` states it
+> in one place and the test pins the behaviour: FLAT comes back as unresolved.
+> **Open decision:** evaluating every stage for every ticker regardless of earlier
+> failures would remove the limit and costs no extra API calls — the data is already in
+> memory — but it changes stage flow, which this brief put out of scope.
+>
+> **Cost measured, as the DoD asked.** 741 rows against Postgres: **225 ms median**
+> (min 214, max 248), against a pass that does ~65 s of real work, on 1 pass in 66 plus
+> three anchor passes writing ~16 rows each. Recording is best-effort and cannot fail a
+> scan — `test_a_recording_failure_never_fails_the_scan` pins that a pass whose evidence
+> write explodes still produces its alerts.
+>
+> **Retention: indefinite**, decided 15 August 2026. Revisit before that stops being true,
+> not after a year of rows.
+>
+> One bug worth remembering, caught by the convergence test: clearing a run's existing
+> rows with `session.delete()` does not work, because the ORM's unit of work flushes
+> INSERTs before DELETEs — the deletes landed after the rows they were meant to make room
+> for. It uses a Core `delete()` statement, which also avoids loading 741 objects to throw
+> them away.
 
 ````
 # Follow-up — Persist what the scanner saw, not just which tickers it liked

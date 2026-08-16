@@ -593,8 +593,13 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
 - [ ] **Make the volume-profile build incremental across days.** It is incremental *within* a
       day (5 calls, 9 s) but a fresh night still rebuilds all 20 sessions per ticker:
       ~2,776 calls, ~140 MB. Roughly 4× more than needed.
-- [ ] **Persist candidate detail, not just tickers.** ⬆ **Do this before tiering the
-      cadence** — see Follow-up C in `docs/PROMPT.md`. `stage_counts_json` stores candidates
+- [x] **Persist candidate detail, not just tickers** — ✅ **DONE (16 August 2026).**
+      `scan_observations` records every Stage-1 survivor at the 09:25 pass and candidates at
+      three anchors, with the reference denominators copied onto each row. The threshold
+      sweep is pinned by a test that replays Stage 2 at a different RVOL floor from stored
+      rows alone. Measured cost: 225 ms for 741 rows, on 1 pass in 66. Retention indefinite.
+      One limit, explicit and tested: stages short-circuit, so a gap-rejected ticker has no
+      RVOL and a gap sweep reports it unresolved rather than passing. Original brief below. `stage_counts_json` stores candidates
       as plain ticker strings and rejections as `{ticker, stage, reason}` with no values, so
       the scanner records *that* a ticker was rejected at Stage 2 and never *what its gap and
       RVOL were*. Phase 6's **threshold sensitivity sweep** — the commitment to justify or

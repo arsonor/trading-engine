@@ -224,6 +224,26 @@ attempted work, so the heartbeat never hides a morning's result.
    rvol_pct, rvol_mode, rvol_is_approximate, catalyst, entry_reference_price,
    nearest_resistance, resistance_source, upside_pct, suggested_entry_window,
    confidence_score, score_breakdown_json, is_final_pass, is_read, created_at, updated_at
+7. `scan_observations` — one row per (scan_run, ticker): the Stage-2 inputs and outputs,
+   the stage reached, the rejection reason, and **copies** of the reference values that
+   were its denominators
+
+> **`scan_observations` copies the denominators instead of joining to them.** That
+> duplication is the point. `reference_data` is one current row per ticker and
+> `premarket_volume_profile` is unique per `(ticker, bucket_minute)` — both rebuilt
+> nightly — so a join at read time answers with tonight's numbers rather than the ones the
+> decision was made from. Re-fetching the bars does not help either: 49.4% of pre-market
+> bars are revised upward within ~7 minutes of closing.
+>
+> Written at the **09:25 pass for every Stage-1 survivor** (~741) and at anchor passes
+> (04:15, 07:00, 08:30) for candidates only. The full write is what makes Phase 6's
+> threshold sensitivity sweep possible: a sweep asks about the tickers the scanner
+> **rejected**, and `stage_counts_json` records those as a reason with no numbers.
+>
+> **NULL means not evaluated, never zero.** The stages short-circuit, so a ticker rejected
+> on gap has no RVOL. A sweep that widens the gap band must report such tickers as
+> unresolved rather than as passing — see `sweep_limitations()` in
+> `app/services/scanner/observations.py`.
 
 **Nothing is retained from v1.** `rules` and `watchlist` are both gone; the six tables
 above are the whole schema.
