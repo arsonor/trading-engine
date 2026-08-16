@@ -1161,6 +1161,42 @@ brief and does not depend on it.
 
 ### Follow-up B — Make the profile build genuinely incremental
 
+**Status:** ✅ DONE (16 August 2026)
+
+> **The brief asked for something the schema could not express.** "Add the newest session,
+> drop the oldest" is arithmetic on an average whose per-session contributions were never
+> stored — and the average is taken *per bucket*, over the sessions that reached it, so
+> there is not even a single divisor to subtract from. It needed a table, which the brief
+> did not mention: `premarket_session_volume`, one row per (ticker, session), ~13,400 rows
+> and ~10 MB.
+>
+> **Measured per ticker**, by deterministic test rather than by a same-day re-run — the
+> mistake that made 4B's "5 calls, 9 seconds" look like proof:
+>
+> | Scenario | Requests |
+> |---|---|
+> | fresh night (`test_a_fresh_night_costs_one_call`) | **1** |
+> | same-day re-run | **0** |
+> | forced `--rebuild` | full pagination, as before |
+>
+> Against the documented ~2,776-call baseline that becomes roughly **741 calls and ~37 MB
+> a night, a ~73% cut**. Byte figures come from the next real nightly run.
+>
+> **Backward healing was written and then deleted.** Filling a short history each night
+> cost 5 wasted requests per ticker per night, forever, because stored data cannot
+> distinguish "not fetched yet" from "does not exist" — and the initial build already
+> paginates back ~70 days. `--rebuild` is the repair path instead.
+>
+> **One regression caught by an existing test**, worth remembering: reducing sessions to
+> curves dropped sessions with no pre-market bars, which silently understated
+> `sessions_sampled`. A regular-hours-only session is now stored with an empty bucket map —
+> it counts as sampled, contributes nothing to the average, and keeps the forward cursor
+> from re-fetching that day nightly.
+>
+> The equality test is the one that matters: an incrementally-updated profile is asserted
+> **identical** to a full rebuild of the same window. RVOL divides by this number, so a
+> discrepancy would surface as confident wrong candidates rather than as an error.
+
 ````
 # Follow-up — Incremental pre-market volume profile rebuild
 

@@ -227,6 +227,25 @@ attempted work, so the heartbeat never hides a morning's result.
 7. `scan_observations` — one row per (scan_run, ticker): the Stage-2 inputs and outputs,
    the stage reached, the rejection reason, and **copies** of the reference values that
    were its denominators
+8. `premarket_session_volume` — one row per (ticker, session): the cumulative pre-market
+   volume curve that session contributed to the profile average
+
+> **`premarket_session_volume` exists because an average cannot be rolled forward.**
+> `premarket_volume_profile` stores only `avg_cumulative_volume`, and "add the newest
+> session, drop the oldest" needs the departing session's contribution. Worse, the average
+> is taken **per bucket** — over the sessions that actually reached it — so there is not
+> even a single divisor to work backwards from. Keeping the curves makes a fresh night
+> cost **one request per ticker** instead of a full 20-session refetch.
+>
+> It does not probe backwards to fill a short history. A history shorter than
+> `profile_sessions_target` is almost always a young listing rather than an interrupted
+> build, and stored data cannot tell those apart, so nightly back-probing would spend real
+> calls rediscovering that a young ticker is still young. **`--rebuild` is the repair
+> path**, and the answer when `profile_sessions_target` is raised.
+>
+> A session that traded only in regular hours is stored with an **empty** bucket map, not
+> dropped: it still counts toward `sessions_sampled`, and storing it is what stops the
+> forward cursor re-fetching that day every night.
 
 > **`scan_observations` copies the denominators instead of joining to them.** That
 > duplication is the point. `reference_data` is one current row per ticker and

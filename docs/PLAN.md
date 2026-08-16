@@ -590,9 +590,17 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       doing alone: the 04:00, 04:05 and 04:10 passes produced zero candidates in 15 of 15
       session-passes, structurally — with the ~7-minute settling window the 04:00 bar is not
       trusted until 04:12, so those passes cannot produce one.
-- [ ] **Make the volume-profile build incremental across days.** It is incremental *within* a
-      day (5 calls, 9 s) but a fresh night still rebuilds all 20 sessions per ticker:
-      ~2,776 calls, ~140 MB. Roughly 4× more than needed.
+- [x] **Make the volume-profile build incremental across days** — ✅ **DONE (16 August
+      2026).** A fresh night now costs **one request per ticker** (0 on a same-day re-run,
+      full pagination on `--rebuild`), against ~2,776 calls and ~140 MB for the old nightly
+      rebuild — roughly a 73% cut, to ~741 calls and ~37 MB. Byte figures pending the next
+      real nightly run.
+      Required a table the brief did not anticipate: `premarket_session_volume` keeps the
+      per-session curves, because "drop the oldest" cannot be done on a per-bucket average
+      whose contributions were never stored. That table also retains the RVOL denominator's
+      inputs, closing one of the three reasons a past session cannot be replayed.
+      An incrementally-updated profile is asserted identical to a full rebuild of the same
+      window — RVOL divides by this, so a discrepancy would be silent.
 - [x] **Persist candidate detail, not just tickers** — ✅ **DONE (16 August 2026).**
       `scan_observations` records every Stage-1 survivor at the 09:25 pass and candidates at
       three anchors, with the reference denominators copied onto each row. The threshold
