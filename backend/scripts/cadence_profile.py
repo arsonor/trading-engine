@@ -19,6 +19,12 @@ argument for it rests on two curves:
    runs recorded after per-pass byte tracking shipped, so it fills in from the first
    market morning after that deploy and is reported as "no data" before then.
 
+Once that second curve exists, the script also reports the session's bandwidth under the
+old uniform cadence and under the configured tiers. That comparison is a **measurement,
+not a projection**: a pass's size is a function of its clock time alone, so summing the
+measured curve over a different set of clock times is arithmetic over the same numbers.
+See `_print_bandwidth`.
+
 The Tiingo probe measured 04:16-05:12 and 08:38-09:29 and nothing in between, which is
 exactly where the proposed 07:00 and 08:00 boundaries sit. This closes that hole with
 data the scanner has been collecting all along.
@@ -76,6 +82,7 @@ class Bucket:
     stage_2: list[int] = field(default_factory=list)
     survivors: list[int] = field(default_factory=list)
     bytes_used: list[int] = field(default_factory=list)
+    calls_used: list[int] = field(default_factory=list)
     # Tickers seen for the first time in this pass, and how many of those were still
     # candidates at the session's final pass. The second number is the one that says
     # whether an early sighting ever reached the user as a confirmed candidate.
@@ -110,6 +117,32 @@ class Bucket:
     @property
     def mean_bytes(self) -> float:
         return sum(self.bytes_used) / len(self.bytes_used) if self.bytes_used else 0.0
+
+    @property
+    def mean_calls(self) -> float:
+        return sum(self.calls_used) / len(self.calls_used) if self.calls_used else 0.0
+
+    @property
+    def bytes_per_call(self) -> float:
+        """Mean payload size — the number that reconciles this table with 4C's figure.
+
+        4C reported "672 calls, 10.2 MB" for one full live pass, a ~15 KB mean payload,
+        and the ~47%-of-allowance projection was built on it. The measured curve says a
+        09:25 pass costs ~1.7 MB, roughly six times less, so one of the two inputs moved
+        and the pair of columns is what says which:
+
+        * **payload size** — 4C's pass was an `--at` replay, and for a PAST session the
+          intraday endpoint returns the whole extended day (04:00-20:00, ~190 bars per
+          ticker) rather than only the bars up to now. A live 09:25 pass carries ~65.
+        * **call count** — the Stage-1 set is discovered nightly and has been through a
+          reference-data hotfix and many refreshes since 4C; 671 is not a constant.
+
+        Reported rather than assumed: calls/pass near 670 points at the first, materially
+        fewer at the second. Either way the percentage saving from thinning the cadence is
+        unaffected, because both curves scale with the same Stage-1 count.
+        """
+        calls = sum(self.calls_used)
+        return sum(self.bytes_used) / calls if calls and self.bytes_used else 0.0
 
 
 def _as_of(run: ScanRun) -> datetime | None:
@@ -170,6 +203,12 @@ async def profile_cadence(
             measured_bytes = (run.stage_counts_json or {}).get("bytes_used")
             if isinstance(measured_bytes, int):
                 bucket.bytes_used.append(measured_bytes)
+                # Collected only alongside a byte figure, so the two lists stay aligned
+                # and bytes-per-call is a ratio of the same passes. `api_calls_used` has
+                # existed since the v2 schema and was written as 0 by every run recorded
+                # before per-pass tracking shipped — averaging those in would halve the
+                # payload size and invent a reconciliation that is not there.
+                bucket.calls_used.append(run.api_calls_used or 0)
 
             fresh = _candidates(run) - seen_so_far
             bucket.first_seen.append(len(fresh))
@@ -189,7 +228,7 @@ async def profile_cadence(
 
     header = (
         f"{'ET':>6}  {'passes':>6}  {'stage2':>7}  {'survivors':>9}  "
-        f"{'new':>5}  {'new kept':>8}  {'MB/pass':>7}"
+        f"{'new':>5}  {'new kept':>8}  {'calls':>6}  {'MB/pass':>7}"
     )
     print(header)
     print("-" * len(header))
@@ -197,15 +236,17 @@ async def profile_cadence(
     for clock in sorted(buckets):
         b = buckets[clock]
         megabytes = f"{b.mean_bytes / 1_000_000:.2f}" if b.bytes_used else "  --"
+        calls = f"{b.mean_calls:.0f}" if b.calls_used else "--"
         kept = f"{b.total_first_seen_confirmed}/{b.total_first_seen}"
         print(
             f"{clock:>6}  {b.passes:>6}  {b.mean_stage_2:>7.2f}  {b.mean_survivors:>9.2f}  "
-            f"{b.mean_first_seen:>5.2f}  {kept:>8}  {megabytes:>7}"
+            f"{b.mean_first_seen:>5.2f}  {kept:>8}  {calls:>6}  {megabytes:>7}"
         )
 
     print(
         "\nnew      = tickers surfaced for the FIRST time in that pass, per pass\n"
-        "new kept = how many of those were still candidates at the session's final pass"
+        "new kept = how many of those were still candidates at the session's final pass\n"
+        "calls    = FMP calls that pass made; with MB/pass it gives the mean payload size"
     )
 
     measured = sum(len(b.bytes_used) for b in buckets.values())
@@ -214,6 +255,8 @@ async def profile_cadence(
             "\nNo per-pass byte figures yet: those are recorded from the first market "
             "morning after byte tracking deploys. The stage columns above are complete."
         )
+    else:
+        _print_bandwidth(buckets)
 
     _print_first_productive(buckets)
 
@@ -222,6 +265,85 @@ async def profile_cadence(
         print(f"\nWrote {csv_path}")
 
     return 0
+
+
+def _on_the_five_minute_grid(buckets: dict[str, Bucket]) -> dict[str, float]:
+    """Mean bytes per scheduled slot, keyed to the 5-minute grid the cron fires on.
+
+    A pass that began at 05:06 is the 05:05 wake-up arriving a minute late, not a slot of
+    its own — Render's own lateness plus a minute. Left ungrouped it would be counted as a
+    67th pass while 05:05 looked unmeasured, which would overstate the old cadence's total
+    and understate the new one's coverage. The gate truncates to the minute for the same
+    class of reason; this truncates to the slot.
+    """
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for clock, bucket in buckets.items():
+        if not bucket.bytes_used:
+            continue
+        hour, minute = (int(part) for part in clock.split(":"))
+        grouped[f"{hour:02d}:{minute - minute % 5:02d}"].append(bucket.mean_bytes)
+    return {slot: sum(values) / len(values) for slot, values in grouped.items()}
+
+
+def _print_bandwidth(buckets: dict[str, Bucket]) -> None:
+    """Measured session bandwidth under the old cadence and under the configured one.
+
+    **This is a measurement, not a projection, and the reason is worth stating.** A pass's
+    cost is a function of its clock time and nothing else: the fan-out asks for the day's
+    5-minute bars from 04:00 to now, so a 05:15 pass carries ~15 bars per ticker whether
+    or not a 05:10 pass ran. Scans are stateless. So summing the measured per-pass curve
+    over a different set of clock times gives what that cadence WOULD have cost on the
+    same mornings — the same arithmetic, over a subset of the same numbers.
+
+    Two caveats it would be dishonest to leave out:
+
+    * Only clock times with a measured figure contribute. A tier boundary landing on a
+      minute no pass has sampled yet would be missing, and is reported as such.
+    * The `--at` replays that produced 4C's 10.2 MB figure are excluded from this table
+      entirely (`snapshot_source`), so the two numbers are not comparable. See
+      `Bucket.bytes_per_call`.
+    """
+    from app.services.scanner.cadence import load_cadence
+
+    measured = _on_the_five_minute_grid(buckets)
+    cadence = load_cadence()
+    scheduled = {slot.strftime("%H:%M") for slot in cadence.slots(datetime(2026, 7, 28))}
+
+    before = sum(measured.values())
+    after = sum(mb for clock, mb in measured.items() if clock in scheduled)
+    missing = sorted(scheduled - set(measured))
+
+    print("\nBandwidth — measured per-pass bytes, summed over each cadence")
+    print("-" * 60)
+    print(f"  {'every 5 min (as measured)':<34}{len(measured):>4} passes  {before / 1e6:>8.1f} MB")
+    print(f"  {'configured tiers':<34}{len(scheduled & set(measured)):>4} passes  {after / 1e6:>8.1f} MB")
+    if before:
+        print(f"  {'saving':<34}{'':>11}  {100 * (1 - after / before):>7.1f}%")
+
+    # Against the allowance, which is the only figure that decides anything. 21 trading
+    # days is the conventional month used everywhere else in this project's budgeting.
+    from app.config import get_settings
+
+    allowance_gb = get_settings().fmp_monthly_bandwidth_gb
+    for label, total in (("every 5 min", before), ("configured tiers", after)):
+        monthly_gb = total * 21 / 1e9
+        print(
+            f"  {label:<34}{monthly_gb:>8.2f} GB/month live "
+            f"({100 * monthly_gb / allowance_gb:.1f}% of {allowance_gb:.0f} GB)"
+        )
+
+    if missing:
+        print(
+            f"\n  NOTE: {len(missing)} scheduled clock time(s) have no measured pass yet "
+            f"({', '.join(missing)}), so the tiered figure is a floor, not a total."
+        )
+    print(
+        "\n  Not a projection: a pass's size depends on its clock time alone (the fan-out\n"
+        "  asks for every bar since 04:00), so this is the measured curve re-summed over\n"
+        "  the passes each cadence keeps. The saving is smaller than the pass count\n"
+        "  suggests — the passes kept are the late, expensive ones — and the percentage\n"
+        "  holds at any universe size, since both totals scale with the Stage-1 count."
+    )
 
 
 def _print_first_productive(buckets: dict[str, Bucket]) -> None:
@@ -255,6 +377,8 @@ def _write_csv(path: str, buckets: dict[str, Bucket]) -> None:
                 "first_seen",
                 "first_seen_confirmed",
                 "bytes_mean",
+                "calls_mean",
+                "bytes_per_call",
             ]
         )
         for clock in sorted(buckets):
@@ -269,6 +393,8 @@ def _write_csv(path: str, buckets: dict[str, Bucket]) -> None:
                     b.total_first_seen,
                     b.total_first_seen_confirmed,
                     round(b.mean_bytes, 1) if b.bytes_used else "",
+                    round(b.mean_calls, 1) if b.calls_used else "",
+                    round(b.bytes_per_call, 1) if b.calls_used else "",
                 ]
             )
 
