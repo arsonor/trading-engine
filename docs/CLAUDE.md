@@ -77,7 +77,7 @@ Vercel (frontend, static)
    ▼
 Render Web Service (always-on: REST API + client WebSocket)
    │
-   ├── Render Cron Job (pre-market scanner, 4:00–9:25 AM ET)
+   ├── Render Cron Job (pre-market scanner, 4:15–9:25 AM ET, tiered)
    │        │
    │        └──> FMP API
    ▼
@@ -124,7 +124,7 @@ upside_pct         = (nearest_resistance - price_premarket_current) / price_prem
 - `volume_avg_20d > 500,000`
 - Executed as a SQL query against the pre-computed reference table.
 
-**Stage 2 — Momentum engine (every 5 min, 04:00 → 09:25 ET)**
+**Stage 2 — Momentum engine (every scheduled pass, 04:15 → 09:25 ET — see 4.5)**
 - `3.0 <= gap_pct <= 15.0`
 - `rvol_pct > 10.0`
 
@@ -167,19 +167,54 @@ Every alert carries: `ticker`, `gap_pct`, `rvol_pct`, `catalyst` (nullable),
 
 ### 4.5 Timing model
 
-Scans run **every 5 minutes from 04:00 to 09:25 ET**. Each run is **stateless**: it
-recomputes accumulated premarket volume by summing intraday bars from 04:00 ET to now,
-rather than carrying state between runs. All three stages run on every pass — Stage 3 is
-pure arithmetic over data already in memory, so the upside figure is available throughout
-the session. The **09:25 run is the authoritative pass** (`is_final_pass`), and it is the
-one that pushes the definitive alert set.
+Scans run on a **tiered cadence from 04:15 to 09:25 ET**, 19 passes a session. Each run is
+**stateless**: it recomputes accumulated premarket volume by summing intraday bars from
+04:00 ET to now, rather than carrying state between runs. All three stages run on every
+pass — Stage 3 is pure arithmetic over data already in memory, so the upside figure is
+available throughout the session. The **09:25 run is the authoritative pass**
+(`is_final_pass`), and it is the one that pushes the definitive alert set.
+
+| From  | Until | Interval | Passes |
+|-------|-------|---------:|-------:|
+| 04:15 | 07:00 |   60 min |      3 |
+| 07:00 | 08:00 |   30 min |      2 |
+| 08:00 | 08:30 |   15 min |      2 |
+| 08:30 | 09:25 |    5 min |     12 |
+
+The tiers are config (`SCAN_CADENCE_TIERS`), and the **first tier's start is also when the
+window opens** — one value, so the two cannot drift. The shape was measured over six live
+sessions (10–14, 17 August 2026; 394 completed passes) with `scripts/cadence_profile.py`:
+
+- **04:00, 04:05 and 04:10 produced a Stage 2 survivor in none of 18 session-passes.** Not
+  a quiet market — a structural impossibility. A bar is provisional until
+  `BAR_SETTLE_MINUTES` after it closes, so the 04:00 bar is not trusted until ~04:12.
+- **Half the session's passes carried a seventh of its information.** The 32 passes from
+  04:25 to 06:55 surface ~1.4 tickers a session that are still candidates at 09:25.
+- **The last 40 minutes are the opposite** — 73% of what they surface first survives to the
+  final pass. That is the confirmation window and it stays at 5 minutes.
+
+> **Cadence cannot change the alert set, because scans are stateless.** The 09:25 pass
+> recomputes every ticker from all bars since 04:00 independent of what ran before it, and
+> alerts dedup per `(ticker, session)`. Coarsening the early session changes dashboard
+> freshness before 09:25 and the completeness of the faded record — nothing else. Two
+> guarantees make that structural rather than incidental: the slot list **always ends at
+> 09:25** whatever the tiers say, and the volume-profile bucket epoch stays **04:00** in
+> `bars.bucket_minute` rather than following the window start, so moving the open to 04:15
+> cannot rebase the RVOL denominator.
+
+> **Measured bandwidth** (per-pass `bytes_used`, 17 August 2026): 48.5 MB a session at 66
+> passes, 22.6 MB at 19 — a **53% cut, not the 71% the pass count suggests**, because the
+> fan-out asks for every bar since 04:00 and the passes kept are the late, expensive ones.
+> Against 50 GB / 30 days the live scan is ~2.0% before and ~0.9% after. Phase 4C's
+> "~47% of allowance" was a projection from a 10.2 MB `--at` replay pass and does not
+> survive per-pass measurement; see `docs/PLAN.md` Phase 4C.
 
 > **Render cron is UTC.** ET/DST conversion must be explicit in code. A UTC-pinned
 > schedule silently drifts by one hour twice a year — for a market-timed scanner this is
 > a correctness bug, not a cosmetic one. Schedule generously in UTC and gate the actual
 > work on a computed ET timestamp.
 
-> **The window bounds are minutes, not instants.** 04:00–09:25 means exactly that, so
+> **The window bounds are minutes, not instants.** 04:15–09:25 means exactly that, so
 > the gate truncates to whole minutes before comparing (`clock.at_minute`). Render starts
 > a job 10–45 s after its scheduled minute; comparing full timestamps made the 09:25
 > authoritative pass begin at 09:25:10 and be rejected as outside a window ending at
@@ -187,14 +222,22 @@ one that pushes the definitive alert set.
 > value shown and the value decided on must be the same value. This is a resolution
 > choice, not a grace period: 09:26:00 is still outside.
 
-Wake-ups outside the window write a `scan_runs` row with `status='skipped'` and zero
-counts. They are the cron's heartbeat: without them, "the cron fired and correctly
-skipped" and "the cron never fired" are the same empty query, and only Render's logs —
-which expire — can separate them. `/status` computes health from the last run that
-attempted work, so the heartbeat never hides a morning's result.
+Wake-ups that do no work write a `scan_runs` row with `status='skipped'`, zero counts and a
+`skip_reason`: **`outside_window`** beyond 04:15–09:25, or **`off_cadence`** inside the
+window on a minute the tiers decline. They are the cron's heartbeat: without them, "the
+cron fired and correctly skipped" and "the cron never fired" are the same empty query, and
+only Render's logs — which expire — can separate them.
+
+The tiered cadence makes heartbeats the *majority* of wake-ups — ~65 of a weekday's 84
+against 19 scans — and they now land between the morning's passes rather than only after
+the close. Three things keep that from hiding the morning's result: `/status` computes
+health from the last run that **attempted work**, it also returns **`last_wake_up_at`** so
+"the cron is alive" stays answerable when the last scan is an hour old by design, and the
+Scans page lists **attempted runs only** (`GET /scanner/scan-runs?attempted_only=true`;
+unfiltered by default, which is where "did the cron fire?" is answered).
 
 > **A session total is not a scan result.** Alerts dedup per `(ticker, session_date)` and
-> are updated in place across the morning's ~66 passes, so the alert count is "distinct
+> are updated in place across the morning's 19 passes, so the alert count is "distinct
 > tickers that qualified at some point since 04:00" — not what the last scan found. On 14
 > August 2026 that was 37 against 11 still qualifying at 09:25, and the status panel
 > headlined the 37 as the last scan's result directly above a funnel ending in 11.
@@ -449,7 +492,7 @@ Market-hours dependency makes naive testing impossible. Rules:
 - **Golden-case tests**: hand-built tickers that must pass/fail each stage boundary
   (gap exactly 3.0 / 15.0, rvol 10.0, upside 5.5) to pin inclusive-vs-exclusive edges.
 - **Time injection**: the scanner takes an injectable "now" so any point in the
-  04:00–09:25 window can be simulated. Never call `datetime.now()` directly in logic.
+  04:15–09:25 window can be simulated. Never call `datetime.now()` directly in logic.
 - **DST tests**: assert correct ET resolution on both sides of both DST transitions.
 
 ---

@@ -112,7 +112,7 @@ client + stream manager; watchlist model, API and table; per-tick YAML rule engi
 | Prod DB | **Supabase** | Free tier persists |
 | Backend host | **Render** (web + cron) | Deployed; cron stub live |
 | Frontend host | **Vercel** | Deployed |
-| Scan window | **04:00 → 09:25 ET**, every 5 min | Full early session (V2+; V1 has no intraday) |
+| Scan window | **04:15 → 09:25 ET**, tiered (60/30/15/5 min) | Full early session, sampled by measured value (V2+; V1 has no intraday) |
 | RVOL | **Pluggable**: simple ↔ time-of-day-normalized | Normalized needs `extended=true` — **now available (Premium purchased)**. V2 targets normalized directly, subject to 4A confirming pre-market bar coverage |
 | Scheduler | **Render Cron Job** | Provisioned (stub) |
 
@@ -486,6 +486,15 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
 **Measured, one full live pass:** 60.2 s, 672 calls, 10.2 MB. Funnel 3,948 → 671 → 62 →
 30 → **30 candidates**. 48 tickers not trading yet; 14 integrity findings across 7 tickers.
 
+> **The 10.2 MB is real but was extrapolated wrongly** — corrected 17 August 2026, from
+> per-pass `bytes_used` across six live sessions. That pass was an `--at` replay, and for a
+> *past* session the intraday endpoint returns the whole extended day (~190 bars per
+> ticker); a live pass asks only for the bars up to now, ~65 at 09:25. Measured live cost is
+> **0.05 MB at 04:05 rising to 1.67 MB at 09:25, 48.5 MB a session** — so the monthly
+> projection built on 10.2 MB × 66 passes (14.1 GB live, 23.6 GB total, "~47% of
+> allowance") overstates the live scan by roughly an order of magnitude. Actual live draw is
+> ~1.0 GB/month, ~2.0% of the 50 GB allowance.
+
 **Still open — carried into observation and Phase 5:**
 
 > **Order matters.** The split-adjustment hotfix is **blocking** — do not remove `--dry-run`
@@ -574,22 +583,36 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       (Wed)** — a 4× spread across ordinary sessions. On a busy morning the end user sees a
       long list, which makes the **confidence ranking** the thing he actually relies on —
       and that ranking is provisional until Phase 6.
-- [ ] **Tier the early cadence.** Bandwidth measured at ~47% of the 50 GB allowance, not the
-      ~15% 4A projected (671 tickers at ~15 KB, versus 554 at ~9.6 KB assumed — both inputs
-      wrong in the same direction). **Now profiled rather than assumed** (15 August, 5
-      sessions, 328 passes, `scripts/cadence_profile.py`): candidate *yield* is flat from
-      04:15 to 08:40, so the original "early passes are uninformative" argument was wrong.
-      *Churn* is the deciding number — the 32 passes from 04:25 to 06:55 produce 1.4
-      confirmed-relevant first sightings per session between them, against a 73% keep rate
-      in the last 40 minutes. Target shape: 04:15 → hourly → 07:00 → 30 min → 08:00 →
-      15 min → 08:30 → 5 min → 09:25, i.e. 19 passes rather than 66. Safe because scans are
-      stateless: the 09:25 pass recomputes from all bars since 04:00, so no cadence change
-      can alter the confirmed set. The one real cost is Phase 6 training data — 119 of 175
-      first sightings faded, and those rows cannot be reconstructed later.
-- [ ] **Open the scan window at 04:15, not 04:00.** Separable from the tiering and worth
-      doing alone: the 04:00, 04:05 and 04:10 passes produced zero candidates in 15 of 15
-      session-passes, structurally — with the ~7-minute settling window the 04:00 bar is not
-      trusted until 04:12, so those passes cannot produce one.
+- [x] **Tier the early cadence** — ✅ **DONE (17 August 2026).** 19 passes a session rather
+      than 66: 04:15 → hourly → 07:00 → 30 min → 08:00 → 15 min → 08:30 → 5 min → 09:25,
+      config-driven via `SCAN_CADENCE_TIERS`, gated in `services/scanner/cadence.py`. The
+      shape is measured (6 sessions, 394 passes, `scripts/cadence_profile.py`): candidate
+      *yield* is flat from 04:15 to 08:40, so the original "early passes are uninformative"
+      argument was wrong; *churn* is the deciding number, and the 32 passes from 04:25 to
+      06:55 produce 1.4 confirmed-relevant first sightings a session between them against a
+      73% keep rate in the last 40 minutes. Safe because scans are stateless — pinned by a
+      test that runs the 09:25 pass under a one-pass cadence and the old 5-minute one and
+      asserts an identical candidate set. The slot list always ends at 09:25, so no config
+      value can silence the authoritative pass. Cost: Phase 6 loses the transients that both
+      appear and vanish inside a coarse gap; all four observation anchors (04:15, 07:00,
+      08:30, 09:25) survive.
+      > **The bandwidth premise did not survive measurement, and that is the finding.**
+      > Per-pass `bytes_used` says the live session costs **48.5 MB at 66 passes and 22.6 MB
+      > at 19** — ~2.0% of the 50 GB / 30-day allowance before, ~0.9% after. The "~47% of
+      > allowance" figure below was a projection from 4C's 10.2 MB `--at` replay pass, and an
+      > `--at` replay of a *past* session returns the whole extended day (~190 bars/ticker)
+      > rather than the ~65 a live 09:25 pass carries. The cadence still earns its place on
+      > information grounds; it was never the bandwidth emergency 4C described. Note also
+      > that the saving is **53%, not the 71% the pass count suggests** — the passes kept are
+      > the late, expensive ones.
+- [x] **Open the scan window at 04:15, not 04:00** — ✅ **DONE (17 August 2026),** shipped
+      ahead of the tiering as its own commit. The 04:00, 04:05 and 04:10 passes produced
+      zero candidates in 18 of 18 session-passes, structurally — with the ~7-minute settling
+      window the 04:00 bar is not trusted until ~04:12, so those passes cannot produce one.
+      The window start and the volume-profile bucket epoch were the same constant and are
+      now deliberately separate: `premarket_volume_profile` is keyed on minutes since 04:00
+      and holds stored rows, so a shared constant would have rebased every RVOL denominator
+      lookup by three buckets with no error. A test pins it.
 - [x] **Make the volume-profile build incremental across days** — ✅ **DONE (16 August
       2026).** A fresh night now costs **one request per ticker** (0 on a same-day re-run,
       full pagination on `--rebuild`), against ~2,776 calls and ~140 MB for the old nightly
@@ -665,7 +688,7 @@ scan-failure alerting (a silent failed scan is the worst bug this app can have).
 | ~~Split-distorted reference data~~ **DISPROVED** | — | `historical-price-eod/full` is already split-adjusted (verified: price and volume ratios both exactly 150.0 against the non-split-adjusted series). The flagged tickers were real collapses, not data errors |
 | ~~Extreme-upside candidates from collapsed stocks~~ **CONTAINED** | A stock down 85% has all historical levels far above it → huge upside → could outrank genuine setups | **Three independent barriers.** (1) `price_regime_break` (3×) and `scan_upside_max` (100%) reject the extremes as named risk-filter rejections. (2) The confidence score's upside factor **saturates at 16.5%** (5.5 × 3.0), so extra headroom buys no ranking advantage — and the dashboard sorts by confidence. (3) `score_data_quality` penalises unmeasured headroom. Verified live 11 Aug: all candidates 1.7–13.5% upside, no collapsed names in the list |
 | **Confidence ranking is unvalidated** | On a busy morning the user sees ~30 candidates and relies on the ordering to pick. The weights are reasoned assumptions, not fitted | Labelled provisional in API and UI; every score exposes its full factor breakdown so the *why* is inspectable. Only Phase 6 backtesting retires `is_provisional` |
-| Bandwidth growth with universe size | 47% of 50 GB at 671 tickers; scales linearly | Tiered cadence (→ ~40%); bandwidth tracking in the guard; 400-day EOD bound |
+| Bandwidth growth with universe size | **Far smaller than 4C projected.** Per-pass measurement (17 Aug) puts the live scan at 48.5 MB/session, ~1.0 GB/month, **~2.0% of the 50 GB allowance** — not the 47% projected from a 10.2 MB `--at` replay pass. Still scales linearly with the Stage-1 count | Tiered cadence, now shipped, halves it again (22.6 MB/session, ~0.9%); incremental nightly profile build cut that job ~73%; bandwidth tracking in the guard; 400-day EOD bound |
 | Render cron UTC/DST drift | Wrong-hour scans twice a year | Explicit ET conversion, generous UTC schedule + ET gate, DST tests. **Also:** boundary comparisons are minute-resolution, so scheduler latency cannot push a scheduled pass outside its own window — that bug silently cost the authoritative 09:25 pass for three sessions |
 | Silent scan failure | Looks like a quiet market | `scan_runs` failure taxonomy + distinct UI states + failure alerting (Phase 7) |
 | Demo profile confused for production | Misleading alerts | Profile name stamped on every scan run and alert; demo output badged in the UI |

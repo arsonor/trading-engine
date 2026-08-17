@@ -437,9 +437,14 @@ runs the full pipeline and records `scan_runs`, but persists and broadcasts noth
 several sessions confirm the candidate count is sane. See `render.yaml` for how to promote.
 
 **Four items carried forward** (detail in `docs/PLAN.md` Phase 4C): promote out of dry-run,
-tier the early cadence (bandwidth measured at ~47% of allowance, not the ~15% projected),
-make the profile build incremental across days, and decide what to do about
-split-distorted reference data — currently flagged but not corrected.
+tier the early cadence, make the profile build incremental across days, and decide what to
+do about split-distorted reference data — currently flagged but not corrected.
+
+> The cadence item was framed here as a bandwidth problem — "~47% of allowance, not the
+> ~15% projected". **That framing was wrong**, and per-pass measurement (17 August) says the
+> live scan draws ~2.0% of the allowance. The 10.2 MB above is a real number for an `--at`
+> replay pass, which returns the whole extended day rather than the bars up to now. The
+> cadence was tiered anyway, on information grounds. See Follow-up A.
 
 ````
 # Phase 4C — Live snapshot provider, normalized RVOL, cron go-live
@@ -1035,8 +1040,49 @@ after the hotfix. Neither blocks promoting the cron out of `--dry-run`.
 
 ### Follow-up A — Tier the early-session cadence
 
-**Status:** ready to run, and now measured rather than assumed
+**Status:** ✅ DONE (17 August 2026)
 **Revised:** 15 August 2026, after profiling five live sessions
+
+> **The information case held. The bandwidth case did not, and per-pass measurement is
+> what killed it.** The brief opens on "live bandwidth at ~47% of the 50 GB allowance". That
+> figure was a projection from 4C's one measured pass — 672 calls, 10.2 MB — and that pass
+> was an `--at` replay. For a *past* session the intraday endpoint returns the whole
+> extended day, ~190 bars per ticker; a live 09:25 pass asks only for the bars up to now,
+> ~65. So the projection overstates the live scan by roughly an order of magnitude:
+>
+> | | Passes | MB/session | GB/month live | % of 50 GB |
+> |---|---:|---:|---:|---:|
+> | every 5 min, as measured | 66 | **48.5** | 1.02 | **2.0%** |
+> | tiered cadence, shipped | 19 | **22.6** | 0.47 | **0.9%** |
+>
+> Both figures come from the same source — `bytes_used` recorded on every pass — re-summed
+> over the clock times each cadence keeps. **That is a measurement, not a projection:** a
+> pass's size depends on its clock time alone, because the fan-out asks for every bar since
+> 04:00 regardless of what ran before it. `scripts/cadence_profile.py` prints the comparison
+> and now reports calls per pass alongside bytes, so the next run says which of the two
+> inputs moved — a payload ~6× smaller, or a Stage-1 set smaller than 4C's 671.
+>
+> **The saving is 53%, not the 71% the pass count implies.** The passes kept are the late,
+> expensive ones; 19/66 of the passes is 47% of the bytes. The brief anticipated this and
+> the measurement confirms it.
+>
+> **So the change shipped on the information argument alone**, which is the one that
+> survived: the three 04:00–04:10 passes cannot produce a candidate by construction, and
+> half the session's passes carry a seventh of its new-and-confirmed tickers. It was never
+> the bandwidth emergency 4C described, and saying so is worth more than the 26 MB.
+>
+> **One trap found in the code, not in the brief.** `SCAN_WINDOW_START` was also the
+> volume-profile bucket epoch — `minutes_since_window_open` measured buckets from it. Moving
+> the window to 04:15 through that shared constant would have rebased every RVOL denominator
+> lookup by three buckets against stored `premarket_volume_profile` rows, with no error and
+> no symptom beyond confidently wrong candidates. The helper was a duplicate of
+> `bars.bucket_minute` and is gone; a test pins that the epoch does not follow the window.
+>
+> **Two things the brief did not ask for, both needed before it could ship.** A `skipped`
+> row now carries a `skip_reason` (`outside_window` / `off_cadence`), because 65 of a
+> weekday's 84 wake-ups are skips and "asleep on purpose" had no way to be told from
+> "should have scanned". And `/status` returns `last_wake_up_at` while the Scans page lists
+> attempted runs only — without both, a page of 20 rows was all heartbeats by mid-morning.
 
 > **The original brief's premise was wrong, and the measurement is what caught it.** It
 > argued the early session is uninformative because 48 tickers had no settled bars and

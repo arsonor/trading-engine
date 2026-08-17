@@ -41,7 +41,7 @@ Active traders need to monitor multiple stocks simultaneously for trading opport
 
 The Trading Engine solves these problems by providing:
 
-1. **Scheduled Pre-market Scanning**: A cron job runs a 3-stage filtration pipeline over the universe every 5 minutes from 04:00 to 09:25 ET, using FMP market data.
+1. **Scheduled Pre-market Scanning**: A cron job runs a 3-stage filtration pipeline over the universe on a tiered cadence from 04:15 to 09:25 ET — 19 passes a session, coarse early and every 5 minutes for the last hour — using FMP market data.
 
 2. **Configurable Rule Engine**: Define trading rules in YAML format with conditions, filters, and target calculations. Rules can detect:
    - Price breakouts above resistance levels
