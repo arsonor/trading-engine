@@ -108,6 +108,16 @@ export default function ScanStatusPanel({ status }) {
               <dt className="inline text-slate-500">Last success: </dt>
               <dd className="inline">{formatTime(status.last_successful_run?.started_at)}</dd>
             </div>
+            {/* "Is the cron alive?" and "what did the scanner last see?" are different
+                questions, and since the cadence was tiered they routinely have answers
+                hours apart: 65 of a weekday's 84 wake-ups are deliberate skips. Without
+                this row, an hours-old last scan during a coarse tier looks like a stall. */}
+            <div>
+              <dt className="inline text-slate-500">Last wake-up: </dt>
+              <dd className="inline" title="Includes skipped heartbeats — the cron firing at all.">
+                {formatTime(status.last_wake_up_at)}
+              </dd>
+            </div>
             {status.last_run?.profile && (
               <div>
                 <dt className="inline text-slate-500">Profile: </dt>

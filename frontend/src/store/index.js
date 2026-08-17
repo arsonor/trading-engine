@@ -51,9 +51,16 @@ export const useScannerStore = create((set, get) => ({
     }
   },
 
-  fetchScanRuns: async (limit = 20) => {
+  // `attemptedOnly` defaults to true because of the tiered cadence: 65 of a weekday's 84
+  // cron wake-ups are skipped heartbeats, so an unfiltered page of 20 rows shows nothing
+  // but heartbeats for most of the day and the scan history stops being a scan history.
+  // "Did the cron fire?" is answered by `status.last_wake_up_at` instead.
+  fetchScanRuns: async (limit = 20, attemptedOnly = true) => {
     try {
-      const { data } = await scannerApi.listScanRuns({ limit });
+      const { data } = await scannerApi.listScanRuns({
+        limit,
+        attempted_only: attemptedOnly,
+      });
       set({ scanRuns: data });
     } catch (error) {
       set({ error: error.message });

@@ -52,7 +52,7 @@ paths:
         Alerts for one pre-market session, ordered by confidence (highest first).
         Defaults to the most recent session with alerts.
 
-        One alert per ticker per session: scans run every 5 minutes and update the
+        One alert per ticker per session: the session's 19 scheduled passes update the
         same row in place rather than appending a new alert each pass.
       operationId: listScannerAlerts
       tags:
@@ -155,6 +155,16 @@ paths:
             default: 20
             minimum: 1
             maximum: 100
+        - name: attempted_only
+          in: query
+          description: >-
+            Exclude `skipped` heartbeat wake-ups. The tiered cadence skips ~65 of a
+            weekday's 84 cron wake-ups, so an unfiltered page of 20 rows is all
+            heartbeats for most of the day. Default false keeps the heartbeats
+            queryable — that is where "did the cron fire?" is answered.
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: Scan runs, newest first
@@ -566,7 +576,11 @@ components:
         status:
           type: string
           enum: [completed, failed, skipped, running]
-          description: Never conflate these - failed is an outage, completed is not.
+          description: >-
+            Never conflate these - failed is an outage, completed is not. `skipped` is a
+            cron heartbeat that did no work; `stage_counts.skip_reason` says which kind,
+            `outside_window` (beyond 04:15-09:25 ET) or `off_cadence` (inside the window,
+            on a minute the tiered cadence declines).
         profile:
           type: string
           nullable: true
@@ -613,10 +627,12 @@ components:
           allOf:
             - $ref: '#/components/schemas/ScanRun'
           description: >
-            The most recent run that ATTEMPTED work. Out-of-window wake-ups
-            (status skipped) are excluded: they carry no stage counts and roughly
-            18 of them follow the 09:25 pass each session, so the newest row is
-            usually a heartbeat rather than a scan. They remain in recent_runs.
+            The most recent run that ATTEMPTED work. Skipped wake-ups are excluded:
+            they carry no stage counts and roughly 65 of a weekday's 84 are skips
+            under the tiered cadence, landing between the morning's passes as well
+            as after the close, so the newest row is usually a heartbeat rather than
+            a scan. They remain in recent_runs, and last_wake_up_at reports the most
+            recent of them.
         last_successful_run:
           $ref: '#/components/schemas/ScanRun'
         is_healthy:
@@ -624,9 +640,9 @@ components:
         state:
           type: string
           description: >
-            skipped means the cron is alive but has not yet woken inside the
-            04:00-09:25 ET window — distinct from never_run, which means nothing
-            has fired at all.
+            skipped means the cron is alive but has not yet woken on a scheduled
+            pass inside the 04:15-09:25 ET window — distinct from never_run, which
+            means nothing has fired at all.
           enum:
             - never_run
             - ok_with_candidates
@@ -645,7 +661,7 @@ components:
           default: 0
           description: >
             Distinct tickers that qualified at ANY point in the session. Alerts dedup
-            per (ticker, session) across the morning's ~66 passes, so this is a session
+            per (ticker, session) across the morning's 19 passes, so this is a session
             total and NOT the last scan's result — pair it with confirmed_count rather
             than presenting it under a per-scan label.
         confirmed_count:
@@ -661,6 +677,15 @@ components:
             Whether the 09:25 ET confirmation pass has run for this session. False means
             nothing is confirmed YET, which is a different statement from a confirmed
             count of zero.
+        last_wake_up_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            When the cron last woke up AT ALL, skipped heartbeats included. Distinct
+            from last_run, which is the last wake-up that attempted work: under the
+            tiered cadence an hours-old last_run is normal during a coarse tier, so
+            this is what says the scanner is asleep on purpose rather than dead.
         recent_runs:
           type: array
           items:

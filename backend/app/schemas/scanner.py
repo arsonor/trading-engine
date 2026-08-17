@@ -245,6 +245,14 @@ class ScannerStatus(BaseModel):
                     "False means nothing is confirmed YET — which is not the same "
                     "statement as a confirmed count of zero.",
     )
+    # When the cron last woke up AT ALL, heartbeats included. Distinct from `last_run`,
+    # which is the last wake-up that attempted work, and the two answer different
+    # questions: "is the cron alive right now?" against "what did the scanner last see?".
+    # Both are needed since the cadence was tiered — 65 of a weekday's 84 wake-ups are now
+    # heartbeats, so an hours-old `last_run` is normal and is not evidence of a fault.
+    last_wake_up_at: Optional[datetime] = Field(
+        None, description="Last cron wake-up of any kind, including skipped heartbeats."
+    )
     recent_runs: list[ScanRunOut] = Field(default_factory=list)
 
 

@@ -173,14 +173,30 @@ async def mark_alert_read(alert_id: int, db: AsyncSession = Depends(get_db)) -> 
 
 @router.get("/scan-runs", response_model=list[ScanRunOut])
 async def list_scan_runs(
-    limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)
+    limit: int = Query(20, ge=1, le=100),
+    attempted_only: bool = Query(
+        False,
+        description=(
+            "Exclude `skipped` heartbeat wake-ups. The tiered cadence skips 65 of a "
+            "weekday's 84 wake-ups, so an unfiltered page of 20 shows nothing else."
+        ),
+    ),
+    db: AsyncSession = Depends(get_db),
 ) -> list[ScanRunOut]:
-    """Recent scan runs, newest first."""
-    rows = (
-        (await db.execute(select(ScanRun).order_by(ScanRun.started_at.desc()).limit(limit)))
-        .scalars()
-        .all()
-    )
+    """Recent scan runs, newest first.
+
+    `attempted_only` exists because of the cadence, not as a convenience. Heartbeats
+    outnumbered real passes ~18 to 66 before Follow-up A and outnumber them ~65 to 19
+    after it, so the newest 20 rows became all heartbeats within an hour of the close —
+    the Scans page's own answer to "is the scanner working?" buried under the evidence
+    that the cron is alive. Default `False` keeps the existing contract: the heartbeats are
+    still queryable, and that is still where "did the cron fire?" is answered.
+    """
+    stmt = select(ScanRun)
+    if attempted_only:
+        stmt = stmt.where(ScanRun.status != ScanRunStatus.SKIPPED)
+    stmt = stmt.order_by(ScanRun.started_at.desc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
     return [ScanRunOut.from_model(row) for row in rows]
 
 
@@ -193,13 +209,16 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
         .all()
     )
 
-    # `skipped` rows are the cron's heartbeat, not scans: ~18 of them follow the 09:25
-    # pass every session. Taking `recent[0]` as "the last scan" would make the dashboard
-    # read "outside scan window", with no stage counts, from 09:30 ET until the following
-    # morning — the morning's actual result buried under its own heartbeat. So the state
-    # is computed from the last run that ATTEMPTED work, and each of these is its own
-    # query rather than a scan of `recent`: ten heartbeats is less than one session, so
-    # filtering the list in Python would report `None` for both by mid-morning.
+    # `skipped` rows are the cron's heartbeat, not scans: 65 of a weekday's 84 wake-ups
+    # since the cadence was tiered, and they no longer only follow the session — an
+    # off-cadence heartbeat lands between passes all morning. Taking `recent[0]` as "the
+    # last scan" would make the dashboard read "outside scan window", with no stage counts,
+    # for most of the day. So the state is computed from the last run that ATTEMPTED work,
+    # and each of these is its own query rather than a scan of `recent`: ten heartbeats is
+    # a couple of hours, so filtering the list in Python would report `None` by 05:00.
+    #
+    # `last_wake_up` is still returned, as `last_wake_up_at`: with a coarse cadence an
+    # hours-old `last_run` is normal, and the heartbeat is what says the cron is alive.
     last_wake_up = recent[0] if recent else None
     last_run = await db.scalar(
         select(ScanRun)
@@ -302,6 +321,7 @@ async def get_scanner_status(db: AsyncSession = Depends(get_db)) -> ScannerStatu
         alert_count=alert_count,
         confirmed_count=confirmed_count,
         final_pass_complete=final_pass_done,
+        last_wake_up_at=last_wake_up.started_at if last_wake_up else None,
         recent_runs=[ScanRunOut.from_model(r) for r in recent],
     )
 

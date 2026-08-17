@@ -1,8 +1,15 @@
 /**
  * Scan history — the audit trail.
  *
- * Every run appears with its status, so a string of `failed` rows is visible as such
- * rather than showing up as an unexplained absence of alerts.
+ * Every run that ATTEMPTED work appears with its status, so a string of `failed` rows is
+ * visible as such rather than showing up as an unexplained absence of alerts.
+ *
+ * Skipped heartbeats are excluded, and that is a correctness fix rather than tidying. The
+ * tiered cadence turns 65 of a weekday's 84 cron wake-ups into `skipped` rows, so the
+ * twenty newest rows were all heartbeats within an hour of the close — this page's whole
+ * job, answering "is the scanner working?", buried under the evidence that the cron is
+ * alive. That evidence is still shown, as "Last wake-up" in the status panel, and the
+ * heartbeat rows remain queryable at `/scanner/scan-runs` without `attempted_only`.
  */
 
 import { useEffect } from 'react';
@@ -85,6 +92,11 @@ export default function ScansPage() {
         <h1 className="text-lg font-bold text-slate-900">Scan history</h1>
         <p className="text-xs text-slate-500">
           Funnel counts read: universe → stage 1 → stage 2 → stage 3 → risk filters
+        </p>
+        <p className="text-xs text-slate-500">
+          Scans only. The scanner samples 19 passes a session — 04:15, then hourly to 07:00,
+          then every 30, 15 and 5 minutes — so the cron&rsquo;s other wake-ups are skipped
+          on purpose and are not listed here.
         </p>
       </header>
 

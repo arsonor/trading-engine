@@ -125,4 +125,35 @@ describe('ScanStatusPanel', () => {
     // A "0" here would read as "nothing survived" rather than "not yet decided".
     expect(screen.queryByText('0')).not.toBeInTheDocument();
   });
+
+  it('separates the last wake-up from the last scan', () => {
+    // Under the tiered cadence these are routinely hours apart: 04:15 then hourly to
+    // 07:00, while the cron keeps firing every five minutes and skipping. Without both,
+    // a deliberate two-hour gap between scans looks like a scanner that died at 04:15.
+    render(
+      <ScanStatusPanel
+        status={{
+          state: 'ok_no_candidates',
+          is_healthy: true,
+          detail: 'Last scan completed successfully and found no candidates.',
+          alert_count: 0,
+          last_run: { id: 5, status: 'completed', started_at: '2026-08-17T08:15:00Z' },
+          last_wake_up_at: '2026-08-17T09:45:00Z',
+        }}
+      />
+    );
+
+    expect(screen.getByText(/Last wake-up:/)).toBeInTheDocument();
+    const scan = screen.getByText(/Last scan:/).parentElement.textContent;
+    const wakeUp = screen.getByText(/Last wake-up:/).parentElement.textContent;
+    expect(scan).not.toEqual(wakeUp);
+    // Absent is rendered as an em dash, never as "now" or as the last scan's time.
+    expect(wakeUp).not.toMatch(/—/);
+  });
+
+  it('shows the last wake-up as unknown rather than inventing one', () => {
+    render(<ScanStatusPanel status={quietMarket} />);
+
+    expect(screen.getByText(/Last wake-up:/).parentElement.textContent).toMatch(/—/);
+  });
 });

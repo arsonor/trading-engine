@@ -470,3 +470,76 @@ async def test_scan_runs_list(client: AsyncClient, scanner_alert):
     assert body[0]["status"] == "completed"
     assert body[0]["is_demo"] is False
     assert body[0]["stage_counts"]["counts"]["universe"] == 11
+
+
+async def test_attempted_only_keeps_the_scan_history_readable_under_the_heartbeat_rate(
+    client: AsyncClient, db_session
+):
+    """The tiered cadence turns 65 of a weekday's 84 wake-ups into `skipped` rows, so a
+    page of the 20 newest runs is all heartbeats within an hour of the close — the Scans
+    page unable to answer the one question it exists for. `attempted_only` is how it does,
+    and the default stays unfiltered so "did the cron fire?" is still answerable."""
+    db_session.add(
+        ScanRun(
+            started_at=datetime(2026, 7, 28, 13, 25),
+            finished_at=datetime(2026, 7, 28, 13, 25, 30),
+            status=ScanRunStatus.COMPLETED,
+            profile="production",
+            stage_counts_json={"counts": {"universe": 694}},
+        )
+    )
+    # More heartbeats than the page's own limit, both flavours: out-of-window wake-ups
+    # after the close, and off-cadence ones from between the morning's passes.
+    for minute in range(0, 150, 5):
+        db_session.add(
+            ScanRun(
+                started_at=datetime(2026, 7, 28, 13, 30) + timedelta(minutes=minute),
+                finished_at=datetime(2026, 7, 28, 13, 30, 1) + timedelta(minutes=minute),
+                status=ScanRunStatus.SKIPPED,
+                profile="production",
+                stage_counts_json={"skip_reason": "off_cadence" if minute < 60 else "outside_window"},
+            )
+        )
+    await db_session.commit()
+
+    unfiltered = (await client.get("/api/v1/scanner/scan-runs?limit=20")).json()
+    attempted = (await client.get("/api/v1/scanner/scan-runs?limit=20&attempted_only=true")).json()
+
+    # Without the filter the morning's scan is nowhere on the page.
+    assert {row["status"] for row in unfiltered} == {"skipped"}
+    assert [row["status"] for row in attempted] == ["completed"]
+    assert attempted[0]["stage_counts"]["counts"]["universe"] == 694
+
+
+async def test_status_reports_the_last_wake_up_as_well_as_the_last_scan(
+    client: AsyncClient, db_session
+):
+    """With a coarse early cadence an hours-old last scan is normal, so it is no longer
+    evidence of a stall. The heartbeat is what says the cron is alive, and the panel needs
+    both numbers to tell "asleep on purpose" from "died at 04:15"."""
+    db_session.add(
+        ScanRun(
+            started_at=datetime(2026, 7, 28, 8, 15),
+            finished_at=datetime(2026, 7, 28, 8, 16),
+            status=ScanRunStatus.COMPLETED,
+            profile="production",
+            stage_counts_json={"counts": {"universe": 694}},
+        )
+    )
+    db_session.add(
+        ScanRun(
+            started_at=datetime(2026, 7, 28, 9, 45),
+            finished_at=datetime(2026, 7, 28, 9, 45, 1),
+            status=ScanRunStatus.SKIPPED,
+            profile="production",
+            stage_counts_json={"skip_reason": "outside_window"},
+        )
+    )
+    await db_session.commit()
+
+    body = (await client.get("/api/v1/scanner/status")).json()
+
+    assert body["last_run"]["status"] == "completed"
+    assert body["last_run"]["started_at"].startswith("2026-07-28T08:15")
+    assert body["last_wake_up_at"].startswith("2026-07-28T09:45")
+    assert body["is_healthy"] is True
