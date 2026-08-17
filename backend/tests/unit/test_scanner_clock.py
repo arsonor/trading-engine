@@ -2,14 +2,20 @@
 
 DST is the reason this file exists. Render's cron runs in UTC; the market runs in ET.
 A UTC-pinned schedule silently slides an hour twice a year, which for a scanner gated on
-a 04:00-09:25 window means firing outside the window for half the year — a correctness
-bug that produces no error, just silence.
+a pre-market window means firing outside the window for half the year — a correctness bug
+that produces no error, just silence.
+
+**Which window, and which wake-ups become scans, is `cadence.py`'s question** and is
+tested in `test_scanner_cadence.py`. What is left here is conversion, minute-resolution
+truncation and the final-pass bound: the parts that do not depend on config.
 """
 
 from datetime import datetime, timezone
 
 import pytest
 
+from app.services.bars import bucket_minute
+from app.services.scanner.cadence import parse_cadence
 from app.services.scanner.clock import (
     ET,
     FixedClock,
@@ -17,13 +23,17 @@ from app.services.scanner.clock import (
     at_minute,
     describe,
     is_final_pass,
-    is_within_scan_window,
-    minutes_since_window_open,
     parse_scan_time,
-    scan_times_for,
     to_et,
     to_utc,
 )
+
+# The deployed cadence, for the DST assertions that need a window to compare against.
+CADENCE = parse_cadence("04:15/60,07:00/30,08:00/15,08:30/5")
+
+
+def is_within_scan_window(moment) -> bool:
+    return CADENCE.is_open(moment)
 
 
 def utc(*args) -> datetime:
@@ -39,19 +49,22 @@ def et(*args) -> datetime:
 
 def test_the_same_utc_time_is_a_different_et_time_across_dst():
     """This is the whole bug in one assertion: 08:00 UTC is 03:00 ET in January and
-    04:00 ET in July, so a UTC-pinned schedule straddles the window boundary."""
+    04:00 ET in July, an hour apart in market time from one pinned UTC schedule."""
     winter = to_et(utc(2026, 1, 15, 8, 0))
     summer = to_et(utc(2026, 7, 15, 8, 0))
 
     assert (winter.hour, winter.tzname()) == (3, "EST")
     assert (summer.hour, summer.tzname()) == (4, "EDT")
 
-    assert is_within_scan_window(winter) is False  # 03:00 — before the window opens
-    assert is_within_scan_window(summer) is True  # 04:00 — the window's first minute
+    # Neither is inside a window that opens at 04:15 — the generous UTC cron plus the ET
+    # gate is what makes that safe, rather than the schedule happening to line up.
+    assert is_within_scan_window(winter) is False
+    assert is_within_scan_window(summer) is False
+    assert is_within_scan_window(to_et(utc(2026, 7, 15, 8, 15))) is True  # 04:15 EDT
 
 
 def test_spring_forward_transition_resolves_correctly():
-    """2026-03-08: 02:00 ET jumps to 03:00 ET. The window opens at 04:00 either way."""
+    """2026-03-08: 02:00 ET jumps to 03:00 ET. The window opens at 04:15 either way."""
     before = to_et(utc(2026, 3, 8, 6, 30))  # 01:30 EST
     after = to_et(utc(2026, 3, 8, 7, 30))  # 03:30 EDT
 
@@ -60,8 +73,9 @@ def test_spring_forward_transition_resolves_correctly():
     assert before.utcoffset().total_seconds() == -5 * 3600
     assert after.utcoffset().total_seconds() == -4 * 3600
 
-    # 08:00 UTC on transition day is 04:00 EDT — the window opens.
-    assert is_within_scan_window(to_et(utc(2026, 3, 8, 8, 0))) is True
+    # 08:00 UTC on transition day is 04:00 EDT — still 15 minutes early; 08:15 is in.
+    assert is_within_scan_window(to_et(utc(2026, 3, 8, 8, 0))) is False
+    assert is_within_scan_window(to_et(utc(2026, 3, 8, 8, 15))) is True
 
 
 def test_fall_back_transition_resolves_correctly():
@@ -84,21 +98,10 @@ def test_fall_back_transition_resolves_correctly():
 
 
 def test_scan_window_start_in_utc_shifts_by_an_hour_across_dst():
-    """The practical consequence for render.yaml: 04:00 ET is 09:00 UTC in winter and
-    08:00 UTC in summer, so the cron must be scheduled generously and gated in code."""
-    assert to_utc(et(2026, 1, 15, 4, 0)).hour == 9
-    assert to_utc(et(2026, 7, 15, 4, 0)).hour == 8
-
-
-@pytest.mark.parametrize("day", [datetime(2026, 3, 8), datetime(2026, 11, 1)])
-def test_scan_schedule_has_the_same_run_count_on_dst_days(day):
-    """04:00 -> 09:25 every 5 minutes is 66 runs, transition day or not, because the
-    schedule is built in ET wall-clock minutes rather than by UTC arithmetic."""
-    times = scan_times_for(day)
-
-    assert len(times) == 66
-    assert times[0].time().isoformat("minutes") == "04:00"
-    assert times[-1].time().isoformat("minutes") == "09:25"
+    """The practical consequence for render.yaml: 04:15 ET is 09:15 UTC in winter and
+    08:15 UTC in summer, so the cron must be scheduled generously and gated in code."""
+    assert to_utc(et(2026, 1, 15, 4, 15)).hour == 9
+    assert to_utc(et(2026, 7, 15, 4, 15)).hour == 8
 
 
 # ------------------------------------------------------------------ window gating
@@ -107,8 +110,9 @@ def test_scan_schedule_has_the_same_run_count_on_dst_days(day):
 @pytest.mark.parametrize(
     "moment,expected",
     [
-        (et(2026, 7, 28, 3, 59), False),
-        (et(2026, 7, 28, 4, 0), True),  # inclusive: the window opens at 04:00
+        (et(2026, 7, 28, 4, 0), False),  # the window no longer opens at 04:00
+        (et(2026, 7, 28, 4, 14), False),
+        (et(2026, 7, 28, 4, 15), True),  # inclusive: the window opens at 04:15
         (et(2026, 7, 28, 6, 30), True),
         (et(2026, 7, 28, 9, 25), True),  # inclusive: the final pass must run
         (et(2026, 7, 28, 9, 26), False),
@@ -138,10 +142,10 @@ def test_final_pass_starts_at_0925():
         (et(2026, 7, 28, 9, 25, 59, 999999), True),
         # The minute after is still out. Truncation is not a grace period.
         (et(2026, 7, 28, 9, 26, 0), False),
-        # The lower bound has the same edge, in the other direction: 03:59:58 is 03:59
-        # and must not be admitted as 04:00.
-        (et(2026, 7, 28, 3, 59, 58), False),
-        (et(2026, 7, 28, 4, 0, 10), True),
+        # The lower bound has the same edge, in the other direction: 04:14:58 is 04:14
+        # and must not be admitted as 04:15.
+        (et(2026, 7, 28, 4, 14, 58), False),
+        (et(2026, 7, 28, 4, 15, 10), True),
     ],
 )
 def test_window_bounds_are_compared_at_minute_resolution(moment, expected):
@@ -154,7 +158,7 @@ def test_the_authoritative_pass_is_final_even_when_the_scheduler_is_late():
 
 
 def test_the_time_shown_and_the_time_decided_on_are_the_same_value():
-    """The self-contradictory log line — "09:25 ... is outside the 04:00-09:25 window" —
+    """The self-contradictory log line — "09:25 ... is outside the 04:15-09:25 window" —
     was possible because the header truncated and the gate did not. Both go through
     `at_minute` now, so the string in the log IS the value that was compared."""
     late = et(2026, 7, 28, 9, 25, 10)
@@ -172,10 +176,14 @@ def test_at_minute_preserves_the_dst_offset():
     assert at_minute(utc(2026, 7, 28, 13, 25, 10)) == et(2026, 7, 28, 9, 25)
 
 
-def test_minutes_since_window_open_indexes_volume_profile_buckets():
-    assert minutes_since_window_open(et(2026, 7, 28, 4, 0)) == 0
-    assert minutes_since_window_open(et(2026, 7, 28, 8, 45)) == 285
-    assert minutes_since_window_open(et(2026, 7, 28, 9, 25)) == 325
+def test_the_volume_profile_bucket_index_is_owned_by_bars_not_by_the_scan_window():
+    """This module used to carry its own copy of the bucket index, keyed off the scan
+    window's start. It was a duplicate of `bars.bucket_minute` and a trap: opening the
+    window at 04:15 would have silently rebased every RVOL denominator lookup. The one
+    definition lives with the bars it indexes, and 04:00 is still bucket 0."""
+    assert bucket_minute(et(2026, 7, 28, 4, 0)) == 0
+    assert bucket_minute(et(2026, 7, 28, 8, 45)) == 285
+    assert bucket_minute(et(2026, 7, 28, 9, 25)) == 325
 
 
 # ------------------------------------------------------------------ conversion + parsing

@@ -31,7 +31,10 @@ from app.services.scanner.rvol import SimpleRvol
 
 FINAL_PASS = datetime(2026, 7, 28, 9, 25)
 ANCHOR = datetime(2026, 7, 28, 7, 0)
-ORDINARY = datetime(2026, 7, 28, 6, 0)
+# An ordinary pass: not an anchor, but a minute the tiered cadence really scans. 06:00 —
+# what this was — is inside the window and no longer a scheduled pass, so the run would be
+# skipped and the test would prove nothing about recording.
+ORDINARY = datetime(2026, 7, 28, 6, 15)
 
 
 def build_scanner(session_factory, snapshots, at: datetime) -> Scanner:

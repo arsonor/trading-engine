@@ -3,7 +3,7 @@
 Two rules govern every timestamp in the scanner:
 
 1. **No scanner logic calls `datetime.now()`.** The clock is injected, so any moment in
-   the 04:00–09:25 ET window — including both DST transitions — can be simulated.
+   the pre-market window — including both DST transitions — can be simulated.
 
 2. **Market logic is in America/New_York, never UTC.** Render's cron runs in UTC. A
    UTC-pinned 08:00 schedule is 03:00 ET in winter and 04:00 ET in summer, so half the
@@ -16,23 +16,35 @@ Two rules govern every timestamp in the scanner:
 
 `test_scanner_clock.py` pins that drift with the same UTC instant landing on different
 sides of the window boundary in January and July.
+
+**Where the window is decided:** this module owns time *conversion* and the closing
+bound; `cadence.py` owns when the window opens and which wake-ups become scans, because
+both are config-driven and measured. Nothing here reads settings.
 """
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timezone
 from typing import Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
-# The pre-market scan window, per docs/CLAUDE.md section 4.5.
-SCAN_WINDOW_START = time(4, 0)
+# When the scan window closes, per docs/CLAUDE.md section 4.5. Not configurable: 09:25 is
+# the authoritative pass the alert contract is defined against, not a tuning knob.
 SCAN_WINDOW_END = time(9, 25)
 
 # The 09:25 pass is the final confirmation run: the one whose alert set is definitive.
 FINAL_PASS_TIME = time(9, 25)
 
-# Cadence of the scan window (informational; the cron schedule owns the real interval).
-SCAN_INTERVAL_MINUTES = 5
+# WHERE THE WINDOW *OPENS* NOW LIVES IN `cadence.py`, and it is config-driven — 04:15
+# since the six-session profile showed 04:00/04:05/04:10 cannot produce a candidate by
+# construction. Two things used to be one constant here and must never be re-merged:
+#
+#   the scan window's start   movable, config, currently 04:15
+#   the profile bucket epoch  fixed at 04:00, `app.services.bars.bucket_minute`
+#
+# `premarket_volume_profile` holds stored rows keyed on minutes since 04:00 ET. Moving the
+# window to 04:15 through a shared constant would have shifted every RVOL denominator
+# lookup by three buckets, with no error — the failure mode this project cares most about.
 
 
 @runtime_checkable
@@ -91,58 +103,18 @@ def at_minute(moment: datetime) -> datetime:
     day was silently skipped while the log header, rendered at minute resolution, printed
     "09:25" and claimed it was outside a window ending at 09:25.
 
-    Truncating is the fix, not a grace period: §4.5 specifies a window of 04:00–09:25,
-    not 04:00:00.000–09:25:00.000, and truncation is independent of how late the
-    scheduler happens to be rather than tolerant of one particular amount of lateness.
+    Truncating is the fix, not a grace period: §4.5 specifies a window whose bounds are
+    minutes, not instants, and truncation is independent of how late the scheduler
+    happens to be rather than tolerant of one particular amount of lateness.
     Same correction, and the same reason, as rounding percentages before comparing them
     against a threshold in Phase 2.
     """
     return to_et(moment).replace(second=0, microsecond=0)
 
 
-def is_within_scan_window(moment: datetime) -> bool:
-    """Whether an ET moment falls in the 04:00–09:25 pre-market scan window.
-
-    Inclusive at both ends, at minute resolution: 04:00 opens the window and 09:25 is
-    the final pass, which must run. Both bounds are truncated, so 07:59:58 ET is 07:59
-    and does not sneak past a bound it has not yet reached — the lower bound has the
-    same class of edge as the upper one, currently masked only because the 08:00 UTC run
-    starts after 04:00 ET rather than before it.
-    """
-    return SCAN_WINDOW_START <= at_minute(moment).time() <= SCAN_WINDOW_END
-
-
 def is_final_pass(moment: datetime) -> bool:
     """Whether this is the 09:25 confirmation run whose alert set is definitive."""
     return at_minute(moment).time() >= FINAL_PASS_TIME
-
-
-def minutes_since_window_open(moment: datetime) -> int:
-    """Minutes elapsed since 04:00 ET — the bucket index for volume profiles (V3)."""
-    et = to_et(moment)
-    return (et.hour - SCAN_WINDOW_START.hour) * 60 + (et.minute - SCAN_WINDOW_START.minute)
-
-
-def scan_times_for(day: datetime) -> list[datetime]:
-    """Every scheduled scan moment on a given ET date, 04:00 → 09:25 inclusive.
-
-    Built by adding wall-clock minutes in ET, so a DST transition inside the window
-    yields the correct number of runs rather than a UTC-arithmetic drift.
-    """
-    et = to_et(day)
-    start = et.replace(
-        hour=SCAN_WINDOW_START.hour, minute=SCAN_WINDOW_START.minute, second=0, microsecond=0
-    )
-    end = et.replace(
-        hour=SCAN_WINDOW_END.hour, minute=SCAN_WINDOW_END.minute, second=0, microsecond=0
-    )
-
-    times: list[datetime] = []
-    current = start
-    while current <= end:
-        times.append(current)
-        current += timedelta(minutes=SCAN_INTERVAL_MINUTES)
-    return times
 
 
 def parse_scan_time(raw: str) -> datetime:

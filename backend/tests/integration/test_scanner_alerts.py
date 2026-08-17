@@ -18,7 +18,10 @@ from app.services.scanner.profiles import demo_profile, production_profile
 from app.services.scanner.rvol import NormalizedRvol, SimpleRvol
 
 SCAN_AT = datetime(2026, 7, 28, 9, 25)
-EARLIER = datetime(2026, 7, 28, 5, 5)
+# An early pass that the tiered cadence actually runs. 05:05 — what this was — is inside
+# the window but off-cadence since Follow-up A, so the scan would be skipped and the
+# dedup-across-passes assertions would have had nothing to dedup.
+EARLIER = datetime(2026, 7, 28, 5, 15)
 
 
 class RecordingBroadcaster:

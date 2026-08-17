@@ -16,12 +16,15 @@ import pytest
 from sqlalchemy import select
 
 from app.models.scan_run import ScanRun, ScanRunStatus
+from app.services.scanner.cadence import parse_cadence
 from app.services.scanner.candidate import STAGE_2, STAGE_3, STAGE_RISK
 from app.services.scanner.clock import FixedClock
 from app.services.scanner.pipeline import (
     MODE_DRY_RUN,
     MODE_LIVE,
     MODE_OBSERVATION,
+    SKIP_OFF_CADENCE,
+    SKIP_OUTSIDE_WINDOW,
     Scanner,
 )
 from app.services.scanner.profiles import demo_profile, production_profile
@@ -309,7 +312,8 @@ async def test_a_scan_outside_the_window_is_skipped_not_run(
 
     assert result.status == ScanRunStatus.SKIPPED
     assert result.candidates == []
-    assert "outside the 04:00-09:25 ET scan window" in result.error
+    assert result.skip_reason == SKIP_OUTSIDE_WINDOW
+    assert "outside the 04:15-09:25 ET scan window" in result.error
 
     # The row IS written. It is the only durable evidence that the cron fired: without
     # it, "fired and correctly skipped" and "never fired" are the same empty query.
@@ -319,10 +323,113 @@ async def test_a_scan_outside_the_window_is_skipped_not_run(
     assert len(rows) == 1
     assert rows[0].status == ScanRunStatus.SKIPPED
     assert rows[0].finished_at is not None
-    assert "outside the 04:00-09:25 ET scan window" in rows[0].error
+    assert "outside the 04:15-09:25 ET scan window" in rows[0].error
+    assert rows[0].stage_counts_json["skip_reason"] == SKIP_OUTSIDE_WINDOW
     # Zero work attempted, and the counts say so rather than being absent.
     assert rows[0].stage_counts_json["counts"]["universe"] == 0
     assert rows[0].api_calls_used == 0
+
+
+async def test_the_three_dead_early_passes_no_longer_scan(
+    test_session_factory, golden_snapshot_provider, golden_reference_data
+):
+    """04:00, 04:05 and 04:10 produced a Stage 2 survivor in none of 18 session-passes
+    across six live sessions — a bar is provisional until ~7 minutes after it closes, so
+    the 04:00 bar is not trusted until ~04:12 and those passes cannot find anything by
+    construction. They are outside the window now, not merely unproductive."""
+    for moment in (
+        datetime(2026, 7, 28, 4, 0),
+        datetime(2026, 7, 28, 4, 5),
+        datetime(2026, 7, 28, 4, 10),
+    ):
+        scanner = Scanner(
+            session_factory=test_session_factory,
+            snapshot_provider=golden_snapshot_provider,
+            profile=production_profile(),
+            clock=FixedClock(moment),
+            rvol_calculator=SimpleRvol(),
+        )
+
+        result = await scanner.run()
+
+        assert result.status == ScanRunStatus.SKIPPED, moment
+        assert result.skip_reason == SKIP_OUTSIDE_WINDOW
+        assert result.api_calls_used == 0
+
+    # The discovery pass, fifteen minutes later, does scan.
+    discovery = await Scanner(
+        session_factory=test_session_factory,
+        snapshot_provider=golden_snapshot_provider,
+        profile=production_profile(),
+        clock=FixedClock(datetime(2026, 7, 28, 4, 15)),
+        rvol_calculator=SimpleRvol(),
+    ).run()
+
+    assert discovery.status == ScanRunStatus.COMPLETED
+
+
+async def test_an_off_cadence_wake_up_inside_the_window_is_skipped_with_its_own_reason(
+    test_session_factory, golden_snapshot_provider, golden_reference_data
+):
+    """The state that did not exist before Follow-up A: inside the window, but not a pass
+    the cadence wants. It must be distinguishable from an out-of-window wake-up — one is
+    the cron working at 15:00, the other is a deliberate gap in the morning's coverage —
+    and the message must name the pass that will cover it."""
+    scanner = Scanner(
+        session_factory=test_session_factory,
+        snapshot_provider=golden_snapshot_provider,
+        profile=production_profile(),
+        clock=FixedClock(datetime(2026, 7, 28, 5, 40)),
+        rvol_calculator=SimpleRvol(),
+    )
+
+    result = await scanner.run()
+
+    assert result.status == ScanRunStatus.SKIPPED
+    assert result.skip_reason == SKIP_OFF_CADENCE
+    assert "not a scheduled pass" in result.error
+    assert "every 60 min from 04:15" in result.error
+    assert "Next pass 06:15" in result.error
+    # No FMP fan-out was paid for. That is the entire point of the change.
+    assert result.api_calls_used == 0
+    assert result.bytes_used == 0
+
+    async with test_session_factory() as session:
+        rows = (await session.execute(select(ScanRun))).scalars().all()
+
+    assert len(rows) == 1
+    assert rows[0].stage_counts_json["skip_reason"] == SKIP_OFF_CADENCE
+
+
+async def test_the_final_pass_is_unaffected_by_how_coarse_the_early_cadence_is(
+    test_session_factory, golden_snapshot_provider, golden_reference_data
+):
+    """The safety argument for the whole change, tested rather than asserted in prose.
+
+    Scans are stateless: the 09:25 pass recomputes every ticker from all bars since 04:00,
+    so it cannot depend on how many passes preceded it. Same fixture, same 09:25 moment,
+    two cadences an order of magnitude apart — one pass a morning, and the old uniform
+    five-minute shape — must produce the identical candidate set.
+    """
+
+    async def final_pass_under(spec: str):
+        scanner = Scanner(
+            session_factory=test_session_factory,
+            snapshot_provider=golden_snapshot_provider,
+            profile=production_profile(),
+            clock=FixedClock(datetime(2026, 7, 28, 9, 25)),
+            rvol_calculator=SimpleRvol(),
+            cadence=parse_cadence(spec),
+        )
+        return await scanner.run()
+
+    coarse = await final_pass_under("04:15/300")  # one scheduled pass before 09:25
+    fine = await final_pass_under("04:00/5")  # the pre-Follow-up-A cadence
+
+    assert coarse.status == fine.status == ScanRunStatus.COMPLETED
+    assert coarse.is_final_pass is fine.is_final_pass is True
+    assert [c.ticker for c in coarse.candidates] == [c.ticker for c in fine.candidates]
+    assert coarse.counts.as_dict() == fine.counts.as_dict()
 
 
 async def test_the_authoritative_0925_pass_runs_when_the_scheduler_is_late(

@@ -169,6 +169,45 @@ class Settings(BaseSettings):
     scan_demo_float_max: int = 20_000_000_000
     # Default threshold profile for scans that do not name one.
     scan_profile: str = "production"
+
+    # --- Scan cadence (Follow-up A) -----------------------------------------------
+    # WHEN the scanner works, as tiers: `HH:MM/interval-minutes`, comma-separated. The
+    # FIRST tier's start is also when the scan window opens, so those two cannot drift.
+    #
+    # Measured over six live sessions (10-14, 17 August 2026; 394 completed passes) with
+    # scripts/cadence_profile.py:
+    #   - 04:00/04:05/04:10 produced a Stage 2 survivor in NONE of 18 session-passes. With
+    #     a 7-minute settle window the 04:00 bar is not trusted until ~04:12, so they
+    #     cannot, by construction. The window therefore opens at 04:15.
+    #   - 04:25-06:55 is half the session's passes and a seventh of its new-and-confirmed
+    #     tickers; 08:45-09:25 keeps 73% of what it surfaces. Hence 60/30/15/5.
+    #
+    # Safe because scans are STATELESS: the 09:25 pass recomputes every ticker from all
+    # bars since 04:00 regardless of what ran before it, so no cadence can change the
+    # confirmed set. It changes dashboard freshness before 09:25, and nothing else.
+    #
+    # In config, not literals, because the shape came from six sessions and will be
+    # revisited. Validated at startup — a typo here must not silently become "no scans".
+    scan_cadence_tiers: str = Field(
+        default="04:15/60,07:00/30,08:00/15,08:30/5",
+        description="Scan cadence as HH:MM/interval-minutes tiers. First tier opens the window.",
+    )
+    # How many minutes late a wake-up may be and still claim its slot. MUST stay strictly
+    # below the cron's wake-up period (5 min) or one slot can be scanned twice; 0 means
+    # exact-minute matching, which `at_minute` already makes tolerant of Render's 10-45 s.
+    scan_cadence_grace_minutes: int = Field(default=0, ge=0, lt=5)
+    #
+    # NOT validated by a field validator here, deliberately. The spec's meaning is defined
+    # by `scanner.cadence.parse_cadence`, and importing it from a validator initialises the
+    # scanner package -> models -> `core.database`, which reads settings at import time:
+    # a genuine circular import, caught by the test suite refusing to collect. Duplicating
+    # a syntax check here instead would be a second definition of "valid", free to drift
+    # from the one that decides when scans run.
+    #
+    # `load_cadence()` parses and raises instead, and every scanning entry point calls it
+    # before touching FMP or the database — `scripts/run_scan.py` at the top of `main()`,
+    # and `Scanner.__init__`. A typo in SCAN_CADENCE_TIERS therefore fails the cron run
+    # immediately and visibly, which is what startup validation was for.
     # Snapshot scenario feeding Stage 2 in V1 (no live pre-market data on the free tier).
     scan_snapshot_fixture: str = "tests/fixtures/snapshots/demo_session.json"
 

@@ -15,6 +15,11 @@ scenario file supplies Stage 2's inputs while Stages 1 and 3 run on real referen
 
 `--at` works against past sessions too, which is the cheapest way to exercise the live path
 outside pre-market hours: extended-hours history goes back to at least 2016.
+
+**The cadence is tiered since Follow-up A**, so a wake-up inside the window is not
+automatically a scan: 04:15 then hourly to 07:00, then 30/15/5 minutes, 19 passes a
+session (`SCAN_CADENCE_TIERS`). `--at "2026-07-28 05:40"` is skipped as off-cadence, which
+is what production would do at that minute; `--ignore-window` overrides both gates.
 """
 
 import argparse
@@ -26,10 +31,12 @@ from _bootstrap import configure_logging, run_cli
 from app.config import get_settings
 from app.models.scan_run import ScanRunStatus
 from app.services.alerts import ScannerAlertService
+from app.services.scanner.cadence import load_cadence
 from app.services.scanner.candidate import STAGE_2, STAGE_3, STAGE_RISK
 from app.services.scanner.clock import FixedClock, SystemClock, describe, parse_scan_time
 from app.services.scanner.pipeline import (
     MODE_LIVE,
+    SKIP_OFF_CADENCE,
     Scanner,
     ScanResult,
     describe_mode,
@@ -50,7 +57,7 @@ def _wrap(text: str, width: int = 74) -> list[str]:
     return textwrap.wrap(text, width=width)
 
 
-def _print_header(scanner: Scanner, provider, clock, args, mode: str) -> None:
+def _print_header(scanner: Scanner, provider, clock, args, mode: str, cadence) -> None:
     profile = scanner.profile
     print()
     if profile.is_demo:
@@ -74,6 +81,12 @@ def _print_header(scanner: Scanner, provider, clock, args, mode: str) -> None:
     print(f"  Snapshot source  : {provider.source} ({getattr(provider, 'name', 'n/a')})")
     print(f"  RVOL mode        : {get_settings().rvol_mode}")
     print(f"  Mode             : {describe_mode(mode)}")
+    # Printed on every run because the cadence is now the reason a wake-up may do nothing,
+    # and "which pass am I?" is the first question when a scan reports no work.
+    print(f"  Cadence          : {cadence.describe()}")
+    slot = cadence.slot_for(clock.now_et())
+    scheduled = f"yes ({slot.strftime('%H:%M')} slot)" if slot else "NO — off-cadence wake-up"
+    print(f"  Scheduled pass   : {scheduled}")
 
 
 def _print_result(result: ScanResult, verbose: bool) -> None:
@@ -97,6 +110,9 @@ def _print_result(result: ScanResult, verbose: bool) -> None:
     if result.status == ScanRunStatus.SKIPPED:
         print()
         print(f"  SCAN SKIPPED — {result.error}")
+        if result.skip_reason == SKIP_OFF_CADENCE:
+            print("  This is the tiered cadence working, not a fault. To scan an")
+            print("  off-cadence minute anyway (local testing), pass --ignore-window.")
         # The row id is printed here too: a skipped wake-up now RECORDS itself, and an
         # operator reading this output should be able to go and find that row.
         if result.scan_run_id:
@@ -235,12 +251,14 @@ async def main(args: argparse.Namespace) -> int:
     # Live scans read a real index proxy; fixture replay stays offline and neutral.
     from app.services.scanner.risk import FmpMarketTape, NeutralMarketTape
 
+    cadence = load_cadence()
     scanner = Scanner(
         tape_provider=NeutralMarketTape() if args.fixture else FmpMarketTape(),
         snapshot_provider=provider,
         profile=profile,
         clock=clock,
         rvol_calculator=get_rvol_calculator(),
+        cadence=cadence,
     )
 
     # `--no-persist` is the deprecated spelling; honour it so existing invocations keep
@@ -250,7 +268,7 @@ async def main(args: argparse.Namespace) -> int:
     if args.no_persist and not args.no_alerts:
         print("  NOTE: --no-persist is deprecated; use --no-alerts (same behaviour).")
 
-    _print_header(scanner, provider, clock, args, mode)
+    _print_header(scanner, provider, clock, args, mode, cadence)
 
     result = await scanner.run(
         tickers=[t.strip().upper() for t in args.tickers.split(",")] if args.tickers else None,
@@ -308,7 +326,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ignore-window",
         action="store_true",
-        help="Scan even outside 04:00-09:25 ET (manual testing only)",
+        help="Scan at any minute, ignoring both the ET window and the tiered cadence "
+             "(manual testing only)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Per-ticker rejections")
     args = parser.parse_args()

@@ -9,8 +9,14 @@ moment it breaks. So every run lands in one of four explicit states:
 |-------------|--------------------------------------------------------------|
 | `completed` | Ran to the end. `stage_counts_json` says how many survived.   |
 | `failed`    | Something broke. `error` is populated; counts are partial.    |
-| `skipped`   | Outside the 04:00–09:25 ET window; no work attempted.         |
+| `skipped`   | No work attempted — see `skip_reason` for which of the two.   |
 | `running`   | In flight, or the process died before finishing.             |
+
+A `skipped` row carries a `skip_reason`: `outside_window` for a wake-up beyond
+04:15–09:25 ET, or `off_cadence` for one inside the window that the tiered cadence
+declines (see `cadence.py`). Most wake-ups are now the second kind — 65 of a weekday's 84
+against 19 scans — so a reader who cannot tell them apart cannot tell a sleeping scanner
+from a broken one.
 
 A `running` row that never advanced is itself the signal that a scan died mid-flight,
 which is why the row is written *before* the work starts rather than after.
@@ -31,6 +37,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.scan_run import ScanRun, ScanRunStatus
+from app.services.scanner.cadence import Cadence, load_cadence
 from app.services.scanner.candidate import (
     STAGE_1,
     STAGE_2,
@@ -44,7 +51,6 @@ from app.services.scanner.clock import (
     SystemClock,
     describe,
     is_final_pass,
-    is_within_scan_window,
 )
 from app.services.scanner.integrity import (
     IntegrityFinding,
@@ -88,6 +94,10 @@ logger = logging.getLogger(__name__)
 MODE_LIVE = "live"
 MODE_OBSERVATION = "observation"
 MODE_DRY_RUN = "dry_run"
+
+# Why a wake-up did no work. Both write a `skipped` row; they are not the same event.
+SKIP_OUTSIDE_WINDOW = "outside_window"
+SKIP_OFF_CADENCE = "off_cadence"
 
 
 def resolve_mode(dry_run: bool, no_alerts: bool) -> str:
@@ -160,6 +170,11 @@ class ScanResult:
     dry_run: bool = False
     # What this run was permitted to write. See MODE_* above.
     mode: str = MODE_LIVE
+    # Why a `skipped` row is skipped. Two reasons now, and they mean different things to
+    # an operator: OUTSIDE_WINDOW is the cron waking at 11:00, OFF_CADENCE is a wake-up
+    # inside the window that the tiered cadence does not want. Recorded so "the scanner
+    # is quiet because it is asleep on purpose" is queryable, not inferred from prose.
+    skip_reason: str | None = None
     # Set when the funnel's shape indicates a misconfiguration rather than a quiet
     # market. Callers must show this INSTEAD of the quiet-market message.
     misconfiguration: str | None = None
@@ -235,6 +250,7 @@ class Scanner:
         rvol_calculator: RvolCalculator | None = None,
         tape_provider: MarketTapeProvider | None = None,
         observation_recorder: "ObservationRecorder | None" = None,
+        cadence: Cadence | None = None,
     ) -> None:
         if session_factory is None:
             from app.core.database import async_session_maker
@@ -247,6 +263,10 @@ class Scanner:
         self._rvol = rvol_calculator or get_rvol_calculator()
         self._tape = tape_provider or NeutralMarketTape()
         self._observations = observation_recorder or ObservationRecorder(session_factory)
+        # Resolved once per Scanner, not per gate check: a pass must not be able to change
+        # its mind about the cadence halfway through, and injecting one is how a test
+        # exercises a shape other than the deployed default.
+        self._cadence = cadence or load_cadence()
         # High-water marks live on the Scanner so a long-lived process can compare
         # passes; a one-shot cron simply has nothing to compare against.
         self._volume_guard = VolumeMonotonicityGuard()
@@ -285,12 +305,10 @@ class Scanner:
         if not dry_run:
             result.scan_run_id = await self._open_run(result)
 
-        if not ignore_window and not is_within_scan_window(as_of):
+        if not ignore_window and (skip := self._cadence_skip(as_of)) is not None:
+            result.skip_reason, result.error = skip
             result.status = ScanRunStatus.SKIPPED
-            result.error = (
-                f"{describe(as_of)} is outside the 04:00-09:25 ET scan window; no work done."
-            )
-            logger.info("Scan skipped: %s", result.error)
+            logger.info("Scan skipped (%s): %s", result.skip_reason, result.error)
             result.duration_s = time_module.monotonic() - started
             await self._record(result)
             return result
@@ -320,6 +338,36 @@ class Scanner:
         await self._record(result)
         self._log_outcome(result)
         return result
+
+    def _cadence_skip(self, as_of: datetime) -> tuple[str, str] | None:
+        """Why this wake-up should do no work, as `(reason, message)`. None means scan.
+
+        Two distinct answers, because they call for different responses. Out of window is
+        the cron doing its job at 11:00 and needs no attention. Off cadence is a wake-up
+        *inside* the window that the tiered cadence deliberately declines — the case that
+        did not exist before Follow-up A, and the one an operator will otherwise read as a
+        gap in coverage. The message names the next scheduled pass so the dashboard's
+        staleness is explained by the same row that caused it.
+        """
+        cadence = self._cadence
+        if not cadence.is_open(as_of):
+            return (
+                SKIP_OUTSIDE_WINDOW,
+                f"{describe(as_of)} is outside the "
+                f"{cadence.start.isoformat('minutes')}-{cadence.end.isoformat('minutes')} ET "
+                f"scan window; no work done.",
+            )
+        if not cadence.is_scheduled(as_of):
+            tier = cadence.tier_for(as_of)
+            following = cadence.next_slot_after(as_of)
+            return (
+                SKIP_OFF_CADENCE,
+                f"{describe(as_of)} is inside the scan window but is not a scheduled pass: "
+                f"the cadence samples every {tier.interval_minutes} min from "
+                f"{tier.start.isoformat('minutes')}. Next pass "
+                f"{following.strftime('%H:%M') if following else 'none today'}.",
+            )
+        return None
 
     async def _budget_counters(self) -> tuple[int, int] | None:
         """Today's (calls, bytes) totals, or None if they cannot be read.
@@ -532,6 +580,10 @@ class Scanner:
                 "snapshot_source": getattr(self._snapshots, "source", None),
                 "rvol_mode": self._rvol.mode,
                 "duration_s": round(result.duration_s, 3),
+                # outside_window | off_cadence, or absent on a run that did work. The
+                # second only exists since the cadence was tiered, and the Scans page
+                # needs to tell "asleep on purpose" from "should have scanned".
+                "skip_reason": result.skip_reason,
                 # In the JSON blob rather than a new column: this is observability that
                 # has to earn a schema change first, and the cadence question it exists
                 # to answer needs a handful of sessions, not a permanent index.

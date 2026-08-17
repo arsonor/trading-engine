@@ -94,11 +94,38 @@ services:
 
   # Pre-market scanner cron (wired to the real scanner — Phase 3)
   #
-  # The schedule is deliberately GENEROUS in UTC: 09:00–14:30 UTC covers the widest
-  # possible 04:00–09:25 ET window across both DST offsets. The scanner then gates the
+  # The schedule is deliberately GENEROUS in UTC: 08:00–14:59 UTC covers the widest
+  # possible 04:15–09:25 ET window across both DST offsets. The scanner then gates the
   # actual work on a computed ET timestamp and records `skipped` for wake-ups outside
   # the window. Tightening this schedule to "the right" UTC hours would reintroduce the
   # twice-yearly one-hour drift that the ET gate exists to eliminate.
+  #
+  # ---------------------------------------------------------------------------
+  # THE CADENCE IS TIERED, AND IT LIVES IN CODE — NOT IN THIS SCHEDULE.
+  # ---------------------------------------------------------------------------
+  # Do NOT try to express the cadence here by thinning the cron expression. A UTC cron
+  # cannot say "hourly until 07:00 ET, then every 5 minutes from 08:30 ET" without
+  # hard-coding an offset that is wrong for half the year — precisely the drift the ET gate
+  # exists to remove. The cron stays a uniform `*/5` firehose; SCAN_CADENCE_TIERS below
+  # decides which of those wake-ups becomes a scan.
+  #
+  # 19 passes a session rather than 66, measured over six live sessions (Follow-up A):
+  #   - 04:00/04:05/04:10 produced a Stage 2 survivor in NONE of 18 session-passes. A bar
+  #     is provisional for BAR_SETTLE_MINUTES after it closes, so the 04:00 bar is not
+  #     trusted until ~04:12 and those passes cannot find anything by construction.
+  #   - 04:25–06:55 was half the session's passes and a seventh of its confirmed-relevant
+  #     first sightings. 08:45–09:25 keeps 73% of what it surfaces, so it stays at 5 min.
+  #
+  # SAFE BECAUSE SCANS ARE STATELESS. The 09:25 pass recomputes every ticker from all bars
+  # since 04:00 regardless of what ran before it, so no cadence can change the confirmed
+  # alert set. It changes dashboard freshness before 09:25, and nothing else. The slot list
+  # always ends at 09:25 whatever the tiers say — no value here can silence that pass.
+  #
+  # CONSEQUENCE FOR `scan_runs`: heartbeat rows rise from ~18 to ~65 per weekday, and they
+  # now land BETWEEN the morning's passes rather than only after the close. `/status`
+  # computes health from the last run that ATTEMPTED work and also returns
+  # `last_wake_up_at`; the Scans page lists attempted runs only. Both were needed before
+  # this could ship — a page of 20 rows was otherwise all heartbeats by mid-morning.
   #
   # SCHEDULER LATENCY IS THE GATE'S PROBLEM, NOT THE SCHEDULE'S. Render starts a job
   # 10–45 s after its scheduled minute, so the 13:25 UTC entry — the authoritative 09:25
@@ -184,6 +211,13 @@ services:
       # probable data fault — recorded, never silently dropped.
       - key: SCAN_VOLUME_SANITY_MULTIPLE
         value: "50"
+      # WHEN the scanner works: `HH:MM/interval-minutes` tiers. The FIRST tier's start is
+      # also when the window opens, so "opens at 04:15" and "hourly from 04:15" cannot
+      # drift apart. See the cadence block above for the measurement behind these values,
+      # and app/services/scanner/cadence.py for the parser that validates them — a typo
+      # here fails the cron run immediately rather than quietly scanning less.
+      - key: SCAN_CADENCE_TIERS
+        value: "04:15/60,07:00/30,08:00/15,08:30/5"
       - key: SCAN_PROFILE
         value: production
 
