@@ -14,8 +14,9 @@ argument for it rests on two curves:
    no waiting for a market day. That curve decides where the tier boundaries go.
 
 2. **What each pass costs in bytes.** The fan-out asks for the day's 5-minute bars, so a
-   pass at 04:05 carries ~1 bar per ticker and a pass at 09:25 carries ~65: pass counts
-   alone overstate what thinning the early hours saves. That curve is only populated for
+   pass at 04:05 carries ~1 bar per ticker and a pass at 09:25 carries up to ~65 (~20 in
+   practice, since most Stage-1 names print sparsely in pre-market): pass counts alone
+   overstate what thinning the early hours saves. That curve is only populated for
    runs recorded after per-pass byte tracking shipped, so it fills in from the first
    market morning after that deploy and is reported as "no data" before then.
 
@@ -129,17 +130,25 @@ class Bucket:
         4C reported "672 calls, 10.2 MB" for one full live pass, a ~15 KB mean payload,
         and the ~47%-of-allowance projection was built on it. The measured curve says a
         09:25 pass costs ~1.7 MB, roughly six times less, so one of the two inputs moved
-        and the pair of columns is what says which:
+        and this pair of columns is what says which. **Measured 18 August 2026 over seven
+        sessions: 737 calls a pass, against 4C's 672.** The Stage-1 set has GROWN ~10%, so
+        the call count explains none of the gap and the payload explains all of it:
 
-        * **payload size** — 4C's pass was an `--at` replay, and for a PAST session the
-          intraday endpoint returns the whole extended day (04:00-20:00, ~190 bars per
-          ticker) rather than only the bars up to now. A live 09:25 pass carries ~65.
-        * **call count** — the Stage-1 set is discovered nightly and has been through a
-          reference-data hotfix and many refreshes since 4C; 671 is not a constant.
+        * 4C's replay: 10.2 MB / 672 = **15.2 KB** a call.
+        * A live 09:25 pass: 1.67 MB / 737 = **2.27 KB** a call — a **6.7x** difference,
+          slightly wider than the MB figures alone suggest, because it carries 10% more
+          tickers than the pass it is being compared with.
 
-        Reported rather than assumed: calls/pass near 670 points at the first, materially
-        fewer at the second. Either way the percentage saving from thinning the cadence is
-        unaffected, because both curves scale with the same Stage-1 count.
+        The mechanism is the `--at` replay, but read it as *coverage*, not window length.
+        For a PAST session the intraday endpoint returns the whole extended day (04:00-20:00)
+        INCLUDING regular hours, when every ticker prints a bar every five minutes; in
+        pre-market most Stage-1 small caps print sparsely. At ~110 bytes a bar that is
+        ~138 bars a ticker in the replay against ~20 at a live 09:25 — not the ~65 the clock
+        allows. So "190 bars against 65" is the right direction but only ~2.9x of the
+        measured 6.7x: it understates the correction, and is not a formula to predict with.
+
+        Either way the percentage saving from thinning the cadence is unaffected, because
+        both curves scale with the same Stage-1 count.
         """
         calls = sum(self.calls_used)
         return sum(self.bytes_used) / calls if calls and self.bytes_used else 0.0

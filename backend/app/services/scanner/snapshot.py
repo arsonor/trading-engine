@@ -216,8 +216,9 @@ class FmpLiveSnapshotProvider:
     extended bars showed 313.96 with 43,030 pre-market shares. So there is no batch route
     to live pre-market state; it is `historical-chart/5min?extended=true` per candidate.
 
-    That is affordable only because the Stage-1 set is small: ~694 tickers against FMP's
-    750 calls/minute is roughly 0.7 minutes per pass, inside the 5-minute cadence.
+    That is affordable only because the Stage-1 set is small: ~736 tickers (measured
+    18 August 2026 at 737 calls a pass; ~694 when this was written) against the 700
+    calls/minute pacer is just over a minute per pass, inside the 5-minute cadence.
 
     ## Three behaviours that are easy to get wrong
 

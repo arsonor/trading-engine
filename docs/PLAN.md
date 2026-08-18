@@ -494,6 +494,17 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
 > projection built on 10.2 MB × 66 passes (14.1 GB live, 23.6 GB total, "~47% of
 > allowance") overstates the live scan by roughly an order of magnitude. Actual live draw is
 > ~1.0 GB/month, ~2.0% of the 50 GB allowance.
+>
+> **The call count settles which input moved, and it is not the universe** — measured
+> 18 August 2026 over seven sessions: a live pass makes **737 calls against 4C's 672**, so
+> the Stage-1 set has *grown* ~10% rather than shrunk, and the whole gap is payload:
+> **15.2 KB a call** in the replay against **2.27 KB** at a live 09:25, a factor of **6.7**.
+> The bar-window ratio above accounts for only ~2.9 of that; the rest is *coverage*. A
+> replay returns regular-hours bars too, when every ticker prints every five minutes, while
+> in pre-market most Stage-1 small caps print sparsely — ~138 bars a ticker in the replay
+> against ~20 live, not the ~65 the clock allows. The corrected figures are therefore
+> conservative: they were measured on a universe 10% larger than the one that produced the
+> 10.2 MB.
 
 **Still open — carried into observation and Phase 5:**
 
@@ -604,7 +615,8 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       > rather than the ~65 a live 09:25 pass carries. The cadence still earns its place on
       > information grounds; it was never the bandwidth emergency 4C described. Note also
       > that the saving is **53%, not the 71% the pass count suggests** — the passes kept are
-      > the late, expensive ones.
+      > the late, expensive ones. Confirmed 18 August with the calls column: **737 calls a
+      > pass against 4C's 672**, so the universe grew ~10% and the gap is payload alone.
 - [x] **Open the scan window at 04:15, not 04:00** — ✅ **DONE (17 August 2026),** shipped
       ahead of the tiering as its own commit. The 04:00, 04:05 and 04:10 passes produced
       zero candidates in 18 of 18 session-passes, structurally — with the ~7-minute settling

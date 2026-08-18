@@ -209,6 +209,12 @@ sessions (10–14, 17 August 2026; 394 completed passes) with `scripts/cadence_p
 > "~47% of allowance" was a projection from a 10.2 MB `--at` replay pass and does not
 > survive per-pass measurement; see `docs/PLAN.md` Phase 4C.
 
+> **The gap is payload, not calls.** A live pass makes **737 calls** (18 August 2026, seven
+> sessions) against 4C's 672 — the Stage-1 set grew ~10%, so per call it is 15.2 KB in the
+> replay against 2.27 KB live at 09:25. Calls are also where the tiering buys the real
+> headroom against the guard: 66 passes is ~48.6k calls a day against the cron's
+> `FMP_DAILY_BUDGET=80000`, 19 passes is ~14.0k.
+
 > **Render cron is UTC.** ET/DST conversion must be explicit in code. A UTC-pinned
 > schedule silently drifts by one hour twice a year — for a market-timed scanner this is
 > a correctness bug, not a cosmetic one. Schedule generously in UTC and gate the actual
