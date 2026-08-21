@@ -142,6 +142,16 @@ upside_pct         = (nearest_resistance - price_premarket_current) / price_prem
 > experience shows how often it occurs and how those names behave. See open question #8 in
 > `PROJECT_REPORT.md`.
 >
+> **How often it occurs is now measured: 46 times in 8 sessions — 17.7% of Stage-2
+> survivors, ~5.75 a morning** (21 August 2026, authoritative passes only). Nearly one in
+> five tickers that clears gap *and* RVOL is discarded for having no measurable ceiling.
+> That is large enough that the decision deserves to be taken deliberately rather than left
+> as a default. **How those names behave is still unknown** — the second half of the
+> deferral needs Phase 6 outcome labelling, and these tickers are rejected before an alert
+> exists, so today nothing records what they did next. Note the corollary: this rejection is
+> exactly why `upside_pct IS NULL` has never once appeared on a live alert, so the
+> null-tolerance below remains insurance rather than an exercised path.
+>
 > **Keep this cheap to reverse.** `Candidate.upside_pct` and `nearest_resistance` are
 > nullable by design. The alternative behaviours (alert with upside marked unbounded, or
 > assign a synthetic extension target) must stay a change to the Stage-3 branch plus a
@@ -163,7 +173,27 @@ Every alert carries: `ticker`, `gap_pct`, `rvol_pct`, `catalyst` (nullable),
 
 > **Confidence score:** starts as a transparent, documented weighted formula with
 > constants in config. The weights are **provisional assumptions until backtested**
-> (Phase 5). The UI must never present the score as validated.
+> (Phase 6). The UI must never present the score as validated.
+
+> **What the score does and does not say, measured over 61 live alerts** (21 August 2026).
+> It is a **within-session ordering, not a quality measure.** The top score sits in a
+> 0.893–0.924 band on every session regardless of conditions — the factors saturate by
+> design, so a 3-candidate morning and a 14-candidate one both produce a ~0.90 leader.
+> "0.91" therefore says *best today*, never *good*. Two further facts constrain how the
+> weights may be refitted:
+>
+> - **`data_quality` is a constant.** It scored 1.000 on all 61 alerts — on Premium with
+>   100% profile coverage none of its penalties apply — so its 10% weight is a fixed
+>   +0.100 offset that cannot rank anything. It remains a real guard for degraded data;
+>   it simply never discriminates on a normal morning.
+> - **Weight and influence are mismatched.** By weight × observed spread, RVOL (37.6%) and
+>   upside (35.0%) drive ~73% of the ordering, liquidity 15.9%, and `gap_position` just
+>   11.4% against its 20% weight.
+>
+> The practical consequence is a **compressing head**: the more candidates a morning
+> produces, the less the top of the list separates (0.206 between rank 1 and rank 5 at 8
+> candidates, 0.074 at 14). The ranking is weakest precisely on the mornings the user most
+> depends on it. Phase 6 fits against this, not just against hit rates.
 
 ### 4.5 Timing model
 
@@ -202,18 +232,29 @@ sessions (10–14, 17 August 2026; 394 completed passes) with `scripts/cadence_p
 > `bars.bucket_minute` rather than following the window start, so moving the open to 04:15
 > cannot rebase the RVOL denominator.
 
-> **Measured bandwidth** (per-pass `bytes_used`, 17 August 2026): 48.5 MB a session at 66
-> passes, 22.6 MB at 19 — a **53% cut, not the 71% the pass count suggests**, because the
-> fan-out asks for every bar since 04:00 and the passes kept are the late, expensive ones.
-> Against 50 GB / 30 days the live scan is ~2.0% before and ~0.9% after. Phase 4C's
-> "~47% of allowance" was a projection from a 10.2 MB `--at` replay pass and does not
-> survive per-pass measurement; see `docs/PLAN.md` Phase 4C.
+> **Measured bandwidth** (`scan_runs` summed per ET session, 21 August 2026): **46.3 MB a
+> session at 66 passes, 20.6 MB at 19** — a **55% cut, not the 71% the pass count
+> suggests**, because the fan-out asks for every bar since 04:00 and the passes kept are the
+> late, expensive ones. Against 50 GB / 30 days the live scan is ~2.0% before and **~0.9%**
+> after. Phase 4C's "~47% of allowance" was a projection from a 10.2 MB `--at` replay pass
+> and does not survive per-pass measurement; see `docs/PLAN.md` Phase 4C.
+
+> **The scan is not where the bandwidth goes.** The nightly reference cycle is **~92% of
+> everything this project consumes** — ~245 MB a night against the scan's 20.6 MB a
+> session. Total draw is **~11.4% of the 50 GB allowance** (was 20.8% before the 18 August
+> incremental profile build). Ample headroom, but it means the cadence and window work
+> optimised the small half; `docs/PLAN.md` Phase 4B carries the correction and the reason
+> the old figure read 1.1%.
 
 > **The gap is payload, not calls.** A live pass makes **737 calls** (18 August 2026, seven
 > sessions) against 4C's 672 — the Stage-1 set grew ~10%, so per call it is 15.2 KB in the
 > replay against 2.27 KB live at 09:25. Calls are also where the tiering buys the real
 > headroom against the guard: 66 passes is ~48.6k calls a day against the cron's
-> `FMP_DAILY_BUDGET=80000`, 19 passes is ~14.0k.
+> `FMP_DAILY_BUDGET=80000`, 19 passes is ~14.0k. **Every pass makes the same number of
+> calls** — 737.0 on all 66 passes of 17 August — because the fan-out is one call per
+> Stage-1 survivor and that set is fixed for the session. The ceiling is shared: both crons
+> increment the same `api_budget` row for the UTC day, so the old cadence plus a nightly
+> peaked at **56,011 calls, 70% of 80,000**. It is now 24%.
 
 > **Render cron is UTC.** ET/DST conversion must be explicit in code. A UTC-pinned
 > schedule silently drifts by one hour twice a year — for a market-timed scanner this is
@@ -254,6 +295,13 @@ unfiltered by default, which is where "did the cron fire?" is answered).
 > parsing `suggested_entry_window`, which is prose for a human. Faded candidates are
 > demoted, never dropped: a ticker that spiked at 05:10 and died is real information, and
 > Phase 6 outcome labelling will want it.
+>
+> **The 37-against-11 was not an unlucky example — it is the normal shape.** Across seven
+> live sessions (13–21 August 2026) only **21–42% of a session's alerts survive to 09:25**:
+> 14–41 tickers qualify at some point, **3–14** remain. The toggle is therefore demoting
+> roughly seven rows in ten, which is most of what keeps the page readable. A build that
+> reverted to one undifferentiated list would not look slightly worse; it would show the
+> user three times the rows, mostly dead.
 
 ---
 

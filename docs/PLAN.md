@@ -437,8 +437,34 @@ paginates by week; no daily call cap, 750/min, bandwidth is the real limit.
 - [x] Round-trip migration test on populated data; RLS holds on the new table
 
 **Measured:** 3,948 maintained universe → **694 Stage-1 eligible**. 695 profiles built, 691
-with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 calls / 453 MB —
-**0.53 GB per 30 days, 1.1% of the allowance.** Same-day reference refresh: 0 calls, 75 s.
+with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 calls / 453 MB.
+Same-day reference refresh: 0 calls, 75 s.
+
+> **⚠ The monthly figure originally stated here was wrong by a factor of ~18, and it sent
+> two phases of optimisation at the wrong target.** This paragraph read "453 MB — **0.53 GB
+> per 30 days, 1.1% of the allowance**". 453 MB is the cost of **one night**, and the
+> nightly cron runs 22 weekdays a month: the real draw at that rate was **~9.7 GB / 30 days,
+> ~19% of the allowance**. The per-run measurement was sound; only the extrapolation was
+> not. Corrected 21 August 2026 from `api_budget`, which records calls and bytes per UTC
+> day.
+>
+> **The nightly job is ~92% of everything this project spends**, and the tiered cadence,
+> the 04:15 window and the whole 4C bandwidth argument were fought over the other 8%. Per
+> weekday, measured by subtracting the scanner's own `bytes_used` from the day's total:
+>
+> | | scanner | nightly | total | × 22 | % of 50 GB |
+> |---|---:|---:|---:|---:|---:|
+> | 11–17 Aug | 46.3 MB | 437.9 MB | 484 MB | 10.4 GB | **20.8%** |
+> | 18–20 Aug | 20.6 MB | ~245 MB | 266 MB | 5.7 GB | **11.4%** |
+>
+> Still comfortably inside the allowance — this is a documentation correction, not an
+> operational problem. But it inverts the priority: **the next bandwidth work, if any is
+> ever needed, is the nightly reference refresh, not the scan.**
+>
+> One limit on attribution: `api_budget` is one row per UTC day shared by both crons, so
+> the nightly figure is obtained by subtraction and the profile build cannot be separated
+> from the reference refresh. Only `universe_runs.bytes_used` is attributable on its own.
+> Splitting the rest would need per-job accounting that does not exist yet.
 
 **Four things found by measuring rather than assuming:**
 1. **The screener's `volume` is session-so-far, not a daily average** — 1,880 rows at 04:22
@@ -557,8 +583,10 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       indistinguishable from a quiet market.
 - [x] **Promote the cron to live** — ✅ **DONE.** `--no-alerts` removed from `render.yaml`.
       Alerts now persist and broadcast from every pass. Promoted after three observation
-      sessions (10–14 August 2026) showed a stable pipeline, sane candidate counts and zero
-      failures.
+      sessions (**10–12 August 2026**) showed a stable pipeline, sane candidate counts and
+      zero failures. The change landed at 20:14 CEST on the 12th, after that morning's
+      window, so **13 August is the first session whose alerts persisted** — the date the
+      observation record below begins.
 - [x] **09:25 authoritative pass** — ✅ **DONE.** It had never executed in production:
       Render's 10–45 s scheduler latency meant the 13:25 UTC run started at 09:25:10 ET, and
       a full-timestamp comparison put it outside a window ending at 09:25:00. The log read
@@ -589,11 +617,79 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       1–32 candidates per pass with a coherent intraday ramp, tracking market conditions
       rather than emitting a constant. Thresholds stay at 3–15% gap, RVOL > 10%, upside
       ≥ 5.5%.
-- [ ] **First weeks of live observation.** Now that alerts persist: watch alerts per morning
-      and their content. Candidate counts at the authoritative pass ranged **~7 (Tue) to 30
-      (Wed)** — a 4× spread across ordinary sessions. On a busy morning the end user sees a
-      long list, which makes the **confidence ranking** the thing he actually relies on —
-      and that ranking is provisional until Phase 6.
+- [x] **First weeks of live observation** — ✅ **CLOSED (21 August 2026).** Seven live
+      sessions, 13–21 August (the cron was promoted at 20:14 CEST on the 12th, after that
+      morning's window, so the 13th is the first session whose alerts persisted). **207
+      alerts, 61 confirmed at 09:25, 5,900 Stage-1 evaluations, zero failed scans.**
+
+      **The pipeline is sound, and the funnel proves its own bookkeeping.** 672 wake-ups
+      across eight days: 0 failed, 0 stuck in `running`, 0 snapshot fetch errors. At the
+      eight authoritative passes, 5,900 Stage-1 survivors resolve to 91 candidates and
+      5,809 rejections — every ticker is either a candidate or carries exactly one recorded
+      reason, with no remainder on any session. Profile coverage was **100%** every day
+      (`with_profile` = `stage_1`), so `rvol_is_approximate` is false on all 207 alerts and
+      the per-ticker fallback built in 4C has never fired in production. Universe 3,912–3,964,
+      Stage-1 733–743, duration 65.9–67.7 s — the inputs are stable, so the alert count is
+      the market talking.
+
+      **The alert volume is smaller than 4C feared, and the fade is the bigger number.**
+      Confirmed sets ran **3 to 14 (mean 8.7)**, not the 7–30 this item previously recorded
+      — that range came from the observation sessions, and the 30 was Wednesday 12 August,
+      a real pass, now the extreme of ten sessions rather than a typical morning. What no
+      one had measured is that **only 21–42% of a session's alerts survive to 09:25**:
+      14–41 tickers qualify at some point, 3–14 remain. The confirmed/faded split shipped
+      on 15 August is therefore hiding about seven rows in ten, which is most of what makes
+      the dashboard readable.
+
+      **The ranking discriminates — least when it matters most.** Within a session the
+      confirmed scores span ~0.3–0.5 (sd 0.108–0.184), so the ordering is real and not
+      noise. But the top score is pinned at **0.893–0.924 across all seven sessions**,
+      covering a 3-candidate Tuesday and a 14-candidate Friday alike: the saturation design
+      guarantees a ~0.90 leader every morning, so **the score has no cross-day meaning** and
+      the UI presents it as a bare number. Worse, the head of the list compresses as the
+      list grows — top-minus-rank-5 was 0.206 at 8 candidates, 0.140 at 11, **0.074 at 14**.
+      Exactly when the user most needs the ranking to choose for him, it separates least.
+      The mechanism is measured, not guessed (weight × observed sd):
+
+      | factor | weight | sd | share of the spread |
+      |---|---:|---:|---:|
+      | rvol | 30% | 0.324 | 37.6% |
+      | upside_headroom | 25% | 0.362 | 35.0% |
+      | liquidity | 15% | 0.274 | 15.9% |
+      | gap_position | 20% | 0.148 | 11.4% |
+      | data_quality | 10% | **0.000** | **0.0%** |
+
+      `data_quality` is **1.000 on all 61 confirmed alerts** — a constant +0.100 that cannot
+      move any ranking. It was built for V1 conditions (demo profile, approximate RVOL,
+      fixture snapshots) and on Premium with full profile coverage its penalties never
+      apply. `gap_position` carries a fifth of the weight for a ninth of the discrimination.
+      Both are inputs to Phase 6's weight fitting, which no longer starts from a blank
+      slate.
+
+      **Three findings handed forward rather than acted on** — see Phase 6:
+      1. **The RVOL floor is nearly inert as a filter.** Stages short-circuit gap-first, so
+         `rvol_pct > 10` is only ever asked about tickers that already gapped 3–15%, and it
+         then rejects **47 of 307 (15.3%)**. Normalized RVOL still earns its keep — it is
+         the largest single driver of the *ranking* — but as a gate it barely binds.
+      2. **The breakout convention now has the frequency §4.3 deferred it for.**
+         "No resistance above price" fired **46 times in 8 sessions — 17.7% of Stage-2
+         survivors, ~5.75 a morning.** Nearly one in five momentum survivors is discarded
+         as unmeasurable headroom. Still a strategy call for the end user; it now has a
+         number attached. (It is also why `upside_pct IS NULL` never occurs: these are
+         rejected, never alerted, so the nullable columns stay unexercised in production.)
+      3. **The scanner surfaces fresh names, not a recurring cluster.** 61 confirmed alerts
+         came from **55 distinct tickers**, 6 of which repeated and none three times — out
+         of a stable ~740-ticker Stage-1 pool.
+
+      **One analysis trap found, no production impact.** `clock.is_final_pass()` is
+      `at_minute(now) >= 09:25`, and the `scan_runs` row opens *before* the window gate, so
+      every post-window heartbeat — 18 a day — is stamped `is_final_pass: true`. Nothing
+      reads it there (`/status` selects `last_run` with `status != 'skipped'`, and
+      `alerts.is_final_pass` is a separate column that cross-checks perfectly against
+      `risk_filters` on all eight sessions), but a `scan_runs` query written the obvious way
+      returns 19 rows a day instead of 1. Phase 6 queries this table for a living. Filter on
+      `status = 'completed'` as well, or guard the write. Same family as the session-total
+      hotfix: a field that is true for a reason the reader does not expect.
 - [x] **Tier the early cadence** — ✅ **DONE (17 August 2026).** 19 passes a session rather
       than 66: 04:15 → hourly → 07:00 → 30 min → 08:00 → 15 min → 08:30 → 5 min → 09:25,
       config-driven via `SCAN_CADENCE_TIERS`, gated in `services/scanner/cadence.py`. The
@@ -617,6 +713,17 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
       > that the saving is **53%, not the 71% the pass count suggests** — the passes kept are
       > the late, expensive ones. Confirmed 18 August with the calls column: **737 calls a
       > pass against 4C's 672**, so the universe grew ~10% and the gap is payload alone.
+      >
+      > **Confirmed against four sessions of the cadence actually running** (21 August, from
+      > `scan_runs` summed per ET session date). The re-sum was sound and slightly
+      > conservative: **46.3 MB at 66 passes (17 Aug) against 20.6 MB at 19 (18–21 Aug,
+      > range 20.1–21.4), a 55% cut.** The first tiered session was **18 August** — the
+      > commit landed at 19:55 CEST on the 17th, after that morning's window. Call counts
+      > land exactly where predicted too: 48,642/day before (737.0 per pass, identical on
+      > every pass, since the fan-out is one call per Stage-1 survivor and that set is fixed
+      > for the session) against ~14,000 after. That mattered more than anyone noticed —
+      > the old cadence peaked at **56,011 calls against the shared 80,000 ceiling, 70%**,
+      > where a single `--rebuild` night would have breached it. It is now 24%.
 - [x] **Open the scan window at 04:15, not 04:00** — ✅ **DONE (17 August 2026),** shipped
       ahead of the tiering as its own commit. The 04:00, 04:05 and 04:10 passes produced
       zero candidates in 18 of 18 session-passes, structurally — with the ~7-minute settling
@@ -628,8 +735,14 @@ with ≥20 sessions, 0 thin. 38,609 profile rows. Full nightly cycle ~6,900 call
 - [x] **Make the volume-profile build incremental across days** — ✅ **DONE (16 August
       2026).** A fresh night now costs **one request per ticker** (0 on a same-day re-run,
       full pagination on `--rebuild`), against ~2,776 calls and ~140 MB for the old nightly
-      rebuild — roughly a 73% cut, to ~741 calls and ~37 MB. Byte figures pending the next
-      real nightly run.
+      rebuild — roughly a 73% cut, to ~741 calls and ~37 MB.
+      **Byte figures now measured (21 August 2026): the whole nightly cycle went 437.9 MB →
+      ~245 MB, a 44% cut**, nearly double the ~103 MB the brief predicted for the profile
+      job alone. `api_budget` cannot say which job the extra saving came from — see the
+      attribution note in Phase 4B. The first post-deploy night still paid full price
+      (Mon 17 Aug), because `premarket_session_volume` was empty until its first run and had
+      to be populated by full pagination; **17→18 August was the first genuinely incremental
+      night**, and the drop is visible as a single step in the daily byte series.
       Required a table the brief did not anticipate: `premarket_session_volume` keeps the
       per-session curves, because "drop the oldest" cannot be done on a per-bucket average
       whose contributions were never stored. That table also retains the RVOL denominator's
@@ -671,6 +784,47 @@ the dashboard.
 > Until this completes, the confidence score is a documented assumption, not a model, and
 > the UI says so.
 
+**What Phase 4's observation window hands to this phase** (21 August 2026, 7 live sessions):
+
+> **The sweep can answer for two of its four thresholds, not all four.** Stages
+> short-circuit, and at the eight authoritative passes **94.7% of everything gap-tested was
+> rejected on gap** (5,431 of 5,738) — with no RVOL and no upside recorded, because they
+> were never computed. `sweep_limitations()` would correctly report almost the entire
+> population as unresolved for a **widened gap band**. Only 307 tickers ever reached the
+> RVOL test and 260 reached Stage 3, so **the 10% and 5.5% floors are fully answerable from
+> stored rows, while 3% and 15% are not.**
+
+> **Prerequisite, and it is time-sensitive: Follow-up D** (`docs/PROMPT.md`) — evaluate
+> every stage for every Stage-1 survivor and decide exactly as now. This was the open
+> decision Follow-up C parked as out of scope; the 94.7% above is what promotes it from a
+> refinement to the thing that makes half this phase's sweep possible at all. It costs **no
+> extra API calls and no extra queries** — the fan-out already covers every Stage-1 ticker
+> (`api_calls_used` = `stage_1` + 1) and the profile map is already bulk-loaded
+> (`with_profile` = `stage_1`) — but it changes stage flow, so it ships with a test
+> asserting an identical candidate set.
+>
+> **Do it early rather than when this phase starts.** Every session that runs without it
+> loses ~5,400 tickers of decision-time evidence for good: bars revise upward within
+> ~7 minutes and both RVOL denominators are overwritten nightly. That is the same argument
+> that made Follow-up C outrank a bandwidth optimisation, and it applies here unchanged.
+
+- **Start the weight fitting from the measured factor table**, not from the priors.
+  `data_quality` is a **constant 1.000** on every live alert (a +0.100 offset that cannot
+  rank anything), `gap_position` carries 20% of the weight for 11% of the discrimination,
+  and RVOL + upside drive 73% of it. See the table in Phase 4's observation close.
+- **Test raising `SCAN_RVOL_MIN` first.** As a filter it currently rejects **47 of 307
+  (15.3%)** of the tickers that clear the gap band — nearly inert — while being the single
+  largest driver of the ranking. This is the threshold with the most obvious room to move
+  and the one the stored data can actually adjudicate.
+- **Two ranking defects to fit against, not just hit rates.** The top score is pinned in a
+  0.031 band across sessions (no cross-day meaning), and the head of the list compresses as
+  the list grows. A fit that improves hit rate but leaves ranks 1–5 inside 0.074 on a
+  14-candidate morning has not solved the user's problem.
+- **Query `scan_runs` with `status = 'completed'`.** `is_final_pass` is stamped on every
+  post-window heartbeat too — 18 a day. See the note in Phase 4.
+- Evidence is accumulating as designed: **3,781 `scan_observations` rows over 19 runs**
+  (17–21 Aug), every Stage-1 survivor at each final pass plus ~6.4 candidates per anchor.
+
 ### Phase 7 — Hardening (before the end user relies on it)
 Auth on the dashboard; push/email delivery at 09:25 ET; FMP usage and bandwidth monitoring;
 scan-failure alerting (a silent failed scan is the worst bug this app can have).
@@ -699,14 +853,14 @@ scan-failure alerting (a silent failed scan is the worst bug this app can have).
 |---|---|---|
 | ~~Split-distorted reference data~~ **DISPROVED** | — | `historical-price-eod/full` is already split-adjusted (verified: price and volume ratios both exactly 150.0 against the non-split-adjusted series). The flagged tickers were real collapses, not data errors |
 | ~~Extreme-upside candidates from collapsed stocks~~ **CONTAINED** | A stock down 85% has all historical levels far above it → huge upside → could outrank genuine setups | **Three independent barriers.** (1) `price_regime_break` (3×) and `scan_upside_max` (100%) reject the extremes as named risk-filter rejections. (2) The confidence score's upside factor **saturates at 16.5%** (5.5 × 3.0), so extra headroom buys no ranking advantage — and the dashboard sorts by confidence. (3) `score_data_quality` penalises unmeasured headroom. Verified live 11 Aug: all candidates 1.7–13.5% upside, no collapsed names in the list |
-| **Confidence ranking is unvalidated** | On a busy morning the user sees ~30 candidates and relies on the ordering to pick. The weights are reasoned assumptions, not fitted | Labelled provisional in API and UI; every score exposes its full factor breakdown so the *why* is inspectable. Only Phase 6 backtesting retires `is_provisional` |
-| Bandwidth growth with universe size | **Far smaller than 4C projected.** Per-pass measurement (17 Aug) puts the live scan at 48.5 MB/session, ~1.0 GB/month, **~2.0% of the 50 GB allowance** — not the 47% projected from a 10.2 MB `--at` replay pass. Still scales linearly with the Stage-1 count | Tiered cadence, now shipped, halves it again (22.6 MB/session, ~0.9%); incremental nightly profile build cut that job ~73%; bandwidth tracking in the guard; 400-day EOD bound |
+| **Confidence ranking is unvalidated** — *and now measured to be weakest exactly where it is needed* | The weights are reasoned assumptions, not fitted. Seven live sessions add two specifics: the top score is pinned at 0.893–0.924 regardless of market conditions, so it carries **no cross-day meaning**; and the head of the list **compresses as the list grows** (top-minus-rank-5 was 0.206 at 8 candidates, 0.074 at 14) | Labelled provisional in API and UI; every score exposes its full factor breakdown so the *why* is inspectable. Only Phase 6 backtesting retires `is_provisional` — and it now starts from the measured factor table in Phase 4, not from scratch |
+| Bandwidth growth with universe size | **The scan was never the problem, and 4B's monthly figure hid the one that is.** The live scan is 20.6 MB/session, 0.45 GB/month, **0.9%** of the 50 GB allowance. The **nightly job is ~92% of all consumption** — its cost was recorded as "1.1% of the allowance" by stating one night's 453 MB as a 30-day total (see Phase 4B). Measured total draw: **20.8% of allowance before the 18 August optimisations, 11.4% after** | Tiered cadence (53→55% off the scan); incremental nightly profile build (44% off the nightly, measured 21 Aug); bandwidth tracking in the guard; 400-day EOD bound. Headroom is ample either way — but any future bandwidth work belongs on the nightly refresh, not the scan |
 | Render cron UTC/DST drift | Wrong-hour scans twice a year | Explicit ET conversion, generous UTC schedule + ET gate, DST tests. **Also:** boundary comparisons are minute-resolution, so scheduler latency cannot push a scheduled pass outside its own window — that bug silently cost the authoritative 09:25 pass for three sessions |
 | Silent scan failure | Looks like a quiet market | `scan_runs` failure taxonomy + distinct UI states + failure alerting (Phase 7) |
 | Demo profile confused for production | Misleading alerts | Profile name stamped on every scan run and alert; demo output badged in the UI |
 | Supabase RLS on public tables | Without RLS, anyone with the project URL + anon key can read/write via the auto-generated Data API | RLS enabled with **no policies** on every public table — denies the Data API, leaves the app unaffected (backend connects as `postgres`, which bypasses RLS). A CI test fails if any table lacks it |
 | Over-trusting the confidence score | User treats provisional weights as validated | Labelled provisional in API and UI until Phase 6 |
-| **Alert volume variance** | Candidate counts at the authoritative pass ranged 7–30 across three ordinary sessions. A 30-row list is not a short list | Not a fault — it tracks real market conditions. But it shifts the burden onto the confidence ranking, and the end user should be told plainly that a busy morning yields a long list and the ordering is provisional |
+| **Alert volume variance** | **Smaller than feared, and re-measured.** Seven live sessions confirmed **3–14 candidates (mean 8.7)** at the authoritative pass — the 7–30 range came from the observation sessions and 30 remains the worst case of ten, not a typical morning. The real number nobody had: **only 21–42% of a session's alerts survive to 09:25**, so 14–41 tickers qualify and 3–14 remain | Not a fault — it tracks real market conditions. The confirmed/faded split carries it: it demotes roughly seven rows in ten, which is most of what keeps the dashboard readable. The burden still falls on the confidence ranking, and a busy morning still yields the longest list with the *least* separated head — see the row above |
 
 ---
 

@@ -1297,9 +1297,13 @@ session whose evidence is gone for good.
 > over.** A ticker rejected on gap never has RVOL computed, so widening the gap band
 > surfaces tickers whose fate is *unknown*, not *passing*. `sweep_limitations()` states it
 > in one place and the test pins the behaviour: FLAT comes back as unresolved.
-> **Open decision:** evaluating every stage for every ticker regardless of earlier
-> failures would remove the limit and costs no extra API calls — the data is already in
-> memory — but it changes stage flow, which this brief put out of scope.
+> **Open decision — now RESOLVED as a decision, not yet as code. See Follow-up D below.**
+> Evaluating every stage for every ticker regardless of earlier failures would remove the
+> limit and costs no extra API calls — the data is already in memory — but it changes stage
+> flow, which this brief put out of scope. Phase 4's close (21 August 2026) measured the
+> size of what that limit costs: **94.7% of the gap-tested population short-circuits at
+> gap**, so the sweep Phase 6 committed to cannot be run for two of its four thresholds.
+> That promotes this from a refinement to a prerequisite.
 >
 > **Cost measured, as the DoD asked.** 741 rows against Postgres: **225 ms median**
 > (min 214, max 248), against a pass that does ~65 s of real work, on 1 pass in 66 plus
@@ -1390,6 +1394,162 @@ replay case without a second history table.
 4. Pass duration measured before and after; the delta is reported
 5. Migration round-trips on populated data; RLS present; tests pass offline; ruff clean
 ````
+
+---
+
+### Follow-up D — Evaluate every stage for every ticker
+
+**Status:** ⏳ OPEN — briefed 21 August 2026, not implemented
+**Size:** small in code, high in blast radius — it touches the path that decides which
+tickers become alerts
+**Priority: do this early, not when Phase 6 starts.** Every session that runs without it
+loses ~5,400 tickers' worth of decision-time evidence permanently, for the reason
+Follow-up C established: pre-market bars revise upward within ~7 minutes and both RVOL
+denominators are overwritten nightly. It is the same argument that made Follow-up C
+outrank a bandwidth optimisation, and it now has a measured number behind it.
+
+````
+# Follow-up D — Compute every stage for every Stage-1 survivor, decide exactly as now
+
+## The problem
+
+`scan_observations` records what each stage computed *before the ticker stopped
+advancing*. The stages short-circuit, so a ticker rejected on gap carries a `gap_pct` and
+NULL for everything downstream. Phase 4's close measured the consequence at the eight
+authoritative passes of 13–21 August 2026:
+
+| | tickers |
+|---|---:|
+| Stage-1 evaluated | 5,900 |
+| rejected on gap — gap recorded, **RVOL and upside NULL** | 5,431 |
+| reached the RVOL test | 307 |
+| rejected on RVOL — **upside NULL** | 47 |
+| reached Stage 3 | 260 |
+
+**94.7% of everything gap-tested is unresolvable for a widened-gap sweep.** Phase 6 is
+committed to "threshold sensitivity sweep to justify or revise 3% / 15% / 10% / 5.5%".
+The 10% and 5.5% floors are answerable from stored rows today. **3% and 15% are not, and
+never will be for sessions already run.**
+
+## Why this is cheap — measured, not assumed
+
+Every input is already in memory before Stage 2 runs. Phase 4's close proves it from
+production rows rather than from reading the code:
+
+* `api_calls_used` = `stage_1` + 1 on every session — the snapshot fan-out already fetches
+  bars for **every** Stage-1 ticker, one call each, before any stage runs.
+* `with_profile` = `stage_1` on every session — `load_profiles()` already bulk-loads the
+  volume-profile map for the whole Stage-1 set in one query.
+* Reference data (prior close, `high_yesterday`, `high_20d`, `sma_50`, `sma_200`) is
+  already on each `Candidate` from Stage 1.
+* `observations_recorded` = `stage_1` already — the rows exist; they would simply carry
+  fewer NULLs. Storage delta is a handful of floats per row.
+
+So the marginal cost is in-memory arithmetic for ~5,400 extra tickers, against a pass that
+spends ~65 s on 737 HTTP calls. **Measure it anyway and report it** — this project's rule
+is that a hypothesis fitting the data is not a tested hypothesis.
+
+## Scope
+
+1. **Separate evaluation from decision.** Compute gap, RVOL and upside for every Stage-1
+   survivor; then apply the gates exactly as today. The candidate set must not move.
+2. **The rejection reason stays the FIRST gate that failed.** A gap-rejected ticker will
+   now also fail RVOL; if that overwrites `"gap outside band"`, the funnel stops
+   reconciling. Phase 4 measured that 5,900 = 91 candidates + 5,809 rejections with **no
+   remainder on any session** — one recorded reason per ticker, exactly. Preserve that
+   property; it is what makes the stored evidence trustworthy.
+3. **`InsufficientRvolData` must stop being a rejection.** It is a per-ticker rejection
+   reason today with **zero occurrences in eight sessions**, because only 307 tickers ever
+   reach it. Across 5,738 it will fire routinely for names that legitimately lack data.
+   Record it as a missing value on the observation row, never as the ticker's fate.
+4. **Re-examine `FeatureRequiresIntraday`.** `stage_2_momentum` deliberately lets it
+   escape as a scan-wide failure, on the reasoning that if RVOL is uncomputable every
+   ticker would be rejected and the run would look like a quiet market. Full evaluation
+   grows its exposure ~19×. Decide explicitly whether the escalation still belongs on the
+   evaluation path or only on the decision path.
+5. **Guards and risk filters stay on the decision path.** `integrity_warnings` has run a
+   stable 6–14 per session and is reported in scan output; running the decreasing-volume,
+   volume-sanity and price-regime-break guards over the full population could turn that
+   into hundreds and silently change a number people read. Same for
+   `data_quality_suppressed`.
+6. **Widen `sweep_limitations()`'s scope, do not delete it.** Short-circuiting is only one
+   source of unresolvability; a ticker with no snapshot (162 in eight sessions) still has
+   nothing to sweep on.
+
+## Do not take the cheap route
+
+`premarket_session_volume` could reconstruct the RVOL numerator for rejected tickers
+without touching stage flow. **Do not.** It holds the *settled* curve written the
+following night, and Phase 4A measured that 49.4% of pre-market bars revise upward
+(median +24.2%). A reconstruction is therefore biased high by construction, precisely in
+the direction that makes rejected tickers look better than the scanner saw them. That
+produces a plausible-looking wrong answer, which is worse than an honest "unresolved" —
+and it is the exact failure mode `scan_observations` was built to prevent.
+
+## Constraints
+
+* No new API calls. If a design needs one, it is the wrong design.
+* No schema change: the columns already exist and are already nullable.
+* Fixtures only in CI.
+
+## Definition of done
+
+1. **A test runs one pass under short-circuit and full evaluation and asserts an identical
+   candidate set** — the same pinning discipline used for the tiered cadence, and for the
+   same reason: a change that cannot alter the output should be made to prove it.
+2. A gap sweep over stored rows resolves tickers that previously came back unresolved;
+   the Follow-up C sweep test is extended rather than replaced.
+3. One recorded rejection reason per ticker, and it is the first gate that failed. A test
+   pins the funnel reconciling with no remainder.
+4. Pass duration measured before and after, and reported.
+5. `InsufficientRvolData` no longer appears as a rejection reason; tests pass offline;
+   ruff clean.
+````
+
+---
+
+## Phase 4 — CLOSED, 21 August 2026
+
+**No prompt. This is the closing record**; the measurements and their consequences are in
+`docs/PLAN.md` Phase 4, under the observation item. Seven live sessions (13–21 August),
+207 alerts, 61 confirmed, **zero failed scans in 672 wake-ups**.
+
+Read this before writing a Phase 5 or Phase 6 prompt — four of these change what the next
+brief should say:
+
+1. **The funnel accounts for itself exactly.** 5,900 Stage-1 evaluations → 91 candidates +
+   5,809 rejections, no remainder on any session. Any future change to the stages should
+   preserve that property; it is what made every other number here trustworthy.
+2. **The confidence ranking is the weak point, and it is now specific.** Not "the weights
+   are provisional" but: `data_quality` is a constant, `gap_position` is over-weighted ~2×
+   against its discriminating power, the top score has no cross-day meaning, and the head
+   of the list compresses as the list grows. Phase 6 fits against these, not from scratch.
+3. **The threshold sweep Phase 6 committed to can only answer half its question.** 94.7% of
+   the gap-tested population short-circuits at gap with nothing recorded downstream, so a
+   *widened* gap band is unresolvable from stored rows while the RVOL and upside floors are
+   fully answerable. A brief that promises to "justify or revise 3% / 15% / 10% / 5.5%"
+   from stored data is promising something the data cannot deliver for two of the four.
+4. **The bandwidth target was wrong for two phases.** The nightly cycle is ~92% of
+   consumption; the scan is ~8%. Do not open another scan-side bandwidth optimisation
+   without re-reading Phase 4B's correction.
+
+**Two decisions deliberately left open rather than taken on a Friday:**
+
+- **Raise `SCAN_RVOL_MIN`?** As a filter it rejects only 15.3% of what reaches it, because
+  the stages test gap first. This is Phase 6's call with outcome data — one week says where
+  to look, not where to land.
+- **Reverse the breakout convention?** It now has its frequency (17.7% of Stage-2
+  survivors, ~5.75 a morning) but not its outcomes, because these tickers are rejected
+  before an alert exists. Deciding needs Phase 6 labelling, or a deliberate collection run.
+
+**One cheap fix not applied**, so it does not get lost: `clock.is_final_pass()` is
+`>= 09:25` and the `scan_runs` row opens before the window gate, so 18 skipped heartbeats a
+day carry `is_final_pass: true`. Harmless in production — `/status` excludes skipped runs —
+but it makes the obvious `scan_runs` query return 19 rows a day instead of 1. Either guard
+the write in `pipeline._record` or always filter on `status = 'completed'`.
+
+`backend/scripts/sql/phase4_close.sql` holds the ten read-only queries these numbers came
+from, so the close can be re-run against a later window.
 
 ---
 
