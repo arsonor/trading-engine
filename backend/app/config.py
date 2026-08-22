@@ -170,6 +170,23 @@ class Settings(BaseSettings):
     # Default threshold profile for scans that do not name one.
     scan_profile: str = "production"
 
+    # --- Full evaluation (Follow-up D) ---------------------------------------------
+    # Compute every stage's metrics for every Stage-1 survivor, including the ones an
+    # earlier stage already rejected. It CANNOT change the candidate set: the evaluation
+    # passes run after every decision is made and append neither survivors nor rejections
+    # (`stages._evaluate_remaining_rvol`, `stages._assign_headroom`).
+    #
+    # On by default because the alternative loses evidence permanently. A ticker rejected
+    # on gap never has its RVOL computed, so Phase 6's threshold sweep can only report it
+    # as unresolved — 94.7% of the gap-tested population, measured 13-21 August 2026 — and
+    # it cannot be recovered later: pre-market bars revise upward within ~7 minutes and
+    # both RVOL denominators are overwritten nightly.
+    #
+    # The flag exists to be a rollback, not a rollout. If a live morning ever looks wrong,
+    # set it false and restart the cron rather than reverting and redeploying. Delete it
+    # once a week of sessions has confirmed the candidate sets are unchanged.
+    scan_full_evaluation: bool = True
+
     # --- Scan cadence (Follow-up A) -----------------------------------------------
     # WHEN the scanner works, as tiers: `HH:MM/interval-minutes`, comma-separated. The
     # FIRST tier's start is also when the scan window opens, so those two cannot drift.

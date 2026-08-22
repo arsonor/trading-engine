@@ -133,12 +133,18 @@ def stage_2_momentum(
     rvol_calculator: RvolCalculator,
     as_of: datetime,
     profiles: dict[str, VolumeProfile] | None = None,
+    full_evaluation: bool = False,
 ) -> StageOutcome:
     """Gap and relative volume against live pre-market state.
 
     A `FeatureRequiresIntraday` from the calculator is deliberately *not* caught: if RVOL
     cannot be computed at all, every ticker would be rejected and the run would look like
     a quiet market. That must surface as a failed scan instead.
+
+    `full_evaluation` (Follow-up D) adds a second pass that computes RVOL for the tickers
+    this one rejected on gap, so Phase 6 can sweep the gap band over stored rows. It runs
+    after every decision has been made and appends nothing to the outcome — see
+    `_evaluate_remaining_rvol`.
     """
     outcome = StageOutcome()
 
@@ -186,24 +192,7 @@ def stage_2_momentum(
             continue
 
         try:
-            result = rvol_calculator.compute(
-                RvolContext(
-                    ticker=candidate.ticker,
-                    volume_premarket_accumulated=snapshot.volume_premarket_accumulated,
-                    volume_avg_20d=candidate.volume_avg_20d,
-                    as_of=as_of,
-                    # The symmetry rule: the profile bucket is chosen from the instant the
-                    # numerator is actually complete to, not from the scan time. See
-                    # `_expected_volume_at` in rvol.py for why the difference matters.
-                    settled_through=snapshot.settled_through,
-                    premarket_volume_profile=(
-                        vol_profile.buckets if vol_profile else {}
-                    ),
-                    profile_sessions_sampled=(
-                        vol_profile.sessions_sampled if vol_profile else None
-                    ),
-                )
-            )
+            _assign_rvol(candidate, snapshot, vol_profile, rvol_calculator, as_of)
         except InsufficientRvolData as exc:
             # Missing inputs are a per-ticker data problem: skip it, keep scanning.
             outcome.rejections.append(
@@ -212,18 +201,6 @@ def stage_2_momentum(
             continue
         except FeatureRequiresIntraday:
             raise  # scan-wide failure; see the docstring
-
-        candidate.rvol_pct = at_precision(result.rvol_pct)
-        candidate.rvol_mode = result.mode
-        candidate.rvol_is_approximate = result.is_approximate
-        candidate.rvol_detail = result.detail
-        # Provenance travels with the candidate to the alert. `rvol_mode` above already
-        # records whether the normalized path degraded; these say what data it saw.
-        candidate.bars_settled_through = snapshot.settled_through
-        candidate.provisional_bars_excluded = snapshot.provisional_bars_excluded
-        candidate.profile_sessions_sampled = (
-            vol_profile.sessions_sampled if vol_profile else None
-        )
 
         # Strictly greater, per the spec.
         if candidate.rvol_pct <= profile.rvol_min:
@@ -239,14 +216,105 @@ def stage_2_momentum(
 
         outcome.survivors.append(candidate)
 
+    if full_evaluation:
+        _evaluate_remaining_rvol(candidates, snapshots, rvol_calculator, as_of, profiles or {})
+
     return outcome
+
+
+def _assign_rvol(
+    candidate: Candidate,
+    snapshot: MarketSnapshot,
+    vol_profile: VolumeProfile | None,
+    rvol_calculator: RvolCalculator,
+    as_of: datetime,
+) -> None:
+    """Compute RVOL and write it, with its provenance, onto the candidate.
+
+    Extracted so the decision loop above and the evaluation pass below cannot drift. Two
+    places assigning these fields differently is exactly the kind of divergence Phase 6
+    would read as a real difference between tickers.
+    """
+    result = rvol_calculator.compute(
+        RvolContext(
+            ticker=candidate.ticker,
+            volume_premarket_accumulated=snapshot.volume_premarket_accumulated,
+            volume_avg_20d=candidate.volume_avg_20d,
+            as_of=as_of,
+            # The symmetry rule: the profile bucket is chosen from the instant the
+            # numerator is actually complete to, not from the scan time. See
+            # `_expected_volume_at` in rvol.py for why the difference matters.
+            settled_through=snapshot.settled_through,
+            premarket_volume_profile=(vol_profile.buckets if vol_profile else {}),
+            profile_sessions_sampled=(vol_profile.sessions_sampled if vol_profile else None),
+        )
+    )
+
+    candidate.rvol_pct = at_precision(result.rvol_pct)
+    candidate.rvol_mode = result.mode
+    candidate.rvol_is_approximate = result.is_approximate
+    candidate.rvol_detail = result.detail
+    # Provenance travels with the candidate to the alert. `rvol_mode` above already
+    # records whether the normalized path degraded; these say what data it saw.
+    candidate.bars_settled_through = snapshot.settled_through
+    candidate.provisional_bars_excluded = snapshot.provisional_bars_excluded
+    candidate.profile_sessions_sampled = vol_profile.sessions_sampled if vol_profile else None
+
+
+def _evaluate_remaining_rvol(
+    candidates: list[Candidate],
+    snapshots: dict[str, MarketSnapshot],
+    rvol_calculator: RvolCalculator,
+    as_of: datetime,
+    profiles: dict[str, VolumeProfile],
+) -> None:
+    """Fill RVOL for tickers the decision loop rejected on gap. Decides nothing.
+
+    A ticker rejected on gap has never had its RVOL computed, so a Phase 6 sweep that
+    widens the gap band can only report it as *unresolved* — never as passing or failing.
+    Measured at the eight authoritative passes of 13-21 August 2026, that is **94.7% of
+    everything gap-tested** (5,431 of 5,738), which is most of the population the sweep
+    exists to ask about.
+
+    The pass costs no API calls and no queries: the snapshot fan-out already fetched bars
+    for every Stage-1 ticker (`api_calls_used` = `stage_1` + 1 on every session) and
+    `load_profiles` already bulk-loads the whole Stage-1 profile map (`with_profile` =
+    `stage_1`). What is left is arithmetic over data already in memory.
+
+    **It appends no rejections and no survivors, by construction.** The candidate set is
+    decided entirely by the loop above, which runs first and which this does not touch —
+    that is why full evaluation cannot change what the user is shown, and it is a property
+    of the shape rather than of the tests. The tests pin it anyway.
+
+    Selection is `gap_pct is not None and rvol_pct is None`: the state already on the
+    candidate says "gap was computed, RVOL was not", so no separate bookkeeping of the
+    rejected set exists to fall out of step with the loop.
+    """
+    for candidate in candidates:
+        if candidate.gap_pct is None or candidate.rvol_pct is not None:
+            continue
+        snapshot = snapshots.get(candidate.ticker)
+        if snapshot is None:  # pragma: no cover - a gap implies a snapshot
+            continue
+        try:
+            _assign_rvol(
+                candidate, snapshot, profiles.get(candidate.ticker), rvol_calculator, as_of
+            )
+        except (InsufficientRvolData, FeatureRequiresIntraday):
+            # Leave it NULL and move on. This ticker is already rejected, so there is no
+            # decision to protect — and failing a whole scan because a ticker nobody will
+            # be alerted about could not be measured would be absurd. NULL means "not
+            # evaluated", which is precisely what happened; see `sweep_limitations()`.
+            continue
 
 
 # --------------------------------------------------------------------------- Stage 3
 
 
 def stage_3_room_to_run(
-    candidates: list[Candidate], profile: ThresholdProfile
+    candidates: list[Candidate],
+    profile: ThresholdProfile,
+    also_evaluate: list[Candidate] | None = None,
 ) -> StageOutcome:
     """Room to run: is there enough space to the next resistance for a 5% move?
 
@@ -254,6 +322,10 @@ def stage_3_room_to_run(
     that sits ABOVE the current price — the first ceiling the move would hit. A ticker
     already above all four has no measurable headroom from these levels and is rejected
     rather than assigned an unbounded upside.
+
+    `also_evaluate` (Follow-up D) is the full Stage-1 set. Tickers in it that Stage 2
+    rejected get their headroom computed but not judged: no rejection, no survivor, no
+    risk filter. Pure arithmetic over reference data already loaded at Stage 1.
     """
     outcome = StageOutcome()
 
@@ -265,8 +337,12 @@ def stage_3_room_to_run(
             )
             continue
 
-        above = {name: level for name, level in candidate.resistance_levels().items() if level > price}
-        if not above:
+        # Null upside after this means "above every known level", which is the one case
+        # the spec asks us to reject rather than value. Sharing the rule with
+        # `_assign_headroom` is deliberate: two copies of "lowest level above the price"
+        # would eventually disagree, and Phase 6 would read the difference as real.
+        _assign_headroom(candidate)
+        if candidate.upside_pct is None:
             outcome.rejections.append(
                 Rejection(
                     candidate.ticker,
@@ -278,13 +354,6 @@ def stage_3_room_to_run(
             )
             continue
 
-        source = min(above, key=lambda name: above[name])
-        candidate.nearest_resistance = above[source]
-        candidate.resistance_source = source
-        candidate.upside_pct = at_precision(
-            (candidate.nearest_resistance - price) / price * 100
-        )
-
         # Inclusive, per the spec: 5.5 = 5% target + 0.5% slippage/fee buffer.
         if candidate.upside_pct < profile.upside_min:
             outcome.rejections.append(
@@ -293,14 +362,44 @@ def stage_3_room_to_run(
                     STAGE_3,
                     "insufficient upside",
                     f"upside {candidate.upside_pct:.2f}% < {profile.upside_min}% "
-                    f"(nearest resistance {source} at {candidate.nearest_resistance:.2f})",
+                    f"(nearest resistance {candidate.resistance_source} at "
+                    f"{candidate.nearest_resistance:.2f})",
                 )
             )
             continue
 
         outcome.survivors.append(candidate)
 
+    if also_evaluate:
+        decided = {c.ticker for c in candidates}
+        for candidate in also_evaluate:
+            if candidate.ticker in decided:
+                continue
+            _assign_headroom(candidate)
+
     return outcome
+
+
+def _assign_headroom(candidate: Candidate) -> None:
+    """Write `nearest_resistance` and `upside_pct`, judging nothing.
+
+    Shares the "lowest level above the price" rule with the decision loop above. A ticker
+    above all four levels keeps both fields NULL — the same state the loop leaves behind
+    when it rejects for unmeasurable headroom, and the state `docs/CLAUDE.md` 4.3 says the
+    schema must tolerate.
+    """
+    price = candidate.price_premarket_current
+    if not price or candidate.upside_pct is not None:
+        return
+
+    above = {name: level for name, level in candidate.resistance_levels().items() if level > price}
+    if not above:
+        return
+
+    source = min(above, key=lambda name: above[name])
+    candidate.nearest_resistance = above[source]
+    candidate.resistance_source = source
+    candidate.upside_pct = at_precision((candidate.nearest_resistance - price) / price * 100)
 
 
 def _format_levels(levels: dict[str, float]) -> str:

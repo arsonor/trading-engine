@@ -50,12 +50,26 @@ DEFAULT_ANCHOR_TIMES: tuple[time, ...] = (time(4, 15), time(7, 0), time(8, 30))
 
 
 def sweep_limitations() -> str:
-    """What a threshold sweep over these rows can and cannot conclude."""
+    """What a threshold sweep over these rows can and cannot conclude.
+
+    Narrowed by Follow-up D, not retired. Short-circuiting used to be the dominant reason
+    a value was missing — 94.7% of a live pass's gap-tested population, measured over
+    13-21 August 2026 — and `SCAN_FULL_EVALUATION` removes that reason. What remains is
+    the population that could never be evaluated at all: a ticker with no pre-market
+    snapshot has no price, so it has no gap, no RVOL and no headroom, and no setting
+    changes that. Roughly 20 tickers a session, and they must still come back unresolved.
+
+    The rule the caller needs is therefore unchanged, which is why this still exists:
+    **read NULL as "not evaluated", never as zero or as a fail.**
+    """
     return (
-        "Stages short-circuit, so a ticker rejected at an earlier stage has NULL for the "
-        "later stages' values. NULL means NOT EVALUATED, never zero: a sweep that widens "
-        "an early threshold must report the newly-admitted tickers as unresolved rather "
-        "than as passing."
+        "NULL means NOT EVALUATED, never zero. With SCAN_FULL_EVALUATION on, every "
+        "Stage-1 survivor that had a market snapshot carries gap, RVOL and headroom "
+        "regardless of which stage rejected it, so a widened threshold resolves it. "
+        "Tickers with no snapshot (not trading pre-market) have no values at all and "
+        "must be reported as unresolved. Rows written while the setting was off carry "
+        "the old short-circuit NULLs — check the session date before trusting a sweep "
+        "that spans 22 August 2026."
     )
 
 

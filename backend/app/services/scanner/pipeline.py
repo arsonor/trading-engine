@@ -36,6 +36,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.config import get_settings
 from app.models.scan_run import ScanRun, ScanRunStatus
 from app.services.scanner.cadence import Cadence, load_cadence
 from app.services.scanner.candidate import (
@@ -470,14 +471,25 @@ class Scanner:
         snapshots, findings = self._apply_integrity_guards(stage1, snapshots)
         result.integrity_warnings = [str(f) for f in findings]
 
+        # Follow-up D: metrics for every Stage-1 survivor, decisions for the ones that
+        # earn them. Both stages evaluate the rejected population only AFTER their own
+        # decision loop has finished, so this flag cannot move a candidate — see the
+        # module docstrings in `stages.py` and `test_full_evaluation.py`.
+        full_evaluation = get_settings().scan_full_evaluation
+
         stage2 = stage_2_momentum(
             stage1, snapshots, self._profile, self._rvol, result.as_of_et,
             profiles=vol_profiles,
+            full_evaluation=full_evaluation,
         )
         result.counts.stage_2 = len(stage2.survivors)
         result.rejections.extend(stage2.rejections)
 
-        stage3 = stage_3_room_to_run(stage2.survivors, self._profile)
+        stage3 = stage_3_room_to_run(
+            stage2.survivors,
+            self._profile,
+            also_evaluate=stage1 if full_evaluation else None,
+        )
         result.counts.stage_3 = len(stage3.survivors)
         result.rejections.extend(stage3.rejections)
 

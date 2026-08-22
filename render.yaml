@@ -211,6 +211,15 @@ services:
       # probable data fault — recorded, never silently dropped.
       - key: SCAN_VOLUME_SANITY_MULTIPLE
         value: "50"
+      # Follow-up D: compute gap, RVOL and headroom for EVERY Stage-1 survivor, not only
+      # the ones still advancing. Costs no calls — the fan-out already fetched their bars —
+      # and cannot change the candidate set, because both evaluation passes run after
+      # their stage has finished deciding. Set here explicitly, though `true` is also the
+      # code default, so rolling it back is editing one word and restarting the cron
+      # rather than reverting a commit at 05:00. Delete the key and the setting together
+      # once a week of sessions confirms the candidate sets are unchanged.
+      - key: SCAN_FULL_EVALUATION
+        value: "true"
       # WHEN the scanner works: `HH:MM/interval-minutes` tiers. The FIRST tier's start is
       # also when the window opens, so "opens at 04:15" and "hourly from 04:15" cannot
       # drift apart. See the cadence block above for the measurement behind these values,

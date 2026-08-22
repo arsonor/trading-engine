@@ -113,11 +113,21 @@ async def test_a_rejected_ticker_keeps_the_numbers_that_rejected_it(
 
     assert by_ticker["FLAT"].gap_pct == 1.0
     assert by_ticker["BLOW"].gap_pct == 20.0
-    # Rejected on gap, so RVOL was never computed. NOT zero — never evaluated.
-    assert by_ticker["FLAT"].rvol_pct is None
     # Rejected on RVOL, so both numbers exist.
     assert by_ticker["SLOW"].gap_pct is not None
     assert by_ticker["SLOW"].rvol_pct == 10.0
+
+    # Follow-up D: a gap-rejected ticker now carries its RVOL too, so a widened-gap sweep
+    # can resolve it instead of reporting it unknown. This assertion previously read
+    # `rvol_pct is None` — that was the limitation, and removing it is the point.
+    assert by_ticker["FLAT"].rvol_pct == 25.0
+
+    # **The invariant that outlived the change.** Evaluating further must not re-label why
+    # the ticker was rejected: FLAT failed the gap band and nothing downstream may
+    # overwrite that, or the funnel stops reconciling and a sweep counts it at the wrong
+    # stage. See `_evaluate_remaining_rvol`, which appends no rejections at all.
+    assert by_ticker["FLAT"].rejection_reason == "gap outside band"
+    assert by_ticker["FLAT"].stage_reached == STAGE_2
 
 
 async def test_the_denominators_are_copied_onto_the_row(
@@ -212,10 +222,21 @@ async def test_a_threshold_sweep_is_answerable_from_stored_rows(
     assert "SLOW" in passing
     assert unresolved == []
 
-    # 3. Widening the gap band admits FLAT, whose RVOL was never computed. Reported as
-    #    unresolved rather than silently counted as a survivor.
+    # 3. Widening the gap band admits FLAT — and since Follow-up D, FLAT's RVOL was
+    #    computed even though the gap band had already rejected it, so the sweep RESOLVES
+    #    it instead of reporting it unknown. Before that change this read
+    #    `unresolved == ["FLAT"]`, which was the honest answer to a question the stored
+    #    data could not answer. Now it can: 94.7% of a live pass's population is
+    #    gap-rejected, so this is most of what a gap sweep is actually asking about.
     passing, unresolved = stage_2_survivors_at(rvol_min=10.0, gap_min=0.5, gap_max=15.0)
-    assert unresolved == ["FLAT"]
+    assert unresolved == []
+    assert "FLAT" in passing
+
+    # 4. Resolving it is not the same as waving it through: FLAT is admitted because its
+    #    RVOL genuinely clears the floor (25.0 > 10.0). Tightening the floor past it puts
+    #    it out again, from the same stored row and still without a market call.
+    passing, unresolved = stage_2_survivors_at(rvol_min=30.0, gap_min=0.5, gap_max=15.0)
+    assert unresolved == []
     assert "FLAT" not in passing
 
 
