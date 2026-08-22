@@ -794,19 +794,20 @@ the dashboard.
 > RVOL test and 260 reached Stage 3, so **the 10% and 5.5% floors are fully answerable from
 > stored rows, while 3% and 15% are not.**
 
-> **Prerequisite, and it is time-sensitive: Follow-up D** (`docs/PROMPT.md`) — evaluate
-> every stage for every Stage-1 survivor and decide exactly as now. This was the open
-> decision Follow-up C parked as out of scope; the 94.7% above is what promotes it from a
-> refinement to the thing that makes half this phase's sweep possible at all. It costs **no
-> extra API calls and no extra queries** — the fan-out already covers every Stage-1 ticker
-> (`api_calls_used` = `stage_1` + 1) and the profile map is already bulk-loaded
-> (`with_profile` = `stage_1`) — but it changes stage flow, so it ships with a test
-> asserting an identical candidate set.
+> **Prerequisite — ✅ SHIPPED 22 August 2026, Follow-up D** (`docs/PROMPT.md`). Every
+> Stage-1 survivor now carries gap, RVOL and headroom whatever rejected it, so the widened
+> gap band is answerable from stored rows. Costs no API calls and no queries: the fan-out
+> already covers every Stage-1 ticker (`api_calls_used` = `stage_1` + 1) and the profile
+> map is already bulk-loaded (`with_profile` = `stage_1`). The candidate set cannot move,
+> structurally — both evaluation passes run after their stage has finished deciding and
+> append neither survivors nor rejections — and a test pins it.
 >
-> **Do it early rather than when this phase starts.** Every session that runs without it
-> loses ~5,400 tickers of decision-time evidence for good: bars revise upward within
-> ~7 minutes and both RVOL denominators are overwritten nightly. That is the same argument
-> that made Follow-up C outrank a bandwidth optimisation, and it applies here unchanged.
+> **The sweep still has one honest limit, and one date to respect.** Tickers with no
+> pre-market snapshot (~20 a session) have no values at all and must come back unresolved;
+> `sweep_limitations()` was narrowed rather than deleted. And **rows written before
+> 22 August 2026 carry the old short-circuit NULLs** — the seven sessions of Phase 4's
+> observation window among them — so a sweep spanning that boundary must split on session
+> date rather than treating the population as uniform.
 
 - **Start the weight fitting from the measured factor table**, not from the priors.
   `data_quality` is a **constant 1.000** on every live alert (a +0.100 offset that cannot

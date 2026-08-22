@@ -1399,14 +1399,76 @@ replay case without a second history table.
 
 ### Follow-up D — Evaluate every stage for every ticker
 
-**Status:** ⏳ OPEN — briefed 21 August 2026, not implemented
+**Status:** ✅ DONE (22 August 2026), behind `SCAN_FULL_EVALUATION`, default on
 **Size:** small in code, high in blast radius — it touches the path that decides which
 tickers become alerts
-**Priority: do this early, not when Phase 6 starts.** Every session that runs without it
-loses ~5,400 tickers' worth of decision-time evidence permanently, for the reason
-Follow-up C established: pre-market bars revise upward within ~7 minutes and both RVOL
-denominators are overwritten nightly. It is the same argument that made Follow-up C
-outrank a bandwidth optimisation, and it now has a measured number behind it.
+**Why the weekend:** it is the only window that puts ~48 hours between the deploy and a
+live session — the cron is `1-5`, so nothing runs Saturday or Sunday. A weekday deploy
+always has the next morning bearing down on it. No migration, no schema change, nothing
+that touches this project's riskiest surface.
+
+> **Three of the four hazards this brief warned about do not exist. Reading the code
+> before writing any is what found that**, and it is why the change came out smaller and
+> safer than the brief assumed.
+>
+> 1. **`FeatureRequiresIntraday` cannot escape in production.** `RVOL_MODE=normalized`
+>    wires up `NormalizedRvolWithFallback`, which catches it and degrades; `SimpleRvol`
+>    never raises it. The `except FeatureRequiresIntraday: raise` in `stages.py` is
+>    defensive code for a strict calculator that is not wired up, so full evaluation
+>    multiplies an exposure of zero. **Left exactly as it was** — changing dead defensive
+>    code to satisfy a brief is how live bugs get made.
+> 2. **`InsufficientRvolData` is near-unreachable for Stage-1 survivors.** Stage 1
+>    guarantees `volume_avg_20d > 500,000`, so its "missing or zero" branch cannot fire,
+>    and gap-rejected tickers have already passed the snapshot and prior-close checks.
+>    That is why "rvol unavailable" has **zero occurrences in eight sessions**. Handled in
+>    the evaluation pass as a swallowed non-event.
+> 3. **The integrity guards already run over the whole Stage-1 set** —
+>    `_apply_integrity_guards(stage1, snapshots)`, "so a flagged ticker is flagged even if
+>    it is later rejected for gap". The 6-14 warnings a session was already the
+>    full-population number. Nothing to change.
+>
+> The fourth — that the recorded rejection must stay the first gate that failed — was
+> real, and is now structural rather than defended: **the evaluation passes append no
+> rejections at all.**
+
+> **The shape that made it safe: evaluation is additive, decisions are untouched.** Each
+> stage runs its existing decision loop to completion, then a second pass fills in the
+> metrics for the tickers that loop rejected. Neither pass can append a survivor or a
+> rejection, so "the candidate set cannot move" is a property of the structure and not a
+> claim the tests have to defend. They pin it anyway
+> (`tests/unit/test_full_evaluation.py`), the same way the tiered cadence is pinned by
+> running 09:25 under two cadences.
+>
+> Selection needs no bookkeeping either: `gap_pct is not None and rvol_pct is None` reads
+> the state already on the candidate, so a separate "rejected set" cannot drift out of
+> step with the loop that produced it.
+
+> **Two tests failed, and they were the right two.**
+> `test_a_rejected_ticker_keeps_the_numbers_that_rejected_it` and
+> `test_a_threshold_sweep_is_answerable_from_stored_rows` both asserted
+> `FLAT.rvol_pct is None` — they were pinning the limitation this change removes. Updated
+> to assert the new capability while keeping what they were really protecting: FLAT's
+> rejection reason is still `"gap outside band"`, and the sweep now *resolves* it rather
+> than reporting it unknown. A fourth case was added showing that resolving is not the
+> same as admitting — tighten the RVOL floor past 25% and FLAT goes out again, from the
+> same stored row.
+>
+> `sweep_limitations()` is narrowed, not deleted. Tickers with no snapshot (~20 a session)
+> still cannot be evaluated at all, and rows written before 22 August 2026 still carry the
+> old short-circuit NULLs — a sweep spanning that date has to know.
+
+> **Verified:** 522 passed, 20 skipped, ruff clean — and, because the unit tests run on
+> in-memory SQLite, the documented fixture smoke test against real Postgres as well:
+>
+> * `run_scan.py --fixture --profile demo --at "2026-07-28 09:25 ET"` produces **identical
+>   output with the flag on and off** — same funnel (1912 → 6 → 0), same rejection counts
+>   — differing only in wall-clock timestamps.
+> * A recording run wrote 1,912 observation rows, in which the two gap-rejected tickers
+>   carry values they could not have had before: **AMD (gap 18.0) now has rvol 50.0 and
+>   upside 0.85, CSCO (gap 1.5) has rvol 30.0 and upside 0.50** — both still stamped
+>   `gap outside band` at `stage_2_momentum`.
+> * The no-snapshot population (A, AA, …) remains NULL across gap, RVOL and upside, so
+>   "NULL means not evaluated" still identifies a real class of ticker.
 
 ````
 # Follow-up D — Compute every stage for every Stage-1 survivor, decide exactly as now

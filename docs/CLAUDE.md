@@ -457,6 +457,15 @@ SCAN_PROFILE=production
 SCAN_DEMO_FLOAT_MAX=20000000000
 SCAN_SNAPSHOT_FIXTURE=tests/fixtures/snapshots/demo_session.json
 
+# Compute every stage's metrics for every Stage-1 survivor, including tickers an earlier
+# stage already rejected. CANNOT change the candidate set: both evaluation passes run
+# after their stage's decision loop and append neither survivors nor rejections.
+# On because the alternative loses evidence for good — a gap-rejected ticker never has
+# its RVOL computed, and 94.7% of a live pass is gap-rejected, so Phase 6's sweep could
+# only call them unresolved. It is a ROLLBACK switch, not a rollout: flip it and restart
+# the cron rather than reverting, and delete it once a week of sessions is clean.
+SCAN_FULL_EVALUATION=true
+
 # Frontend (Vercel env)
 VITE_API_URL=http://localhost:8000
 VITE_WS_URL=ws://localhost:8000
