@@ -231,7 +231,7 @@ Alpaca commit would otherwise have left dangling.
 
 **Decisions:**
 - *MCP server deleted, not ported.* It is developer tooling — section 1 defines the
-  end user as a non-technical trader on a dashboard — and `PLAN.md` Phase 7 already
+  end user as a non-technical trader on a dashboard — and `PLAN.md`'s hardening phase (then Phase 7, now Phase 6) already
   listed "MCP server decision" as open. This resolves it.
 - *`rules` dropped.* Phase 3's `scanner_settings` gave thresholds typed columns and
   write-time validation; `rules` held free-text YAML for the retired engine and was
@@ -663,10 +663,10 @@ Same-day reference refresh: 0 calls, 75 s.
       move any ranking. It was built for V1 conditions (demo profile, approximate RVOL,
       fixture snapshots) and on Premium with full profile coverage its penalties never
       apply. `gap_position` carries a fifth of the weight for a ninth of the discrimination.
-      Both are inputs to Phase 6's weight fitting, which no longer starts from a blank
+      Both are inputs to Phase 5's weight fitting, which no longer starts from a blank
       slate.
 
-      **Three findings handed forward rather than acted on** — see Phase 6:
+      **Three findings handed forward rather than acted on** — see Phase 5:
       1. **The RVOL floor is nearly inert as a filter.** Stages short-circuit gap-first, so
          `rvol_pct > 10` is only ever asked about tickers that already gapped 3–15%, and it
          then rejects **47 of 307 (15.3%)**. Normalized RVOL still earns its keep — it is
@@ -687,7 +687,7 @@ Same-day reference refresh: 0 calls, 75 s.
       reads it there (`/status` selects `last_run` with `status != 'skipped'`, and
       `alerts.is_final_pass` is a separate column that cross-checks perfectly against
       `risk_filters` on all eight sessions), but a `scan_runs` query written the obvious way
-      returns 19 rows a day instead of 1. Phase 6 queries this table for a living. Filter on
+      returns 19 rows a day instead of 1. Phase 5 queries this table for a living. Filter on
       `status = 'completed'` as well, or guard the write. Same family as the session-total
       hotfix: a field that is true for a reason the reader does not expect.
 - [x] **Tier the early cadence** — ✅ **DONE (17 August 2026).** 19 passes a session rather
@@ -700,7 +700,7 @@ Same-day reference refresh: 0 calls, 75 s.
       73% keep rate in the last 40 minutes. Safe because scans are stateless — pinned by a
       test that runs the 09:25 pass under a one-pass cadence and the old 5-minute one and
       asserts an identical candidate set. The slot list always ends at 09:25, so no config
-      value can silence the authoritative pass. Cost: Phase 6 loses the transients that both
+      value can silence the authoritative pass. Cost: Phase 5 loses the transients that both
       appear and vanish inside a coarse gap; all four observation anchors (04:15, 07:00,
       08:30, 09:25) survive.
       > **The bandwidth premise did not survive measurement, and that is the finding.**
@@ -758,7 +758,7 @@ Same-day reference refresh: 0 calls, 75 s.
       RVOL and a gap sweep reports it unresolved rather than passing. Original brief below. `stage_counts_json` stores candidates
       as plain ticker strings and rejections as `{ticker, stage, reason}` with no values, so
       the scanner records *that* a ticker was rejected at Stage 2 and never *what its gap and
-      RVOL were*. Phase 6's **threshold sensitivity sweep** — the commitment to justify or
+      RVOL were*. Phase 5's **threshold sensitivity sweep** — the commitment to justify or
       revise 3% / 15% / 10% / 5.5% — therefore cannot be asked of the stored data at all, at
       any cadence.
       Unfixable in hindsight: 49.4% of pre-market bars revise upward within ~7 minutes, and
@@ -770,10 +770,50 @@ Same-day reference refresh: 0 calls, 75 s.
 
 ---
 
-### Phase 5 (V2/V3) — Enrichment
-News/catalyst tagging, Sector relative strength, bid-ask spread, short interest (slow signal), halt-risk flag, gap-and-go history.
+### Pre-Phase 5 — the four things between here and backtesting
 
-### Phase 6 (V3) — Backtesting & Calibration
+**Renumbered 22 August 2026.** Backtesting was Phase 6 and is now **Phase 5**; hardening
+was Phase 7 and is now **Phase 6**. The old Phase 5 (enrichment) is not a phase any more:
+its one item with a slot already waiting in the product — catalyst tagging — is pulled
+forward to the list below, and the rest becomes an explicit backlog at the end of this
+file rather than a numbered phase nobody had scheduled.
+
+**Why anything comes before Phase 5 at all:** backtesting is *time-gated*. It needs ~20
+sessions to sweep credibly and ~40 to span different tapes, and full-evaluation evidence
+only started accumulating on 24 August. These four fill that wait, in this order.
+
+- [ ] **1. Verify Follow-up D on the first live session** (Mon 24 August, after 15:25 CEST).
+      `backend/scripts/sql/followup_d_verify.sql`. The sharp check is **V2**:
+      `stage_1 = candidates + rejections` with a remainder of **zero**, the identity that
+      held on all eight sessions of the Phase 4 close. A non-zero remainder means an
+      evaluated ticker re-labelled its own rejection, which is the one hazard the
+      Follow-up D brief got right. V3 confirms the point of the change (gap-rejected rows
+      now carry RVOL); V4 confirms the promise it was sold on (`calls = stage_1 + 1`,
+      duration flat at ~66 s).
+- [ ] **2. Scan-failure alerting** — brief in `docs/PROMPT.md`. **The plan's own gate for
+      this passed two weeks ago.** Phase 7 was scoped "before the end user relies on it",
+      and he has opened the dashboard daily since 13 August. Today a failed scan is
+      *recorded* and *displayed*, and nobody is *told* — it reaches a human only if that
+      human looks, and it looks exactly like a quiet market. Zero failures in 672 wake-ups
+      is a good record, not a guarantee.
+- [ ] **3. Catalyst tagging** — the one enrichment item that is already a hole rather than
+      an idea. `catalyst` is in the §4.4 alert contract, has a slot on the card, and was
+      **null on all 207 alerts** of the observation window.
+      > **Show it without scoring it.** Phase 4 measured the ranking as the product's weak
+      > point, so wiring new signals into the confidence score is the tempting move and the
+      > wrong one: it would add unfitted weights to a formula whose measured flaw is
+      > unfitted weights, and enlarge Phase 5's fitting problem against the same data.
+      > Catalyst earns weight in Phase 5, with outcomes to justify it, or not at all.
+- [ ] **4. Delete the `SCAN_FULL_EVALUATION` flag** once a week of sessions confirms the
+      candidate sets are unchanged — the setting, the `render.yaml` key, and the parameters
+      threading it through `stages.py`. It was built as a rollback switch, not a rollout,
+      and a permanent flag is a permanent second code path. The gate (a clean week) will
+      most likely fall *during* item 3; it is a chore to slot in, not a phase to schedule.
+
+---
+
+### Phase 5 (V3) — Backtesting & Calibration
+*(was Phase 6)*
 No new subscription — same Premium key, deeper work. Historical replay harness over stored
 `scan_runs` (**not** re-fetched history, which has since settled upward — that is what the
 alert-provenance fields exist for); outcome labelling (did it reach +5% within the first
@@ -826,9 +866,44 @@ the dashboard.
 - Evidence is accumulating as designed: **3,781 `scan_observations` rows over 19 runs**
   (17–21 Aug), every Stage-1 survivor at each final pass plus ~6.4 candidates per anchor.
 
-### Phase 7 — Hardening (before the end user relies on it)
-Auth on the dashboard; push/email delivery at 09:25 ET; FMP usage and bandwidth monitoring;
-scan-failure alerting (a silent failed scan is the worst bug this app can have).
+### Phase 6 — Hardening
+*(was Phase 7)*
+
+Its old subtitle was "before the end user relies on it". **That gate passed on 13 August**,
+when alerts began persisting and he started opening the dashboard daily, so the phase is
+no longer speculative and its most urgent item has been pulled into Pre-Phase 5. What
+remains:
+
+- **Auth on the dashboard.** Currently unauthenticated and reachable by URL — open item #6
+  in `docs/CLAUDE.md` §10, "deferred by decision, but revisit before wider sharing".
+- **Push/email delivery at 09:25 ET.** Note this is a *different audience* from the failure
+  alerting in Pre-Phase 5: candidates go to the end user, operational failures go to the
+  operator. Building the first should reuse the transport the second establishes, and must
+  not reuse its recipient.
+- **FMP usage and bandwidth monitoring.** Partly free once failure alerting exists — see
+  the brief's note that `FMP_BANDWIDTH_WARN_PCT` is already computed and today reaches a
+  human only if that human runs a CLI script.
+- ~~Scan-failure alerting~~ — **moved to Pre-Phase 5 item 2.**
+
+---
+
+### Backlog — enrichment (formerly Phase 5)
+
+Not a numbered phase any more: it was never scheduled, and catalyst tagging — the only
+part with a slot already waiting in the product — is now Pre-Phase 5 item 3. What is left
+here is genuinely optional, and each item should have to argue for itself against the
+measured weakness of the moment rather than inherit a place on the roadmap:
+
+- Sector relative strength
+- Bid-ask spread
+- Short interest (a slow signal — FINRA reports ~2×/month)
+- Halt-risk flag
+- Gap-and-go history
+
+> **Anything from this list that becomes a scoring factor lands after Phase 5, not before.**
+> The same argument that keeps catalyst out of the confidence score applies to all of them:
+> Phase 4 measured the ranking's flaw as *unfitted weights*, and adding more unfitted
+> weights before the fitting happens makes that worse while enlarging the fit.
 
 ---
 
@@ -854,13 +929,13 @@ scan-failure alerting (a silent failed scan is the worst bug this app can have).
 |---|---|---|
 | ~~Split-distorted reference data~~ **DISPROVED** | — | `historical-price-eod/full` is already split-adjusted (verified: price and volume ratios both exactly 150.0 against the non-split-adjusted series). The flagged tickers were real collapses, not data errors |
 | ~~Extreme-upside candidates from collapsed stocks~~ **CONTAINED** | A stock down 85% has all historical levels far above it → huge upside → could outrank genuine setups | **Three independent barriers.** (1) `price_regime_break` (3×) and `scan_upside_max` (100%) reject the extremes as named risk-filter rejections. (2) The confidence score's upside factor **saturates at 16.5%** (5.5 × 3.0), so extra headroom buys no ranking advantage — and the dashboard sorts by confidence. (3) `score_data_quality` penalises unmeasured headroom. Verified live 11 Aug: all candidates 1.7–13.5% upside, no collapsed names in the list |
-| **Confidence ranking is unvalidated** — *and now measured to be weakest exactly where it is needed* | The weights are reasoned assumptions, not fitted. Seven live sessions add two specifics: the top score is pinned at 0.893–0.924 regardless of market conditions, so it carries **no cross-day meaning**; and the head of the list **compresses as the list grows** (top-minus-rank-5 was 0.206 at 8 candidates, 0.074 at 14) | Labelled provisional in API and UI; every score exposes its full factor breakdown so the *why* is inspectable. Only Phase 6 backtesting retires `is_provisional` — and it now starts from the measured factor table in Phase 4, not from scratch |
+| **Confidence ranking is unvalidated** — *and now measured to be weakest exactly where it is needed* | The weights are reasoned assumptions, not fitted. Seven live sessions add two specifics: the top score is pinned at 0.893–0.924 regardless of market conditions, so it carries **no cross-day meaning**; and the head of the list **compresses as the list grows** (top-minus-rank-5 was 0.206 at 8 candidates, 0.074 at 14) | Labelled provisional in API and UI; every score exposes its full factor breakdown so the *why* is inspectable. Only Phase 5 backtesting retires `is_provisional` — and it now starts from the measured factor table in Phase 4, not from scratch |
 | Bandwidth growth with universe size | **The scan was never the problem, and 4B's monthly figure hid the one that is.** The live scan is 20.6 MB/session, 0.45 GB/month, **0.9%** of the 50 GB allowance. The **nightly job is ~92% of all consumption** — its cost was recorded as "1.1% of the allowance" by stating one night's 453 MB as a 30-day total (see Phase 4B). Measured total draw: **20.8% of allowance before the 18 August optimisations, 11.4% after** | Tiered cadence (53→55% off the scan); incremental nightly profile build (44% off the nightly, measured 21 Aug); bandwidth tracking in the guard; 400-day EOD bound. Headroom is ample either way — but any future bandwidth work belongs on the nightly refresh, not the scan |
 | Render cron UTC/DST drift | Wrong-hour scans twice a year | Explicit ET conversion, generous UTC schedule + ET gate, DST tests. **Also:** boundary comparisons are minute-resolution, so scheduler latency cannot push a scheduled pass outside its own window — that bug silently cost the authoritative 09:25 pass for three sessions |
-| Silent scan failure | Looks like a quiet market | `scan_runs` failure taxonomy + distinct UI states + failure alerting (Phase 7) |
+| Silent scan failure | Looks like a quiet market | `scan_runs` failure taxonomy + distinct UI states + failure alerting (Pre-Phase 5) |
 | Demo profile confused for production | Misleading alerts | Profile name stamped on every scan run and alert; demo output badged in the UI |
 | Supabase RLS on public tables | Without RLS, anyone with the project URL + anon key can read/write via the auto-generated Data API | RLS enabled with **no policies** on every public table — denies the Data API, leaves the app unaffected (backend connects as `postgres`, which bypasses RLS). A CI test fails if any table lacks it |
-| Over-trusting the confidence score | User treats provisional weights as validated | Labelled provisional in API and UI until Phase 6 |
+| Over-trusting the confidence score | User treats provisional weights as validated | Labelled provisional in API and UI until Phase 5 |
 | **Alert volume variance** | **Smaller than feared, and re-measured.** Seven live sessions confirmed **3–14 candidates (mean 8.7)** at the authoritative pass — the 7–30 range came from the observation sessions and 30 remains the worst case of ten, not a typical morning. The real number nobody had: **only 21–42% of a session's alerts survive to 09:25**, so 14–41 tickers qualify and 3–14 remain | Not a fault — it tracks real market conditions. The confirmed/faded split carries it: it demotes roughly seven rows in ten, which is most of what keeps the dashboard readable. The burden still falls on the confidence ranking, and a busy morning still yields the longest list with the *least* separated head — see the row above |
 
 ---

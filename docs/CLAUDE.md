@@ -147,7 +147,7 @@ upside_pct         = (nearest_resistance - price_premarket_current) / price_prem
 > five tickers that clears gap *and* RVOL is discarded for having no measurable ceiling.
 > That is large enough that the decision deserves to be taken deliberately rather than left
 > as a default. **How those names behave is still unknown** — the second half of the
-> deferral needs Phase 6 outcome labelling, and these tickers are rejected before an alert
+> deferral needs Phase 5 outcome labelling, and these tickers are rejected before an alert
 > exists, so today nothing records what they did next. Note the corollary: this rejection is
 > exactly why `upside_pct IS NULL` has never once appeared on a live alert, so the
 > null-tolerance below remains insurance rather than an exercised path.
@@ -173,7 +173,7 @@ Every alert carries: `ticker`, `gap_pct`, `rvol_pct`, `catalyst` (nullable),
 
 > **Confidence score:** starts as a transparent, documented weighted formula with
 > constants in config. The weights are **provisional assumptions until backtested**
-> (Phase 6). The UI must never present the score as validated.
+> (Phase 5). The UI must never present the score as validated.
 
 > **What the score does and does not say, measured over 61 live alerts** (21 August 2026).
 > It is a **within-session ordering, not a quality measure.** The top score sits in a
@@ -193,7 +193,7 @@ Every alert carries: `ticker`, `gap_pct`, `rvol_pct`, `catalyst` (nullable),
 > The practical consequence is a **compressing head**: the more candidates a morning
 > produces, the less the top of the list separates (0.206 between rank 1 and rank 5 at 8
 > candidates, 0.074 at 14). The ranking is weakest precisely on the mornings the user most
-> depends on it. Phase 6 fits against this, not just against hit rates.
+> depends on it. Phase 5 fits against this, not just against hit rates.
 
 ### 4.5 Timing model
 
@@ -294,7 +294,7 @@ unfiltered by default, which is where "did the cron fire?" is answered).
 > and the faded ones behind a toggle, split on the alert's own `is_final_pass` — never by
 > parsing `suggested_entry_window`, which is prose for a human. Faded candidates are
 > demoted, never dropped: a ticker that spiked at 05:10 and died is real information, and
-> Phase 6 outcome labelling will want it.
+> Phase 5 outcome labelling will want it.
 >
 > **The 37-against-11 was not an unlucky example — it is the normal shape.** Across seven
 > live sessions (13–21 August 2026) only **21–42% of a session's alerts survive to 09:25**:
@@ -352,7 +352,7 @@ unfiltered by default, which is where "did the cron fire?" is answered).
 > bars are revised upward within ~7 minutes of closing.
 >
 > Written at the **09:25 pass for every Stage-1 survivor** (~741) and at anchor passes
-> (04:15, 07:00, 08:30) for candidates only. The full write is what makes Phase 6's
+> (04:15, 07:00, 08:30) for candidates only. The full write is what makes Phase 5's
 > threshold sensitivity sweep possible: a sweep asks about the tickers the scanner
 > **rejected**, and `stage_counts_json` records those as a reason with no numbers.
 >
@@ -461,7 +461,7 @@ SCAN_SNAPSHOT_FIXTURE=tests/fixtures/snapshots/demo_session.json
 # stage already rejected. CANNOT change the candidate set: both evaluation passes run
 # after their stage's decision loop and append neither survivors nor rejections.
 # On because the alternative loses evidence for good — a gap-rejected ticker never has
-# its RVOL computed, and 94.7% of a live pass is gap-rejected, so Phase 6's sweep could
+# its RVOL computed, and 94.7% of a live pass is gap-rejected, so Phase 5's sweep could
 # only call them unresolved. It is a ROLLBACK switch, not a rollout: flip it and restart
 # the cron rather than reverting, and delete it once a week of sessions is clean.
 SCAN_FULL_EVALUATION=true

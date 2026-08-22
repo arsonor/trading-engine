@@ -687,7 +687,7 @@ matter. That is precisely the wrong burden at the moment he is deciding what to 
   toggle, with a count.
 
 Do **not** delete or hide the faded ones. A ticker that spiked at 05:10 and faded is real
-information, and Phase 6 outcome labelling will want it. They simply must not compete with
+information, and Phase 5 outcome labelling will want it. They simply must not compete with
 the confirmed set.
 
 This is the same principle already applied throughout this codebase — failed scan versus
@@ -1163,7 +1163,7 @@ governs only dashboard freshness before 09:25 and the completeness of the faded 
 
 ## The cost, stated plainly
 Of 175 first sightings, 119 faded before the final pass. Those are the "spiked at 05:10 and
-died" rows, and **Phase 6 outcome labelling is the customer for them** — a candidate that
+died" rows, and **Phase 5 outcome labelling is the customer for them** — a candidate that
 faded is a negative training example, and coarsening the early session loses a share of them.
 
 Be precise about what "loses" means here, because two different things get confused:
@@ -1181,12 +1181,12 @@ Be precise about what "loses" means here, because two different things get confu
 **But the loss is smaller than the pass count suggests**, for a reason the churn table
 itself supplies. At 0.2–0.6 new tickers per pass, consecutive early snapshots are
 near-duplicates: 66 of them is not 66 observations, and treating them as independent
-samples would produce confidence intervals far too tight to trust. Phase 6 needs a handful
+samples would produce confidence intervals far too tight to trust. Phase 5 needs a handful
 of well-spaced anchors — 04:15, 07:00, 08:30 and 09:25 — **all of which the tiered cadence
 keeps**. What actually disappears is transients that both appear and vanish inside a coarse
 gap.
 
-The change that would genuinely serve Phase 6 is orthogonal to this one: storing decision
+The change that would genuinely serve Phase 5 is orthogonal to this one: storing decision
 time *values* rather than bare tickers. See Follow-up C, which is worth more than this
 brief and does not depend on it.
 
@@ -1279,19 +1279,19 @@ fixing before the universe grows.
 4. Tests pass offline; ruff clean
 ````
 
-### Follow-up C — Persist decision-time detail for Phase 6
+### Follow-up C — Persist decision-time detail for Phase 5
 
 **Status:** ✅ DONE (16 August 2026)
 **Size:** small-to-medium — one table, one write path, no change to any decision
 **Why it outranked Follow-up A:** A is a bandwidth optimisation. This one decides whether
-Phase 6 can answer its questions at all, and every session that passes without it is a
+Phase 5 can answer its questions at all, and every session that passes without it is a
 session whose evidence is gone for good.
 
 > **The sweep is now demonstrable, which is the only claim worth making.**
 > `test_a_threshold_sweep_is_answerable_from_stored_rows` replays Stage 2's decision at a
 > different RVOL floor from stored rows alone — no re-fetching, no reference-data join, no
 > live scan — recovers the four real survivors exactly, and admits SLOW when the floor
-> drops to 9%. If that test ever stops passing, the Phase 6 commitment is broken again.
+> drops to 9%. If that test ever stops passing, the Phase 5 commitment is broken again.
 >
 > **Short-circuit evaluation is the one limit, and it is explicit rather than papered
 > over.** A ticker rejected on gap never has RVOL computed, so widening the gap band
@@ -1302,7 +1302,7 @@ session whose evidence is gone for good.
 > limit and costs no extra API calls — the data is already in memory — but it changes stage
 > flow, which this brief put out of scope. Phase 4's close (21 August 2026) measured the
 > size of what that limit costs: **94.7% of the gap-tested population short-circuits at
-> gap**, so the sweep Phase 6 committed to cannot be run for two of its four thresholds.
+> gap**, so the sweep Phase 5 committed to cannot be run for two of its four thresholds.
 > That promotes this from a refinement to a prerequisite.
 >
 > **Cost measured, as the DoD asked.** 741 rows against Postgres: **225 ms median**
@@ -1328,10 +1328,10 @@ session whose evidence is gone for good.
 `{ticker, stage, reason}` with no values. So for any pass, the scanner records *that* CRVO
 was rejected at Stage 2, and never *what its gap and RVOL were*.
 
-Phase 6 is specified as a replay over stored `scan_runs`. Three of its four stated goals
+Phase 5 is specified as a replay over stored `scan_runs`. Three of its four stated goals
 are blocked or degraded by this:
 
-| Phase 6 goal | Blocked? | Why |
+| Phase 5 goal | Blocked? | Why |
 |---|---|---|
 | Outcome labelling (+5% within the hour?) | No | Regular-hours bars, re-fetchable |
 | Per-signal hit rates, fitted weights | No | The 09:25 alert row already carries features |
@@ -1488,7 +1488,7 @@ authoritative passes of 13–21 August 2026:
 | rejected on RVOL — **upside NULL** | 47 |
 | reached Stage 3 | 260 |
 
-**94.7% of everything gap-tested is unresolvable for a widened-gap sweep.** Phase 6 is
+**94.7% of everything gap-tested is unresolvable for a widened-gap sweep.** Phase 5 is
 committed to "threshold sensitivity sweep to justify or revise 3% / 15% / 10% / 5.5%".
 The 10% and 5.5% floors are answerable from stored rows today. **3% and 15% are not, and
 never will be for sessions already run.**
@@ -1572,13 +1572,140 @@ and it is the exact failure mode `scan_observations` was built to prevent.
 
 ---
 
+## Pre-Phase 5, item 2 — Scan-failure alerting
+
+**Status:** ⏳ OPEN — briefed 22 August 2026
+**Size:** small-to-medium. One notifier, one watchdog, no schema change.
+**Why now:** Phase 6 (was Phase 7) was scoped "before the end user relies on it". He has
+opened the dashboard daily since 13 August, so that gate passed two weeks ago, and this is
+the item behind it that cannot wait for the rest of the phase.
+
+````
+# Pre-Phase 5 — Tell someone when the scanner fails
+
+## The problem
+
+A silent failed scan is the worst bug this app can have, and today the app handles it
+almost all the way and then stops. `scan_runs` records the failure with its taxonomy.
+`/status` computes health from the last run that attempted work. The dashboard shows
+SCANNER FAILING rather than an empty list. **Every one of those requires a human to be
+looking.** Nobody is told.
+
+Seven live sessions and 672 wake-ups have produced zero failures, which is a good record
+and not a guarantee — and the alert-producing path changed on 22 August, so the next few
+weeks are exactly when a regression would show up.
+
+## What "failure" means here — four kinds, not one
+
+Only the first is what the word usually suggests, and it is the least dangerous, because
+it is the one already visible.
+
+1. **A pass failed.** `status='failed'` with an error. Recorded and displayed today.
+2. **The authoritative pass failed or never ran.** Worse than (1): 09:25 is the definitive
+   alert set, and the user checks after the open. A morning where 18 passes succeeded and
+   09:25 failed looks healthy on every count except the one that matters.
+3. **The cron did not fire at all.** No rows, so nothing to display. `/status` returns
+   `last_wake_up_at` precisely so this is answerable — but again, only if asked.
+4. **The scan ran, succeeded, and was wrong.** Stale reference data, a nightly job that
+   failed, an empty profile table. The funnel completes and reports a quiet market. This
+   is the one that can persist for days.
+
+**A process cannot alert on its own absence.** (3) is undetectable from inside the scan
+cron, and (4) is invisible to it by construction. That splits the design.
+
+## Scope
+
+### 1. A notifier, deliberately boring
+
+One module, one interface: `notify(subject, body, severity)`. Best-effort throughout —
+**it must never fail a scan**, exactly like `ObservationRecorder`. Wrap the send, log on
+failure, return.
+
+Transport: recommend **Telegram bot** over email. One HTTPS POST with a token and chat id,
+no domain, no DNS records, no sender verification, no provider account beyond the bot, and
+it reaches a phone instantly. Email via a transactional provider is the alternative and is
+more setup for the same outcome. **This is a decision for the project owner** — take it
+before writing the module, not after.
+
+A no-op transport is the default when the token is unset, so CI and local runs send
+nothing without needing to be special-cased.
+
+### 2. Immediate alerts, from the scanner itself
+
+Covers (1) and (2). The scan already knows; it just has no mouth.
+
+* Any pass with `status='failed'` → notify, with the error and the ET clock time.
+* **Dedup per session.** A systemic failure fails all 19 passes, and 19 identical messages
+  train the reader to ignore them. One per `(session_date, kind)`, with a count if it
+  recurs. Persist the dedup key — the cron is a fresh process every five minutes, so
+  in-memory state does not survive.
+* The 09:25 pass failing is its own severity, named as such in the subject.
+
+### 3. A watchdog cron, for the failures the scanner cannot report
+
+Covers (3) and (4). A **separate Render cron at ~09:35 ET**, reading the database and
+sending nothing when the morning was normal. It must not import the scan path — a
+watchdog that breaks when the thing it watches breaks is decoration.
+
+Checks, each with a named message:
+
+| Check | Alarm when |
+|---|---|
+| the 09:25 pass completed today | missing, or `status != 'completed'` |
+| passes attempted today | not 19 (the cadence's own count, not a literal) |
+| any `failed` rows today | ≥ 1 |
+| `reference_data.computed_at` | older than 2 sessions — the nightly job died |
+| `premarket_volume_profile` non-empty and `with_profile` ≈ `stage_1` | coverage collapsed |
+| candidates at the final pass | zero **two sessions running** — one quiet morning is a market, two is a question |
+
+The last one is a judgement call and should be tuned rather than trusted: Phase 4 measured
+3-14 confirmed candidates over seven sessions, and 3 was a real Tuesday.
+
+### 4. Bandwidth, nearly free while you are here
+
+`FMP_BANDWIDTH_WARN_PCT` is configured at 80, computed in `budget.bandwidth_report()` as
+`over_warn_threshold` — and read by exactly one caller: a print statement in
+`scripts/refresh_reference_data.py`. **The warning exists and reaches a human only if that
+human runs a CLI.** Wire it into the watchdog. Phase 4's close measured total draw at
+~11.4% of the allowance, so this should never fire; that is the point of having it.
+
+## Constraints
+
+* **Never fails a scan.** Notification is instrumentation, and instrumentation that can
+  break the thing it observes is a liability.
+* **CI sends nothing.** No-op transport by default; a test asserts the live transport is
+  not selected without an explicit token.
+* Secrets via Render env, never in `render.yaml` or committed files.
+* No schema change if the dedup key can live in an existing table; if it cannot, one small
+  table with a reversible migration and RLS, per the sequencing rules.
+* **Failures go to the operator, not the end user.** He is a non-technical trader who did
+  not ask to be on call; "scan failed" is not information he can act on. Keep the
+  recipients separate from the day Phase 6 adds 09:25 delivery, or the first thing that
+  phase will do is inherit the wrong address list.
+
+## Definition of done
+
+1. A failed pass sends exactly one notification per session, and a test proves the 19th
+   consecutive failure does not send the 19th message.
+2. A scan whose notifier raises still completes and still writes its alerts — the
+   `ObservationRecorder` guarantee, tested the same way.
+3. The watchdog alarms on a database with no 09:25 row, and stays silent on one with a
+   normal morning. Both from fixtures; neither touches FMP.
+4. Stale reference data and collapsed profile coverage each produce their own named
+   message rather than a generic "something is wrong".
+5. Tests pass offline, ruff clean, and the deployed watchdog has run once against
+   production without sending anything.
+````
+
+---
+
 ## Phase 4 — CLOSED, 21 August 2026
 
 **No prompt. This is the closing record**; the measurements and their consequences are in
 `docs/PLAN.md` Phase 4, under the observation item. Seven live sessions (13–21 August),
 207 alerts, 61 confirmed, **zero failed scans in 672 wake-ups**.
 
-Read this before writing a Phase 5 or Phase 6 prompt — four of these change what the next
+Read this before writing a Pre-Phase 5 or Phase 5 prompt — four of these change what the next
 brief should say:
 
 1. **The funnel accounts for itself exactly.** 5,900 Stage-1 evaluations → 91 candidates +
@@ -1587,8 +1714,8 @@ brief should say:
 2. **The confidence ranking is the weak point, and it is now specific.** Not "the weights
    are provisional" but: `data_quality` is a constant, `gap_position` is over-weighted ~2×
    against its discriminating power, the top score has no cross-day meaning, and the head
-   of the list compresses as the list grows. Phase 6 fits against these, not from scratch.
-3. **The threshold sweep Phase 6 committed to can only answer half its question.** 94.7% of
+   of the list compresses as the list grows. Phase 5 fits against these, not from scratch.
+3. **The threshold sweep Phase 5 committed to can only answer half its question.** 94.7% of
    the gap-tested population short-circuits at gap with nothing recorded downstream, so a
    *widened* gap band is unresolvable from stored rows while the RVOL and upside floors are
    fully answerable. A brief that promises to "justify or revise 3% / 15% / 10% / 5.5%"
@@ -1600,11 +1727,11 @@ brief should say:
 **Two decisions deliberately left open rather than taken on a Friday:**
 
 - **Raise `SCAN_RVOL_MIN`?** As a filter it rejects only 15.3% of what reaches it, because
-  the stages test gap first. This is Phase 6's call with outcome data — one week says where
+  the stages test gap first. This is Phase 5's call with outcome data — one week says where
   to look, not where to land.
 - **Reverse the breakout convention?** It now has its frequency (17.7% of Stage-2
   survivors, ~5.75 a morning) but not its outcomes, because these tickers are rejected
-  before an alert exists. Deciding needs Phase 6 labelling, or a deliberate collection run.
+  before an alert exists. Deciding needs Phase 5 labelling, or a deliberate collection run.
 
 **One cheap fix not applied**, so it does not get lost: `clock.is_final_pass()` is
 `>= 09:25` and the `scan_runs` row opens before the window gate, so 18 skipped heartbeats a
