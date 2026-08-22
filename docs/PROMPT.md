@@ -1507,7 +1507,9 @@ production rows rather than from reading the code:
 * `observations_recorded` = `stage_1` already — the rows exist; they would simply carry
   fewer NULLs. Storage delta is a handful of floats per row.
 
-So the marginal cost is in-memory arithmetic for ~5,400 extra tickers, against a pass that
+So the marginal cost is in-memory arithmetic for **~680 extra tickers per pass** — 5,431
+is the eight-session total, and a single pass sees ~740 Stage-1 survivors of which ~20
+have no snapshot, ~680 are gap-rejected and ~38 reach the RVOL test — against a pass that
 spends ~65 s on 737 HTTP calls. **Measure it anyway and report it** — this project's rule
 is that a hypothesis fitting the data is not a tested hypothesis.
 
