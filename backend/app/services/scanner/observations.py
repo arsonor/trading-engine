@@ -1,4 +1,4 @@
-"""Recording what the scanner saw, for Phase 6 to replay.
+"""Recording what the scanner saw, for Phase 5 to replay.
 
 The rationale for the table lives in `app/models/scan_observation.py`. This module owns
 two decisions: **which passes write** and **what a row says about a ticker that never
@@ -18,17 +18,21 @@ question about tickers the scanner threw away. The anchors keep the early-versus
 question answerable at a granularity that survives a tiered cadence — and one that matches
 what the data can actually support, since consecutive passes are near-duplicates.
 
-## Short-circuit evaluation, and what NULL means
+## What NULL means
 
-The stages stop at the first failure, so a ticker rejected on gap never has RVOL computed
-and its `rvol_pct` is NULL. **NULL means "never evaluated", not zero**, and a sweep must
-treat the two differently: widening the gap band surfaces tickers whose RVOL was never
-measured, so their fate under the new threshold is *unknown* rather than *passing*.
+**NULL means "never evaluated", not zero**, and a sweep must treat the two differently.
 
-`sweep_limitations()` states this in one place so an analysis cannot quietly assume
-otherwise. Making it fully answerable would mean evaluating every stage for every ticker
-regardless of earlier failures — no extra API calls, since the data is already in memory,
-but a change to stage flow that this brief explicitly puts out of scope.
+Until Follow-up D (22 August 2026) the dominant reason for a NULL was short-circuiting:
+the stages stop at the first failure, so a ticker rejected on gap never had RVOL computed
+— 94.7% of a live pass's gap-tested population. `SCAN_FULL_EVALUATION` removes that
+reason. Every Stage-1 survivor that had a market snapshot now carries gap, RVOL and
+headroom whatever rejected it, so a widened threshold resolves it instead of leaving its
+fate unknown.
+
+Two populations still hold NULLs, and `sweep_limitations()` states both in one place so an
+analysis cannot quietly assume otherwise: tickers with **no snapshot** (~20 a session, not
+trading pre-market) have nothing to compute from, and **rows written before 22 August
+2026** carry the old short-circuit NULLs.
 """
 
 import logging

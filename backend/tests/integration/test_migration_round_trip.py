@@ -40,7 +40,7 @@ RLS = "dbdf5784db31"  # RLS enabled on all public tables
 PHASE_4B = "b008d4bf3a18"  # api_budget.bytes_used + universe_runs
 PHASE_4C = "ae74a2cbe20c"  # alerts decision-time provenance
 SCAN_MODE = "3d1177ad1103"  # scan_runs.mode
-SCAN_OBSERVATIONS = "a71f4c9e2d05"  # scan_observations, the Phase 6 evidence table
+SCAN_OBSERVATIONS = "a71f4c9e2d05"  # scan_observations, the Phase 5 evidence table (numbered Phase 6 when the migration was written)
 SESSION_VOLUME = "c92e7b1a4f38"  # premarket_session_volume, incremental profiles
 
 # Revision-specific tests name the revision they exercise instead of using "head" or

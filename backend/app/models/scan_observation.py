@@ -1,10 +1,10 @@
-"""What the scanner saw about one ticker on one pass — the Phase 6 evidence table.
+"""What the scanner saw about one ticker on one pass — the Phase 5 evidence table.
 
 ## Why this exists
 
 `scan_runs.stage_counts_json` records candidates as bare ticker strings and rejections as
 `{ticker, stage, reason}` with no numbers. So the scanner has always recorded *that* a
-ticker was rejected at Stage 2 and never *what its gap and RVOL were*. Phase 6 commits to
+ticker was rejected at Stage 2 and never *what its gap and RVOL were*. Phase 5 commits to
 a **threshold sensitivity sweep** — justifying or revising 3% / 15% / 10% / 5.5% — and
 that question cannot be asked of the data as stored, at any scan cadence.
 

@@ -142,7 +142,7 @@ def stage_2_momentum(
     a quiet market. That must surface as a failed scan instead.
 
     `full_evaluation` (Follow-up D) adds a second pass that computes RVOL for the tickers
-    this one rejected on gap, so Phase 6 can sweep the gap band over stored rows. It runs
+    this one rejected on gap, so Phase 5 can sweep the gap band over stored rows. It runs
     after every decision has been made and appends nothing to the outcome — see
     `_evaluate_remaining_rvol`.
     """
@@ -232,7 +232,7 @@ def _assign_rvol(
     """Compute RVOL and write it, with its provenance, onto the candidate.
 
     Extracted so the decision loop above and the evaluation pass below cannot drift. Two
-    places assigning these fields differently is exactly the kind of divergence Phase 6
+    places assigning these fields differently is exactly the kind of divergence Phase 5
     would read as a real difference between tickers.
     """
     result = rvol_calculator.compute(
@@ -270,7 +270,7 @@ def _evaluate_remaining_rvol(
 ) -> None:
     """Fill RVOL for tickers the decision loop rejected on gap. Decides nothing.
 
-    A ticker rejected on gap has never had its RVOL computed, so a Phase 6 sweep that
+    A ticker rejected on gap has never had its RVOL computed, so a Phase 5 sweep that
     widens the gap band can only report it as *unresolved* — never as passing or failing.
     Measured at the eight authoritative passes of 13-21 August 2026, that is **94.7% of
     everything gap-tested** (5,431 of 5,738), which is most of the population the sweep
@@ -340,7 +340,7 @@ def stage_3_room_to_run(
         # Null upside after this means "above every known level", which is the one case
         # the spec asks us to reject rather than value. Sharing the rule with
         # `_assign_headroom` is deliberate: two copies of "lowest level above the price"
-        # would eventually disagree, and Phase 6 would read the difference as real.
+        # would eventually disagree, and Phase 5 would read the difference as real.
         _assign_headroom(candidate)
         if candidate.upside_pct is None:
             outcome.rejections.append(

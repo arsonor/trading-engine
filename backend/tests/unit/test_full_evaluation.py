@@ -1,7 +1,7 @@
 """Follow-up D — evaluating every stage for every ticker must decide nothing new.
 
 The change exists because a ticker rejected on gap never had its RVOL computed, so
-Phase 6's threshold sweep could only report it as unresolved — 94.7% of the gap-tested
+Phase 5's threshold sweep could only report it as unresolved — 94.7% of the gap-tested
 population at the eight authoritative passes of 13-21 August 2026. It costs no API calls
 and no queries: the snapshot fan-out already covers every Stage-1 ticker and the profile
 map is already bulk-loaded.

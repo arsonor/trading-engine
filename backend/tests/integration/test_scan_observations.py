@@ -1,13 +1,14 @@
-"""Decision-time evidence for Phase 6.
+"""Decision-time evidence for Phase 5.
 
-The centrepiece is `test_a_threshold_sweep_is_answerable_from_stored_rows`. Phase 6 commits
+The centrepiece is `test_a_threshold_sweep_is_answerable_from_stored_rows`. Phase 5 commits
 to justifying or revising 3% / 15% / 10% / 5.5%, and before this table that question could
 not be asked of stored data at all: rejections carried a reason and no numbers. If that
 test ever stops passing, the commitment is broken again.
 
-The second theme is that **NULL means not evaluated, never zero**. The stages short-circuit,
-so a ticker rejected on gap has no RVOL, and a sweep that widens the gap band must report
-such tickers as unresolved rather than quietly counting them as passing.
+The second theme is that **NULL means not evaluated, never zero**. Follow-up D changed what
+is NULL but not what NULL means: gap-rejected tickers now carry RVOL and headroom, so a
+widened gap band resolves them, while a ticker that never traded pre-market still has
+nothing to sweep on and must come back unresolved.
 """
 
 from datetime import datetime
@@ -216,7 +217,7 @@ async def test_a_threshold_sweep_is_answerable_from_stored_rows(
         "Stage 2's four survivors, recovered without touching the market"
     )
 
-    # 2. Loosening the RVOL floor admits SLOW — the question Phase 6 needs to ask, and
+    # 2. Loosening the RVOL floor admits SLOW — the question Phase 5 needs to ask, and
     #    the one that was unanswerable before this table.
     passing, unresolved = stage_2_survivors_at(rvol_min=9.0, gap_min=3.0, gap_max=15.0)
     assert "SLOW" in passing

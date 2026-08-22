@@ -45,7 +45,7 @@ class MarketTape:
         """Whether the tape is bad enough to veto alerts outright.
 
         Currently never true. The spec calls for tape *context*, and turning a market
-        signal into a hard veto is a decision that should be made with data (Phase 6
+        signal into a hard veto is a decision that should be made with data (Phase 5
         backtesting), not assumed here.
         """
         return False

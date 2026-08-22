@@ -177,7 +177,7 @@ class Settings(BaseSettings):
     # (`stages._evaluate_remaining_rvol`, `stages._assign_headroom`).
     #
     # On by default because the alternative loses evidence permanently. A ticker rejected
-    # on gap never has its RVOL computed, so Phase 6's threshold sweep can only report it
+    # on gap never has its RVOL computed, so Phase 5's threshold sweep can only report it
     # as unresolved — 94.7% of the gap-tested population, measured 13-21 August 2026 — and
     # it cannot be recovered later: pre-market bars revise upward within ~7 minutes and
     # both RVOL denominators are overwritten nightly.
@@ -334,7 +334,7 @@ class Settings(BaseSettings):
 
     # --- Confidence score weights (must sum to 1.0; validated at startup) ---------
     # PROVISIONAL. These are reasoned assumptions, not fitted parameters — nothing has
-    # been backtested yet (app V3, Phase 6). The API and UI label every score as such.
+    # been backtested yet (app V3, Phase 5). The API and UI label every score as such.
     score_weight_gap: float = 0.20
     score_weight_rvol: float = 0.30
     score_weight_upside: float = 0.25

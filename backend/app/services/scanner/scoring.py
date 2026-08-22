@@ -2,7 +2,7 @@
 
 **Every score this module produces is PROVISIONAL.** The weights are reasoned
 assumptions, not fitted parameters — nothing has been backtested, and that only becomes
-possible at app V3 (Phase 6) when historical intraday data is available. The API marks
+possible at app V3 (Phase 5) when historical intraday data is available. The API marks
 every score `is_provisional: true` and the UI must never present it as validated. A
 number between 0 and 1 looks authoritative whether or not it has earned it, so the
 labelling is part of the contract, not decoration.
@@ -83,7 +83,7 @@ class ConfidenceScore:
     factors: list[ScoreFactor] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     profile: str = ""
-    # Always True in V1/V2. Only Phase 6 backtesting can retire this.
+    # Always True in V1/V2. Only Phase 5 backtesting can retire this.
     is_provisional: bool = True
 
     @property
@@ -303,7 +303,7 @@ def compute_confidence(
 
     notes = [
         "PROVISIONAL — weights are reasoned assumptions, not backtested. "
-        "Validation requires historical intraday data (app V3, Phase 6).",
+        "Validation requires historical intraday data (app V3, Phase 5).",
     ]
     if profile.is_demo:
         notes.append("DEMO PROFILE — thresholds loosened; this candidate is illustrative only.")

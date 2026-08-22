@@ -80,7 +80,7 @@ def test_every_phase_6_anchor_survives_the_coarser_cadence(cadence):
     """04:15, 07:00, 08:30 and 09:25 are the anchors `observations.py` records at.
 
     The cost section of the brief rests on this: coarsening the early session is only
-    acceptable for Phase 6 because the well-spaced anchors are all still scanned.
+    acceptable for Phase 5 because the well-spaced anchors are all still scanned.
     """
     for anchor in (time(4, 15), time(7, 0), time(8, 30), time(9, 25)):
         moment = et(2026, 7, 28, anchor.hour, anchor.minute)
