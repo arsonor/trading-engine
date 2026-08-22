@@ -20,6 +20,21 @@ opens on desktop or phone.
   feasibility screen, not a forecast. All UI language must reflect this.
 - It is **not** financial advice. It is a decision-support tool.
 
+> **A planned change that presses on the third point: Stage 4** (`docs/PLAN.md` Phase 7),
+> requested by the end user on 22 August 2026 — a suggested stop, a reward-to-risk ratio,
+> and a position size. "Buy 137 shares" reads differently from "here is a candidate", and
+> this section cannot be left claiming otherwise while the product moves.
+>
+> **The line that keeps it honest: Stage 4 applies a rule the user declared in advance,
+> arithmetically.** It is a calculator executing his own stated policy — risk 1% of
+> capital, require 2:1 — not a recommendation about what to do. The tool never chooses the
+> rule, never suggests changing it, and never implies the trade is a good one; it reports
+> what his rule implies about a candidate his own thresholds surfaced. UI language must
+> hold that distinction explicitly, the same way it already labels the confidence score
+> provisional.
+>
+> **This paragraph must be revisited when Stage 4 ships**, not left as an intention.
+
 **End user:** A single non-technical trader (project owner's friend) who accesses the
 deployed dashboard by URL.
 

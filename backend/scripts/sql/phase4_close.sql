@@ -165,3 +165,19 @@ SELECT count(*)                    AS observation_rows,
        min(created_at)             AS first_row,
        max(created_at)             AS last_row
 FROM scan_observations;
+
+-- ============================================================ Q11 — is data_quality ever below 1.0?
+-- Added 22 August 2026, after the end user asked why this factor scores 1.000 every time.
+-- Q4 measured it across the 61 CONFIRMED alerts only; degraded rows are likeliest among
+-- the faded transients, which were never checked. If this returns rows, the factor does
+-- discriminate occasionally and the multiplier change below matters more, not less.
+SELECT round((f->>'normalized')::numeric, 3) AS data_quality,
+       f->>'detail'                          AS why,
+       count(*)                              AS alerts,
+       count(*) FILTER (WHERE a.is_final_pass) AS of_which_confirmed
+FROM alerts a,
+     jsonb_array_elements((a.score_breakdown_json::jsonb)->'factors') f
+WHERE f->>'name' = 'data_quality'
+  AND a.session_date >= DATE '2026-08-12'
+GROUP BY 1, 2
+ORDER BY 1;

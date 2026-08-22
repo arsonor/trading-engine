@@ -849,6 +849,35 @@ the dashboard.
 > observation window among them — so a sweep spanning that boundary must split on session
 > date rather than treating the population as uniform.
 
+- **Make `data_quality` a multiplier, not a fifth weighted factor** — raised by the end
+  user, 22 August 2026, and **decided rather than deferred, because calibration cannot
+  resolve it.** A predictor that is constant across every training row is collinear with
+  the intercept: its coefficient is unidentifiable, so a fit will drop it or fail to
+  estimate it. Waiting is not an answer.
+  > **The constant is the smaller half of the problem.** A weighted sum caps this factor's
+  > total influence at its own weight, so it is nearly powerless *when it does fire*:
+  > approximate RVOL plus unmeasured headroom takes `data_quality` to 0.60 and the final
+  > score from 0.92 to **0.88**. A candidate measured with degraded data stays at the top
+  > of the list. That also quietly undercuts "confidence scores are deliberately low in
+  > V1" — the most this factor can ever move a score is 0.10.
+  >
+  > As `weighted_sum(gap, rvol, upside, liquidity) × data_quality`, the same case takes a
+  > 40% haircut instead of a 4% one, and perfect data adds nothing artificial. Data quality
+  > is confidence *in the measurement*, not evidence *for the setup*; the multiplier is
+  > what that sentence means arithmetically. The four remaining weights renormalise to 1.
+  >
+  > **It will not change today's ranking** — `0.9s + 0.1 → s` is monotone, so the order is
+  > identical and only the spread widens slightly (0.41–0.95 → 0.34–0.94). This is a
+  > correctness fix, not the fix for the compressing head.
+  >
+  > **Not a gatekeeper**, which was the other option considered: a hard floor would drop
+  > exactly the newly-listed names Phase 4C decided to keep and flag ("a newly-listed name
+  > is not dropped for lacking a profile it cannot have yet"). The multiplier demotes them,
+  > which is what that decision was reaching for.
+  >
+  > **Verify the premise across all 207 alerts first.** The "1.000 every time" measurement
+  > covers the 61 confirmed ones; degraded rows are likeliest among the faded transients,
+  > which were not checked.
 - **Start the weight fitting from the measured factor table**, not from the priors.
   `data_quality` is a **constant 1.000** on every live alert (a +0.100 offset that cannot
   rank anything), `gap_position` carries 20% of the weight for 11% of the discrimination,
@@ -884,6 +913,58 @@ remains:
   the brief's note that `FMP_BANDWIDTH_WARN_PCT` is already computed and today reaches a
   human only if that human runs a CLI script.
 - ~~Scan-failure alerting~~ — **moved to Pre-Phase 5 item 2.**
+
+---
+
+### Phase 7 — Trade framing ("Stage 4")
+
+**Requested by the end user, 22 August 2026.** Today the scanner answers *which* ticker.
+He wants it to answer *how much, where out, and is it worth it* — entry, stop, position
+size from a risk rule he declares once, and a reward-to-risk check. His words: "step 4 of
+the scanning process, where the scanner simply applies a formula each time", triggered
+automatically once a ticker is selected.
+
+**Half of it already exists.** `upside_pct` and `nearest_resistance` *are* the reward leg.
+
+**The other half has no data.** `reference_data` stores `high_yesterday`, `high_20d`,
+`sma_50`, `sma_200` — **highs only.** The table was built to find ceilings above the
+price, and there is nothing in it to put a stop under. Both of his proposed stop methods
+need new columns. They are cheap: `historical-price-eod/full` already returns OHLCV
+bounded to 400 days, so this is **zero extra API calls**, a migration and a recompute.
+
+Four parts, deliberately separated because their gates differ:
+
+| | what | gated on |
+|---|---|---|
+| **7a** | `low_yesterday`, `low_20d`, `atr_14` on `reference_data` | nothing |
+| **7b** | suggested stop + reward:risk shown on the alert card | 7a |
+| **7c** | position size from a declared risk rule (e.g. 1% of capital) | 7a + **auth** |
+| **7d** | reward:risk as a rejection gate (e.g. 2:1) | **Phase 5 evidence** |
+
+> **7c depends on auth, and not as a formality.** Position sizing means storing his
+> capital. The dashboard is unauthenticated and reachable by URL — "€50,000, 1% a trade"
+> on a public page is a different exposure from a list of tickers. Auth is Phase 6 and
+> must precede this, not run beside it.
+
+> **7d is a strategy change, not a feature.** A 2:1 gate interacts with the existing
+> `upside_pct >= 5.5` floor and arguably should *replace* it: a fixed percentage bar
+> ignores volatility, while reward:risk prices it in. Stage 3 already rejects 118 of 260
+> for insufficient upside; stacking a second untested gate on top would cut the list
+> further for reasons nobody has measured. After Phase 5, with outcomes.
+
+> **Whatever Stage 4 computes must be persisted from its first session** — stop, ratio,
+> size, and the rule version that produced them — into `alerts` and `scan_observations`.
+> His own closing point, that the rules should be reviewed against actual results, *is*
+> Phase 5 outcome labelling, and it can only review decisions whose inputs were recorded
+> when they were made. Follow-ups C and D both exist because that was not done. There is
+> no excuse for a third instance.
+
+> **The framing question, for the project owner.** `docs/CLAUDE.md` §1 says the tool is
+> "not financial advice" and that all UI language must reflect it. "Buy 137 shares" reads
+> differently from "here is a candidate". The coherent resolution is that Stage 4 applies
+> **a rule the user declared in advance**, arithmetically — a calculator executing his own
+> stated policy, not a recommendation — and that §1 is updated to say so. What must not
+> happen is the product drifting past the spec while the spec still claims otherwise.
 
 ---
 
